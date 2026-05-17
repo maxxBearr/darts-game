@@ -16,6 +16,8 @@ script = ExtResource("1_main")
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
 script = ExtResource("2_dartboard")
 arc_points = 13
+number_font_size = 25
+flash_duration = 0.4
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")

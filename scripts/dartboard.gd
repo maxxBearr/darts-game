@@ -53,6 +53,29 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## Surround ring outer radius multiplier (relative to board_radius).
 @export var surround_outer_multiplier: float = 1.15
 
+## Font size for the wedge numbers displayed around the board.
+## Adjust based on board_radius — 20 works well for a 300px radius board.
+@export var number_font_size: int = 20
+
+## Color of the wedge numbers.
+@export var number_color: Color = Color(0.9, 0.9, 0.85)
+
+## Normalized radius for number placement. Controls how far from center
+## the numbers are drawn. Should be between RING_DOUBLE_OUTER (0.83) and
+## surround_outer_multiplier (1.15). Default 0.93 centers them in the surround.
+@export var number_radius_multiplier: float = 0.93
+
+## Color of the segment flash overlay on dart landing (white = bright flash).
+@export var flash_color: Color = Color(1.0, 1.0, 1.0, 0.6)
+
+## Duration of the segment flash in seconds.
+@export var flash_duration: float = 0.2
+
+# Flash state — tracks which segment to highlight and the current flash alpha
+var _flash_alpha: float = 0.0
+var _flash_ring_name: String = ""
+var _flash_wedge_idx: int = -1
+
 
 func _draw() -> void:
 	# Draw surround ring (off-board area)
@@ -104,6 +127,107 @@ func _draw() -> void:
 		var inner_point: Vector2 = direction * board_radius * RING_SINGLE_BULL_OUTER
 		var outer_point: Vector2 = direction * board_radius * RING_DOUBLE_OUTER
 		draw_line(inner_point, outer_point, wire_color, wire_thickness)
+
+	# Draw wedge numbers around the board in the surround ring
+	var font: Font = ThemeDB.fallback_font
+	for wedge_idx: int in range(20):
+		# Center angle of this wedge (no offset — wedge 0 is centered at 0° / 12 o'clock)
+		var angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG
+		var angle_rad: float = deg_to_rad(angle_deg)
+		# Position along that angle at the number radius
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		var pos: Vector2 = direction * board_radius * number_radius_multiplier
+		# Get the number text for this wedge
+		var number_text: String = str(WEDGE_ORDER[wedge_idx])
+		# Calculate text offset for centering
+		var text_width: float = font.get_string_size(number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size).x
+		var draw_pos: Vector2 = Vector2(pos.x - text_width / 2.0, pos.y + number_font_size / 2.0)
+		draw_string(font, draw_pos, number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size, number_color)
+
+	# Draw flash overlay on the hit segment (if active)
+	if _flash_alpha > 0.0:
+		var flash_col: Color = Color(flash_color, _flash_alpha)
+		_draw_flash_segment(flash_col)
+
+
+## Trigger a flash on the segment at the given global hit position.
+## Call this after scoring to highlight where the dart landed.
+func flash_segment(global_hit_position: Vector2) -> void:
+	var relative: Vector2 = global_hit_position - global_position
+	var distance: float = relative.length()
+	var normalized_distance: float = distance / board_radius
+
+	# Determine which ring was hit
+	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
+		_flash_ring_name = "double_bull"
+	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
+		_flash_ring_name = "single_bull"
+	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
+		_flash_ring_name = "inner_single"
+	elif normalized_distance <= RING_TRIPLE_OUTER:
+		_flash_ring_name = "triple"
+	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
+		_flash_ring_name = "outer_single"
+	elif normalized_distance <= RING_DOUBLE_OUTER:
+		_flash_ring_name = "double"
+	else:
+		# Off board — no flash
+		_flash_ring_name = ""
+		return
+
+	# Determine which wedge index (not needed for bullseyes)
+	if _flash_ring_name != "double_bull" and _flash_ring_name != "single_bull":
+		var angle_rad: float = atan2(relative.x, -relative.y)
+		var angle_deg: float = rad_to_deg(angle_rad)
+		if angle_deg < 0.0:
+			angle_deg += 360.0
+		angle_deg = fmod(angle_deg - WEDGE_OFFSET_DEG, 360.0)
+		if angle_deg < 0.0:
+			angle_deg += 360.0
+		_flash_wedge_idx = int(angle_deg / WEDGE_ANGLE_DEG) % 20
+
+	# Animate the flash: start bright, tween alpha to 0
+	_flash_alpha = flash_color.a
+	var tween: Tween = create_tween()
+	tween.tween_property(self, "_flash_alpha", 0.0, flash_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_callback(queue_redraw)
+	# Redraw every frame during the tween
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	# Redraw while flash is active, then stop processing
+	if _flash_alpha > 0.0:
+		queue_redraw()
+	else:
+		set_process(false)
+
+
+## Draw the flash overlay for the currently flashing segment.
+func _draw_flash_segment(color: Color) -> void:
+	match _flash_ring_name:
+		"double_bull":
+			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, color)
+		"single_bull":
+			# Draw the single bull ring (donut shape) using the segment helper
+			# Approximate as a full circle overlay for simplicity
+			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, color)
+		"inner_single":
+			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, color)
+		"triple":
+			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, color)
+		"outer_single":
+			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, color)
+		"double":
+			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, color)
 
 
 ## Draw a single arc segment (wedge slice of a ring).

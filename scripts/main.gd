@@ -45,6 +45,9 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Place a dart marker at the hit position
 	_place_dart(hit_position)
 
+	# Flash the hit segment for visual feedback
+	dartboard.flash_segment(hit_position)
+
 	# Update scores and HUD
 	_total_score += result["total_score"]
 	hud.show_score(result)
