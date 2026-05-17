@@ -28,6 +28,10 @@ font_color = Color(1, 0.3, 0.3, 1)
 outline_size = 3
 outline_color = Color(0, 0, 0, 1)
 
+[sub_resource type="LabelSettings" id="LabelSettings_stats"]
+outline_size = 2
+outline_color = Color(0, 0, 0, 1)
+
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
 
@@ -39,10 +43,7 @@ flash_duration = 0.4
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
-aim_accuracy = 45.0
-vertical_accuracy = 28.0
-release_accuracy = 55.0
-release_marker_size = 6.0
+marker_size = 6.0
 resolve_preview_duration = 1.19
 resolve_preview_color = Color(0.7647059, 0.68235296, 0, 0.54901963)
 
@@ -206,6 +207,66 @@ size_flags_horizontal = 4
 custom_minimum_size = Vector2(170, 100)
 layout_mode = 2
 size_flags_horizontal = 4
+
+[node name="TurnScoreLabel" type="Label" parent="HUD" unique_id=445578042]
+offset_left = 20.0
+offset_top = 170.0
+offset_right = 250.0
+offset_bottom = 200.0
+text = "Turn Score: 0"
+label_settings = SubResource("LabelSettings_info")
+
+[node name="StatsContainer" type="VBoxContainer" parent="HUD" unique_id=1303497284]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -200.0
+offset_top = 170.0
+offset_right = -20.0
+offset_bottom = 360.0
+grow_horizontal = 0
+
+[node name="StatsTitle" type="Label" parent="HUD/StatsContainer" unique_id=2114441324]
+layout_mode = 2
+text = "— Stats —"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
+
+[node name="HorizontalRangeLabel" type="Label" parent="HUD/StatsContainer" unique_id=2025775829]
+layout_mode = 2
+text = "Horizontal Range: 20"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
+
+[node name="VerticalRangeLabel" type="Label" parent="HUD/StatsContainer" unique_id=1446061995]
+layout_mode = 2
+text = "Vertical Range: 10"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
+
+[node name="VerticalAccuracyLabel" type="Label" parent="HUD/StatsContainer" unique_id=31884074]
+layout_mode = 2
+text = "Vertical Accuracy: 20"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
+
+[node name="HorizontalAccuracyLabel" type="Label" parent="HUD/StatsContainer" unique_id=748490715]
+layout_mode = 2
+text = "Horizontal Accuracy: 20"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
+
+[node name="VerticalSpeedLabel" type="Label" parent="HUD/StatsContainer" unique_id=771403752]
+layout_mode = 2
+text = "Vertical Speed: 50"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
+
+[node name="HorizontalSpeedLabel" type="Label" parent="HUD/StatsContainer" unique_id=1439963564]
+layout_mode = 2
+text = "Horizontal Speed: 50"
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 2
 
 [node name="X01Game" type="Node" parent="." unique_id=617431942]
 script = ExtResource("5_x01")

@@ -1,90 +1,176 @@
 Upgrade System Spec for Claude Code
 
 OVERVIEW:
-After winning a leg, before advancing to the next leg, the player is presented with 3 upgrade cards. Each card boosts one of 4 throw stats by a random amount determined by rarity. Player picks one, it's applied, then the next leg begins. All 3 cards must be distinct stats (no duplicates in a single offering).
+After winning a leg, the player chooses 1 of 3 randomly generated stat upgrades before advancing. 6 upgrade types exist: 4 are pure buffs, 2 are tradeoffs. All 3 offered upgrades must be distinct stat types.
 
-UPGRADE TYPES (4 total):
-Display NameThrowMechanic PropertyScaleCapAim Accuracyaim_accuracy1-100100Vertical Accuracyvertical_accuracy1-100100Release Accuracyrelease_accuracy1-100100Release Controlrelease_speed1.0-5.05.0
-Release Control scaling: The displayed value uses the same 5-15 integer range as other stats, but internally maps to the 1.0-5.0 scale. Conversion: internal_boost = displayed_value * (4.0 / 15.0) — so a displayed +15 gives roughly +4.0 internal, and a displayed +5 gives roughly +1.33. This keeps the player-facing numbers consistent across all upgrade types. Apply with throw_mechanic.release_speed = minf(throw_mechanic.release_speed + internal_boost, 5.0).
-RARITY TIERS:
-RarityValue RangeProbabilityDisplay ColorCommon5-865%Grey (Color(0.6, 0.6, 0.6))Uncommon9-1225%Blue (Color(0.3, 0.5, 1.0))Rare13-1510%Purple (Color(0.7, 0.3, 0.9))
-Each of the 3 cards rolls its rarity independently. Value is rolled uniformly within the rarity's range using randi_range().
+CODING CONVENTIONS:
 
-GENERATION LOGIC (in main.gd):
-New constants:
+Static typing on ALL variables
+Frequent comments explaining logic
+## doc comments on all @export vars
+@export vars wherever useful for developer tweaking
+
+
+STARTING STAT VALUES (update defaults in throw_mechanic.gd):
+Leave these unchanged:
+
+aim_accuracy = 20.0
+vertical_accuracy = 10.0
+vertical_speed = 3.0
+horizontal_speed = 3.0
+
+Update these to start worse (lower = bigger variance zone = less accurate):
+
+vertical_consistency = 20.0 (was 50.0)
+horizontal_consistency = 20.0 (was 50.0)
+
+
+UPGRADE TYPE DEFINITIONS (in main.gd):
 gdscriptconst UPGRADE_TYPES: Array[Dictionary] = [
-    {"name": "Aim Accuracy", "property": "aim_accuracy", "scale": "direct"},
-    {"name": "Vertical Accuracy", "property": "vertical_accuracy", "scale": "direct"},
-    {"name": "Release Accuracy", "property": "release_accuracy", "scale": "direct"},
-    {"name": "Release Control", "property": "release_speed", "scale": "speed"},
+    {
+        "name": "Aim Accuracy",
+        "property": "aim_accuracy",
+        "scale": "direct",
+        "tradeoff": false,
+    },
+    {
+        "name": "Vertical Accuracy",
+        "property": "vertical_accuracy",
+        "scale": "direct",
+        "tradeoff": false,
+    },
+    {
+        "name": "Vertical Speed",
+        "property": "vertical_speed",
+        "scale": "speed",
+        "tradeoff": false,
+    },
+    {
+        "name": "Horizontal Speed",
+        "property": "horizontal_speed",
+        "scale": "speed",
+        "tradeoff": false,
+    },
+    {
+        "name": "Vertical Consistency",
+        "property": "vertical_consistency",
+        "scale": "direct",
+        "tradeoff": true,
+        "penalty_property": "horizontal_consistency",
+        "penalty_name": "Horizontal Consistency",
+        "penalty_amount": 3,
+    },
+    {
+        "name": "Horizontal Consistency",
+        "property": "horizontal_consistency",
+        "scale": "direct",
+        "tradeoff": true,
+        "penalty_property": "vertical_consistency",
+        "penalty_name": "Vertical Consistency",
+        "penalty_amount": 3,
+    },
 ]
 
-const RARITY_TABLE: Array[Dictionary] = [
+RARITY TABLE:
+For standard stats (Aim Accuracy, Vertical Accuracy, Vertical Consistency, Horizontal Consistency):
+gdscriptconst STANDARD_RARITY_TABLE: Array[Dictionary] = [
     {"name": "Common", "min_value": 5, "max_value": 8, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
     {"name": "Uncommon", "min_value": 9, "max_value": 12, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
     {"name": "Rare", "min_value": 13, "max_value": 15, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
 ]
+For speed stats (Vertical Speed, Horizontal Speed):
+gdscriptconst SPEED_RARITY_TABLE: Array[Dictionary] = [
+    {"name": "Common", "min_value": 2, "max_value": 4, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+    {"name": "Uncommon", "min_value": 5, "max_value": 7, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+    {"name": "Rare", "min_value": 8, "max_value": 10, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
+]
+Use SPEED_RARITY_TABLE when the upgrade type's scale == "speed", otherwise use STANDARD_RARITY_TABLE.
+
+RARITY DISTRIBUTION (same for all 6 types):
+Roll randi_range(1, 100): if <= 65 → Common, elif <= 90 → Uncommon, else → Rare.
+
+GENERATION LOGIC (_generate_upgrades() -> Array[Dictionary]):
+
+Create an array of indices [0, 1, 2, 3, 4, 5] representing the 6 upgrade types
+Shuffle the array
+Take the first 3 — these are the 3 distinct upgrade types offered
+For each:
+
+Look up the upgrade type from UPGRADE_TYPES
+Select the rarity table: SPEED_RARITY_TABLE if scale == "speed", else STANDARD_RARITY_TABLE
+Roll rarity using weighted random
+Roll value using randi_range(rarity.min_value, rarity.max_value)
+Build the upgrade dictionary:
+
+
+
+gdscript{
+    "name": upgrade_type["name"],
+    "property": upgrade_type["property"],
+    "scale": upgrade_type["scale"],
+    "rarity": rarity["name"],
+    "color": rarity["color"],
+    "value": rolled_value,
+    "tradeoff": upgrade_type["tradeoff"],
+    "penalty_property": upgrade_type.get("penalty_property", ""),
+    "penalty_name": upgrade_type.get("penalty_name", ""),
+    "penalty_amount": upgrade_type.get("penalty_amount", 0),
+}
+
+APPLY LOGIC (_apply_upgrade(upgrade: Dictionary) -> void):
+gdscriptfunc _apply_upgrade(upgrade: Dictionary) -> void:
+    # Apply the main boost
+    if upgrade["scale"] == "direct":
+        var current: float = throw_mechanic.get(upgrade["property"])
+        var new_value: float = minf(current + float(upgrade["value"]), 100.0)
+        throw_mechanic.set(upgrade["property"], new_value)
+    elif upgrade["scale"] == "speed":
+        var internal_boost: float = float(upgrade["value"]) * (4.0 / 15.0)
+        var current: float = throw_mechanic.get(upgrade["property"])
+        var new_value: float = minf(current + internal_boost, 5.0)
+        throw_mechanic.set(upgrade["property"], new_value)
+
+    # Apply tradeoff penalty if applicable
+    if upgrade["tradeoff"]:
+        var penalty_current: float = throw_mechanic.get(upgrade["penalty_property"])
+        var new_penalty_value: float = penalty_current - float(upgrade["penalty_amount"])
+        throw_mechanic.set(upgrade["penalty_property"], new_penalty_value)
+No floor clamping on the penalty for now.
+
+BASE STAT SNAPSHOT (in main.gd):
 New state vars:
 gdscriptvar _base_aim_accuracy: float = 0.0
 var _base_vertical_accuracy: float = 0.0
-var _base_release_accuracy: float = 0.0
-var _base_release_speed: float = 0.0
-var _current_upgrades: Array[Dictionary] = []  ## The 3 generated upgrade choices
-New method _snapshot_base_stats() -> void:
+var _base_vertical_consistency: float = 0.0
+var _base_horizontal_consistency: float = 0.0
+var _base_vertical_speed: float = 0.0
+var _base_horizontal_speed: float = 0.0
+_snapshot_base_stats() -> void:
 
-Called at start of run. Saves throw_mechanic.aim_accuracy, throw_mechanic.vertical_accuracy, throw_mechanic.release_accuracy, throw_mechanic.release_speed into the _base_* vars.
+Save all 6 stats from throw_mechanic into the _base_* vars
+Called once in _ready() after everything is initialized
 
-New method _restore_base_stats() -> void:
+_restore_base_stats() -> void:
 
-Called on new run. Restores throw_mechanic properties from _base_* vars.
-
-New method _generate_upgrades() -> Array[Dictionary]:
-
-Shuffle or randomly sample 3 distinct indices from UPGRADE_TYPES (4 types, pick 3, no repeats)
-For each, roll rarity using weighted random: generate randi_range(1, 100), if <= 65 → Common, elif <= 90 → Uncommon, else → Rare
-Roll value using randi_range(rarity.min_value, rarity.max_value)
-Return array of 3 dictionaries, each containing:
-
-gdscript{
-    "name": upgrade_type["name"],          # "Aim Accuracy"
-    "property": upgrade_type["property"],  # "aim_accuracy"
-    "scale": upgrade_type["scale"],        # "direct" or "speed"
-    "rarity": rarity["name"],              # "Uncommon"
-    "color": rarity["color"],              # Color(0.3, 0.5, 1.0)
-    "value": rolled_value,                 # 11
-}
-New method _apply_upgrade(upgrade: Dictionary) -> void:
-
-If upgrade["scale"] == "direct": get current value from throw_mechanic.get(upgrade["property"]), add upgrade["value"], clamp to 100.0, set back with throw_mechanic.set(upgrade["property"], clamped_value)
-If upgrade["scale"] == "speed": convert displayed value to internal: internal_boost = float(upgrade["value"]) * (4.0 / 15.0). Get current throw_mechanic.release_speed, add internal_boost, clamp to 5.0, set back.
+Restore all 6 stats on throw_mechanic from the _base_* vars
+Called in _on_new_run() before x01_game.start_run()
 
 
-FLOW CHANGES IN main.gd:
-_on_new_run() changes:
-
-Call _restore_base_stats() before x01_game.start_run()
-
-_ready() changes:
-
-Call _snapshot_base_stats() at the end, after everything is initialized
-Connect new HUD signal: upgrade_selected (passes index int)
-
-Leg-won flow change:
-
+UPGRADE FLOW IN main.gd:
 When response["is_leg_won"] is true in _on_throw_completed:
 
 Generate upgrades: _current_upgrades = _generate_upgrades()
-Show leg complete message AND upgrade choices: hud.show_leg_complete_with_upgrades(response["current_leg"], response["target_score"], response["current_turn"], _current_upgrades)
+Call hud.show_leg_complete_with_upgrades(response["current_leg"], response["target_score"], response["current_turn"], _current_upgrades)
 Set _awaiting_next_leg = true
-Do NOT show NextLegButton yet — player must pick an upgrade first
 
+_on_upgrade_selected(index: int) callback:
 
+Call _apply_upgrade(_current_upgrades[index])
+HUD hides upgrade cards, shows NextLegButton
 
-New callback _on_upgrade_selected(index: int) -> void:
+_on_next_leg() callback:
 
-_apply_upgrade(_current_upgrades[index])
-Then show NextLegButton (or auto-advance to next leg, whichever — I'd say show the button so they see the result of their choice briefly)
-Update HUD to reflect new stat values if you want (optional for now)
+Proceeds as before (clear darts, advance leg, start throwing)
 
 
 HUD CHANGES (scripts/hud.gd):
@@ -94,28 +180,36 @@ upgrade_selected(index: int)
 
 New nodes (children of HUD CanvasLayer):
 
-UpgradeContainer: HBoxContainer — holds the 3 upgrade buttons side by side, hidden by default
+UpgradeContainer: HBoxContainer — holds the 3 upgrade buttons, hidden by default
 UpgradeButton1: Button — child of UpgradeContainer
 UpgradeButton2: Button — child of UpgradeContainer
 UpgradeButton3: Button — child of UpgradeContainer
 
-New method show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upgrades: Array[Dictionary]) -> void:
+show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upgrades: Array[Dictionary]) -> void:
 
-Show leg complete message (same as before)
-Populate upgrade buttons with text and color from the upgrades array
-Button text format: "[Rarity]\n[Name]\n+[Value]" — e.g. "Uncommon\nAim Accuracy\n+11"
-Set each button's font color or modulate to the rarity color
-Show UpgradeContainer, hide NextLegButton
+Show leg complete message in ScoreLabel
+For each of the 3 upgrade buttons, set the text:
 
-Button callbacks:
+For pure buff stats: "[Rarity]\n[Name]\n+[Value]"
+For tradeoff stats: "[Rarity]\n[Name]\n+[Value]\n-[Penalty Amount] [Penalty Name]"
 
-Each upgrade button emits upgrade_selected.emit(index) where index is 0, 1, or 2
-After an upgrade is selected: hide UpgradeContainer, show NextLegButton
 
-_ready() changes:
+Set button text color or modulate to the rarity color
+For tradeoff stats, ideally the penalty line is red (Color(0.9, 0.2, 0.2)). If styling individual lines within a Button is too complex, append the penalty text and accept uniform coloring for now — visual polish can come later.
+Show UpgradeContainer
+Hide NextLegButton (player must pick an upgrade first)
 
-Connect upgrade button signals
-Hide UpgradeContainer initially
+Upgrade button callbacks:
+
+UpgradeButton1 pressed → upgrade_selected.emit(0)
+UpgradeButton2 pressed → upgrade_selected.emit(1)
+UpgradeButton3 pressed → upgrade_selected.emit(2)
+After emitting: hide UpgradeContainer, show NextLegButton
+
+_ready() additions:
+
+Connect all 3 upgrade buttons
+Hide UpgradeContainer
 
 
 SCENE TREE ADDITIONS:
@@ -126,4 +220,4 @@ HUD (CanvasLayer)
 │   ├── UpgradeButton2 (Button)
 │   └── UpgradeButton3 (Button)
 
-NO CHANGES to: dartboard.gd, throw_mechanic.gd, dart_marker.gd, x01_game.gd
+NO CHANGES to: dartboard.gd, throw_mechanic.gd (other than the starting value changes noted above), dart_marker.gd, x01_game.gd

@@ -1,47 +1,61 @@
 extends Node2D
-## Two-stage throw mechanic: aim line (horizontal), vertical window positioning,
-## then release marker (vertical). Emits throw_completed with the final pixel
-## position when all stages are done.
+## Four-stage throw mechanic: aim line (horizontal), vertical window positioning,
+## vertical release, then horizontal release. Emits throw_completed with the final
+## pixel position when all stages are done.
 
 signal throw_completed(hit_position: Vector2)
 signal state_changed(new_state: ThrowState)
 
-enum ThrowState { IDLE, AIMING, POSITIONING, RELEASING, RESOLVING, DONE }
+enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE }
 
-## Controls horizontal accuracy of the aim line. Higher = more accurate = thinner line.
+## Controls horizontal range of the aim line. Higher = tighter range.
 ## 1 = worst (line half-width equals max_aim_half_width).
 ## 100 = best (line half-width equals min_aim_half_width).
 ## Typical gameplay range: 30 to 80.
-@export var aim_accuracy: float = 20.0
+@export var horizontal_range: float = 20.0
 
-## Maximum aim line half-width in pixels (at aim_accuracy = 0.0). The worst possible spread.
+## Maximum aim line half-width in pixels (at horizontal_range = 1). The worst possible spread.
 @export var max_aim_half_width: float = 200.0
 
-## Minimum aim line half-width in pixels (at aim_accuracy = 1.0). The tightest possible spread.
+## Minimum aim line half-width in pixels (at horizontal_range = 100). The tightest possible spread.
 @export var min_aim_half_width: float = 5.0
 
-## Controls how much the vertical window shrinks after aiming.
-## Higher value = more shrinkage = tighter window = more accurate.
-## Represents the percentage of the full line that gets removed.
+## Controls vertical range of the positioning window. Higher = tighter range.
 ## 1 = almost no shrinkage (window stays near full height).
 ## 100 = shrinks to nearly zero height (extremely tight).
 ## Typical gameplay range: 30 to 70.
-@export var vertical_accuracy: float = 10.0
+@export var vertical_range: float = 10.0
 
-## Controls marker bounce speed. Higher = slower = easier to time. Range ~1.0 (hard) to 5.0 (easy).
-@export var release_speed: float = 3.0
+## Controls vertical marker bounce speed. Higher = slower = easier to time.
+## Range ~1.0 (hard) to 5.0 (easy).
+@export var vertical_speed: float = 3.0
 
 ## Controls vertical accuracy of the release. Higher = more accurate = tighter glow zone.
-## 1 = worst (glow half-height equals max_release_half_height).
-## 100 = best (glow half-height equals min_release_half_height).
+## 1 = worst (half-height equals max_vertical_accuracy_half).
+## 100 = best (half-height equals min_vertical_accuracy_half).
 ## Typical gameplay range: 30 to 80.
-@export var release_accuracy: float = 50.0
+@export var vertical_accuracy: float = 20.0
 
-## Maximum release glow zone half-height in pixels (at release_accuracy = 0.0). The worst vertical spread.
-@export var max_release_half_height: float = 60.0
+## Maximum vertical variance half-height in pixels (at vertical_accuracy = 1).
+@export var max_vertical_accuracy_half: float = 60.0
 
-## Minimum release glow zone half-height in pixels (at release_accuracy = 1.0). The tightest vertical spread.
-@export var min_release_half_height: float = 5.0
+## Minimum vertical variance half-height in pixels (at vertical_accuracy = 100).
+@export var min_vertical_accuracy_half: float = 5.0
+
+## Controls horizontal accuracy of the final dart landing. Higher = more accurate = tighter zone.
+## 1 = worst (half-width equals max_horizontal_accuracy_half).
+## 100 = best (half-width equals min_horizontal_accuracy_half).
+@export var horizontal_accuracy: float = 20.0
+
+## Maximum horizontal variance half-width in pixels (at horizontal_accuracy = 1).
+@export var max_horizontal_accuracy_half: float = 80.0
+
+## Minimum horizontal variance half-width in pixels (at horizontal_accuracy = 100).
+@export var min_horizontal_accuracy_half: float = 5.0
+
+## Controls horizontal marker bounce speed. Higher = slower = easier to time.
+## Range ~1.0 (hard) to 5.0 (easy).
+@export var horizontal_speed: float = 3.0
 
 ## Semi-transparent color of the aim line band.
 @export var aim_line_color: Color = Color(0.2, 0.5, 1.0, 0.3)
@@ -58,14 +72,17 @@ enum ThrowState { IDLE, AIMING, POSITIONING, RELEASING, RESOLVING, DONE }
 ## Duration of the shrink tween in seconds.
 @export var shrink_tween_duration: float = 0.4
 
-## Color of the release marker circle.
-@export var release_marker_color: Color = Color(1.0, 0.3, 0.3, 0.9)
+## Color of the marker circle (shared by vertical and horizontal markers).
+@export var marker_color: Color = Color(1.0, 0.3, 0.3, 0.9)
 
-## Size (radius) of the release marker in pixels.
-@export var release_marker_size: float = 8.0
+## Size (radius) of the marker circle in pixels (shared by both markers).
+@export var marker_size: float = 8.0
 
-## Color of the vertical variance glow zone.
-@export var glow_zone_color: Color = Color(1.0, 0.3, 0.3, 0.15)
+## Color of the vertical release glow zone.
+@export var vertical_glow_color: Color = Color(1.0, 0.3, 0.3, 0.15)
+
+## Color of the horizontal release glow zone.
+@export var horizontal_glow_color: Color = Color(0.3, 0.5, 1.0, 0.15)
 
 ## Duration in seconds the resolve preview is shown before the dart lands.
 @export var resolve_preview_duration: float = 0.5
@@ -80,8 +97,14 @@ var _board_radius: float = 300.0
 var _aim_x: float = 0.0
 var _locked_aim_x: float = 0.0
 var _release_y: float = 0.0
-var _bounce_direction: float = 1.0
 var _bounce_t: float = 0.0
+
+# Locked Y after vertical release
+var _locked_release_y: float = 0.0
+
+# Horizontal release state
+var _horizontal_x: float = 0.0
+var _horizontal_bounce_t: float = 0.0
 
 # Full line bounds (recorded when entering POSITIONING)
 var _full_line_top: float = 0.0
@@ -107,7 +130,7 @@ func start_throw(board_center: Vector2, board_radius: float) -> void:
 	_aim_x = _board_center.x
 	_state = ThrowState.AIMING
 	_bounce_t = 0.0
-	_bounce_direction = 1.0
+	_horizontal_bounce_t = 0.0
 	_is_shrink_complete = false
 	set_process(true)
 	queue_redraw()
@@ -118,18 +141,32 @@ func get_throw_state() -> ThrowState:
 	return _state
 
 
-## Compute the actual aim line half-width in pixels from the aim_accuracy stat (1–100).
-## Higher aim_accuracy → smaller half-width → more accurate.
+## Compute the actual aim line half-width in pixels from the horizontal_range stat (1–100).
 func _get_aim_half_width() -> float:
-	var normalized: float = clampf((aim_accuracy - 1.0) / 99.0, 0.0, 1.0)
+	var normalized: float = clampf((horizontal_range - 1.0) / 99.0, 0.0, 1.0)
 	return lerpf(max_aim_half_width, min_aim_half_width, normalized)
 
 
-## Compute the actual release glow zone half-height in pixels from the release_accuracy stat (1–100).
-## Higher release_accuracy → smaller half-height → more accurate.
-func _get_release_half_height() -> float:
-	var normalized: float = clampf((release_accuracy - 1.0) / 99.0, 0.0, 1.0)
-	return lerpf(max_release_half_height, min_release_half_height, normalized)
+## Compute the vertical accuracy half-height in pixels (1–100 stat).
+func _get_vertical_accuracy_half() -> float:
+	var normalized: float = clampf((vertical_accuracy - 1.0) / 99.0, 0.0, 1.0)
+	return lerpf(max_vertical_accuracy_half, min_vertical_accuracy_half, normalized)
+
+
+## Compute the horizontal accuracy half-width in pixels (1–100 stat).
+func _get_horizontal_accuracy_half() -> float:
+	var normalized: float = clampf((horizontal_accuracy - 1.0) / 99.0, 0.0, 1.0)
+	return lerpf(max_horizontal_accuracy_half, min_horizontal_accuracy_half, normalized)
+
+
+## Compute the vertical marker bounce speed from vertical_speed stat.
+func _get_vertical_bounce_speed() -> float:
+	return (6.0 - clampf(vertical_speed, 1.0, 5.0)) * 2.5
+
+
+## Compute the horizontal marker bounce speed from horizontal_speed stat.
+func _get_horizontal_bounce_speed() -> float:
+	return (6.0 - clampf(horizontal_speed, 1.0, 5.0)) * 2.5
 
 
 func _process(delta: float) -> void:
@@ -158,13 +195,19 @@ func _process(delta: float) -> void:
 				_window_bottom = _window_center_y + half_height
 			queue_redraw()
 
-		ThrowState.RELEASING:
-			# Marker bounces up and down within the locked window only
-			# Higher release_speed stat means slower (easier) bouncing
-			var bounce_speed: float = (6.0 - clampf(release_speed, 1.0, 5.0)) * 2.5
+		ThrowState.VERTICAL_RELEASE:
+			# Marker bounces vertically within the locked window
+			var bounce_speed: float = _get_vertical_bounce_speed()
 			_bounce_t += delta * bounce_speed
-			# Bounce within window bounds using sine wave
 			_release_y = _window_center_y + sin(_bounce_t) * (_window_height / 2.0)
+			queue_redraw()
+
+		ThrowState.HORIZONTAL_RELEASE:
+			# Marker bounces horizontally across the aim band width
+			var bounce_speed: float = _get_horizontal_bounce_speed()
+			_horizontal_bounce_t += delta * bounce_speed
+			var aim_half_w: float = _get_aim_half_width()
+			_horizontal_x = _locked_aim_x + sin(_horizontal_bounce_t) * aim_half_w
 			queue_redraw()
 
 		ThrowState.DONE:
@@ -177,13 +220,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			match _state:
 				ThrowState.AIMING:
-					# Lock the aim line and transition to POSITIONING
 					_locked_aim_x = _aim_x
 					_state = ThrowState.POSITIONING
 					get_viewport().set_input_as_handled()
 					_enter_positioning()
-				ThrowState.RELEASING:
-					# Freeze the marker and enter resolve preview
+				ThrowState.VERTICAL_RELEASE:
+					# Lock vertical position, transition to horizontal release
+					_locked_release_y = _release_y
+					_state = ThrowState.HORIZONTAL_RELEASE
+					_horizontal_bounce_t = 0.0
+					_horizontal_x = _locked_aim_x
+					get_viewport().set_input_as_handled()
+					state_changed.emit(ThrowState.HORIZONTAL_RELEASE)
+					queue_redraw()
+				ThrowState.HORIZONTAL_RELEASE:
+					# Freeze horizontal and enter resolve preview
 					get_viewport().set_input_as_handled()
 					_enter_resolving()
 
@@ -193,22 +244,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key.pressed and (key.keycode == KEY_ENTER or key.keycode == KEY_SPACE):
 			match _state:
 				ThrowState.AIMING:
-					# Lock the aim line and transition to POSITIONING
 					_locked_aim_x = _aim_x
 					_state = ThrowState.POSITIONING
 					get_viewport().set_input_as_handled()
 					_enter_positioning()
 				ThrowState.POSITIONING:
 					if _is_shrink_complete:
-						# Lock window and transition to RELEASING
-						_state = ThrowState.RELEASING
+						# Lock window and transition to VERTICAL_RELEASE
+						_state = ThrowState.VERTICAL_RELEASE
 						_bounce_t = 0.0
 						_release_y = _window_center_y
 						get_viewport().set_input_as_handled()
-						state_changed.emit(ThrowState.RELEASING)
+						state_changed.emit(ThrowState.VERTICAL_RELEASE)
 						queue_redraw()
-				ThrowState.RELEASING:
-					# Freeze the marker and enter resolve preview
+				ThrowState.VERTICAL_RELEASE:
+					# Lock vertical position, transition to horizontal release
+					_locked_release_y = _release_y
+					_state = ThrowState.HORIZONTAL_RELEASE
+					_horizontal_bounce_t = 0.0
+					_horizontal_x = _locked_aim_x
+					get_viewport().set_input_as_handled()
+					state_changed.emit(ThrowState.HORIZONTAL_RELEASE)
+					queue_redraw()
+				ThrowState.HORIZONTAL_RELEASE:
+					# Freeze horizontal and enter resolve preview
 					get_viewport().set_input_as_handled()
 					_enter_resolving()
 
@@ -220,8 +279,8 @@ func _enter_positioning() -> void:
 	_full_line_bottom = _board_center.y + _board_radius
 	_full_line_height = _full_line_bottom - _full_line_top
 
-	# Calculate target window height based on vertical_accuracy (1–100 → normalized fraction)
-	var vertical_fraction: float = clampf((vertical_accuracy - 1.0) / 99.0, 0.0, 1.0)
+	# Calculate target window height based on vertical_range (1–100 → normalized fraction)
+	var vertical_fraction: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
 	_window_height = _full_line_height * (1.0 - vertical_fraction)
 	_window_height = maxf(_window_height, 20.0)
 
@@ -249,7 +308,6 @@ func _enter_positioning() -> void:
 ## Called when the shrink tween finishes.
 func _on_shrink_complete() -> void:
 	_is_shrink_complete = true
-	# Snap window edges to final calculated values
 	_window_top = _window_center_y - _window_height / 2.0
 	_window_bottom = _window_center_y + _window_height / 2.0
 
@@ -271,17 +329,17 @@ func _on_resolve_timer_finished() -> void:
 	_resolve_throw()
 
 
-## Resolve the final dart position from locked aim and release values with variance.
+## Resolve the final dart position using both consistency zones.
 func _resolve_throw() -> void:
-	# Horizontal position: random within aim line width, centered on locked x
-	var aim_half_w: float = _get_aim_half_width()
-	var horizontal_offset: float = randf_range(-aim_half_w, aim_half_w)
-	var final_x: float = _locked_aim_x + horizontal_offset
+	# Horizontal: random within horizontal consistency zone, centered on locked horizontal X
+	var h_half: float = _get_horizontal_accuracy_half()
+	var horizontal_offset: float = randf_range(-h_half, h_half)
+	var final_x: float = _horizontal_x + horizontal_offset
 
-	# Vertical position: marker position plus random variance within glow zone
-	var release_half_h: float = _get_release_half_height()
-	var vertical_offset: float = randf_range(-release_half_h, release_half_h)
-	var final_y: float = _release_y + vertical_offset
+	# Vertical: random within vertical consistency zone, centered on locked release Y
+	var v_half: float = _get_vertical_accuracy_half()
+	var vertical_offset: float = randf_range(-v_half, v_half)
+	var final_y: float = _locked_release_y + vertical_offset
 
 	var hit_position: Vector2 = Vector2(final_x, final_y)
 	queue_redraw()
@@ -308,8 +366,11 @@ func _draw() -> void:
 		ThrowState.POSITIONING:
 			_draw_positioning()
 
-		ThrowState.RELEASING:
-			_draw_releasing()
+		ThrowState.VERTICAL_RELEASE:
+			_draw_vertical_release()
+
+		ThrowState.HORIZONTAL_RELEASE:
+			_draw_horizontal_release()
 
 		ThrowState.RESOLVING:
 			_draw_resolving()
@@ -336,27 +397,25 @@ func _draw_positioning() -> void:
 		Vector2(band_width, _window_bottom - _window_top)
 	)
 	draw_rect(window_rect, window_color)
-
-	# Draw window border for clarity
 	draw_rect(window_rect, window_border_color, false, 2.0)
 
 
-## Draw the RELEASING state: dimmed aim band + locked window + bouncing marker.
-func _draw_releasing() -> void:
+## Draw the VERTICAL_RELEASE state: dimmed band + window + bouncing marker with glow strip.
+func _draw_vertical_release() -> void:
 	var top: float = _board_center.y - _board_radius
 	var bottom: float = _board_center.y + _board_radius
 	var half_w: float = _get_aim_half_width()
 	var band_left: float = _locked_aim_x - half_w
 	var band_width: float = half_w * 2.0
 
-	# Draw the full dimmed aim band (background)
+	# Dimmed aim band background
 	var full_rect: Rect2 = Rect2(
 		Vector2(band_left, top) - global_position,
 		Vector2(band_width, bottom - top)
 	)
 	draw_rect(full_rect, Color(aim_line_color, 0.15))
 
-	# Draw the locked vertical window
+	# Locked window outline
 	var window_rect: Rect2 = Rect2(
 		Vector2(band_left, _window_top) - global_position,
 		Vector2(band_width, _window_bottom - _window_top)
@@ -364,22 +423,70 @@ func _draw_releasing() -> void:
 	draw_rect(window_rect, window_color)
 	draw_rect(window_rect, window_border_color, false, 2.0)
 
-	# Draw glow zone around marker, clipped to window bounds
-	var release_half_h: float = _get_release_half_height()
-	var glow_top: float = maxf(_release_y - release_half_h, _window_top)
-	var glow_bottom: float = minf(_release_y + release_half_h, _window_bottom)
+	# Vertical consistency glow strip around the marker, clipped to window bounds
+	var v_half: float = _get_vertical_accuracy_half()
+	var glow_top: float = maxf(_release_y - v_half, _window_top)
+	var glow_bottom: float = minf(_release_y + v_half, _window_bottom)
 	var glow_rect: Rect2 = Rect2(
 		Vector2(band_left, glow_top) - global_position,
 		Vector2(band_width, glow_bottom - glow_top)
 	)
-	draw_rect(glow_rect, glow_zone_color)
+	draw_rect(glow_rect, vertical_glow_color)
 
-	# Draw the bouncing marker
+	# Bouncing marker dot
 	var marker_pos: Vector2 = Vector2(_locked_aim_x, _release_y) - global_position
-	draw_circle(marker_pos, release_marker_size, release_marker_color)
+	draw_circle(marker_pos, marker_size, marker_color)
 
 
-## Draw the RESOLVING state: frozen marker + full landing zone preview.
+## Draw the HORIZONTAL_RELEASE state: locked vertical strip + bouncing horizontal marker.
+func _draw_horizontal_release() -> void:
+	var top: float = _board_center.y - _board_radius
+	var bottom: float = _board_center.y + _board_radius
+	var half_w: float = _get_aim_half_width()
+	var band_left: float = _locked_aim_x - half_w
+	var band_width: float = half_w * 2.0
+
+	# Dimmed aim band background
+	var full_rect: Rect2 = Rect2(
+		Vector2(band_left, top) - global_position,
+		Vector2(band_width, bottom - top)
+	)
+	draw_rect(full_rect, Color(aim_line_color, 0.15))
+
+	# Locked window outline (dimmed)
+	var window_rect: Rect2 = Rect2(
+		Vector2(band_left, _window_top) - global_position,
+		Vector2(band_width, _window_bottom - _window_top)
+	)
+	draw_rect(window_rect, Color(window_color, 0.15))
+	draw_rect(window_rect, Color(window_border_color, 0.3), false, 1.5)
+
+	# Static vertical consistency strip at _locked_release_y
+	var v_half: float = _get_vertical_accuracy_half()
+	var strip_top: float = maxf(_locked_release_y - v_half, _window_top)
+	var strip_bottom: float = minf(_locked_release_y + v_half, _window_bottom)
+	var strip_rect: Rect2 = Rect2(
+		Vector2(band_left, strip_top) - global_position,
+		Vector2(band_width, strip_bottom - strip_top)
+	)
+	draw_rect(strip_rect, vertical_glow_color)
+
+	# Horizontal consistency glow: vertical band at _horizontal_x, clipped to aim band
+	var h_half: float = _get_horizontal_accuracy_half()
+	var glow_left: float = maxf(_horizontal_x - h_half, band_left)
+	var glow_right: float = minf(_horizontal_x + h_half, band_left + band_width)
+	var glow_rect: Rect2 = Rect2(
+		Vector2(glow_left, strip_top) - global_position,
+		Vector2(glow_right - glow_left, strip_bottom - strip_top)
+	)
+	draw_rect(glow_rect, horizontal_glow_color)
+
+	# Bouncing marker dot at the intersection
+	var marker_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y) - global_position
+	draw_circle(marker_pos, marker_size, marker_color)
+
+
+## Draw the RESOLVING state: final variance box + frozen marker.
 func _draw_resolving() -> void:
 	var top: float = _board_center.y - _board_radius
 	var bottom: float = _board_center.y + _board_radius
@@ -387,31 +494,36 @@ func _draw_resolving() -> void:
 	var band_left: float = _locked_aim_x - half_w
 	var band_width: float = half_w * 2.0
 
-	# Draw the full dimmed aim band (background)
+	# Dimmed aim band background
 	var full_rect: Rect2 = Rect2(
 		Vector2(band_left, top) - global_position,
 		Vector2(band_width, bottom - top)
 	)
 	draw_rect(full_rect, Color(aim_line_color, 0.15))
 
-	# Draw the locked vertical window
+	# Locked window outline (dimmed)
 	var window_rect: Rect2 = Rect2(
 		Vector2(band_left, _window_top) - global_position,
 		Vector2(band_width, _window_bottom - _window_top)
 	)
-	draw_rect(window_rect, window_color)
-	draw_rect(window_rect, window_border_color, false, 2.0)
+	draw_rect(window_rect, Color(window_color, 0.15))
+	draw_rect(window_rect, Color(window_border_color, 0.3), false, 1.5)
 
-	# Draw the resolve preview rectangle (full landing zone), clipped to window bounds
-	var release_half_h: float = _get_release_half_height()
-	var preview_top: float = maxf(_release_y - release_half_h, _window_top)
-	var preview_bottom: float = minf(_release_y + release_half_h, _window_bottom)
+	# Final variance box centered on (_horizontal_x, _locked_release_y)
+	var h_half: float = _get_horizontal_accuracy_half()
+	var v_half: float = _get_vertical_accuracy_half()
+	# Clip to aim band bounds horizontally
+	var box_left: float = maxf(_horizontal_x - h_half, band_left)
+	var box_right: float = minf(_horizontal_x + h_half, band_left + band_width)
+	# Clip to window bounds vertically
+	var box_top: float = maxf(_locked_release_y - v_half, _window_top)
+	var box_bottom: float = minf(_locked_release_y + v_half, _window_bottom)
 	var preview_rect: Rect2 = Rect2(
-		Vector2(band_left, preview_top) - global_position,
-		Vector2(band_width, preview_bottom - preview_top)
+		Vector2(box_left, box_top) - global_position,
+		Vector2(box_right - box_left, box_bottom - box_top)
 	)
 	draw_rect(preview_rect, resolve_preview_color)
 
-	# Draw the frozen marker at its stopped position
-	var marker_pos: Vector2 = Vector2(_locked_aim_x, _release_y) - global_position
-	draw_circle(marker_pos, release_marker_size, release_marker_color)
+	# Frozen marker dot at center
+	var marker_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y) - global_position
+	draw_circle(marker_pos, marker_size, marker_color)

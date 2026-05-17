@@ -23,6 +23,13 @@ signal upgrade_selected(index: int)
 @onready var upgrade_button_2: Button = $UpgradeContainer/UpgradeButton2
 @onready var upgrade_button_3: Button = $UpgradeContainer/UpgradeButton3
 @onready var dart_indicator: Control = $DartIndicator
+@onready var turn_score_label: Label = $TurnScoreLabel
+@onready var horizontal_range_label: Label = $StatsContainer/HorizontalRangeLabel
+@onready var vertical_range_label: Label = $StatsContainer/VerticalRangeLabel
+@onready var vertical_accuracy_label: Label = $StatsContainer/VerticalAccuracyLabel
+@onready var horizontal_accuracy_label: Label = $StatsContainer/HorizontalAccuracyLabel
+@onready var vertical_speed_label: Label = $StatsContainer/VerticalSpeedLabel
+@onready var horizontal_speed_label: Label = $StatsContainer/HorizontalSpeedLabel
 
 
 func _ready() -> void:
@@ -89,34 +96,26 @@ func show_bust(reason: String) -> void:
 func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upgrades: Array[Dictionary]) -> void:
 	score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [leg, target, turns_used]
 
-	# Populate upgrade buttons with rarity, name, and value
+	# Populate upgrade buttons with rarity, name, value, and tradeoff penalty
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
 		var upgrade: Dictionary = upgrades[i]
-		buttons[i].text = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
+		# Speed upgrades show "-" to indicate slowing down the marker
+		var sign: String = "-" if upgrade["scale"] == "speed" else "+"
+		var button_text: String = "%s\n%s\n%s%d" % [upgrade["rarity"], upgrade["name"], sign, upgrade["value"]]
+		if upgrade["tradeoff"]:
+			button_text += "\n-%d %s" % [upgrade["penalty_amount"], upgrade["penalty_name"]]
+		buttons[i].text = button_text
 		# Tint button to rarity color at full opacity so it stays readable
 		var color: Color = upgrade["color"]
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
-		# Set tooltip with description for hover feedback
+		# Tooltip description on hover
 		buttons[i].tooltip_text = upgrade["description"]
 
 	# Show upgrade container, hide NextLegButton until they pick
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 
-
-## Show a new set of upgrade choices (for subsequent rounds after the first).
-func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
-	score_label.text = "Choose another upgrade!"
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(3):
-		var upgrade: Dictionary = upgrades[i]
-		buttons[i].text = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
-		var color: Color = upgrade["color"]
-		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
-		buttons[i].tooltip_text = upgrade["description"]
-	upgrade_container.visible = true
-	next_leg_button.visible = false
 
 
 ## Show game over message.
@@ -151,7 +150,63 @@ func hide_score() -> void:
 	upgrade_container.visible = false
 
 
-## Handle upgrade button selection — emit signal, let main.gd decide what to show next.
+## Show a fresh set of upgrade choices (for subsequent rounds).
+func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
+	score_label.text = "Choose another upgrade!"
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
+	for i: int in range(3):
+		var upgrade: Dictionary = upgrades[i]
+		var sign: String = "-" if upgrade["scale"] == "speed" else "+"
+		var button_text: String = "%s\n%s\n%s%d" % [upgrade["rarity"], upgrade["name"], sign, upgrade["value"]]
+		if upgrade["tradeoff"]:
+			button_text += "\n-%d %s" % [upgrade["penalty_amount"], upgrade["penalty_name"]]
+		buttons[i].text = button_text
+		var color: Color = upgrade["color"]
+		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
+		buttons[i].tooltip_text = upgrade["description"]
+	upgrade_container.visible = true
+	next_leg_button.visible = false
+
+
+## Update the turn score display.
+func update_turn_score(score: int) -> void:
+	turn_score_label.text = "Turn Score: %d" % score
+
+
+## Update the stats panel with current values and color coding.
+## base_stats is a Dictionary with keys matching stat names, values are the defaults.
+## Speed is displayed as an interpreted 0-100 value (internal 1.0-5.0 mapped to 0-100).
+func update_stats(stats: Dictionary, base_stats: Dictionary) -> void:
+	_update_stat_label(horizontal_range_label, "Horizontal Range", stats["horizontal_range"], base_stats["horizontal_range"])
+	_update_stat_label(vertical_range_label, "Vertical Range", stats["vertical_range"], base_stats["vertical_range"])
+	_update_stat_label(vertical_accuracy_label, "Vertical Accuracy", stats["vertical_accuracy"], base_stats["vertical_accuracy"])
+	_update_stat_label(horizontal_accuracy_label, "Horizontal Accuracy", stats["horizontal_accuracy"], base_stats["horizontal_accuracy"])
+	# Speed stats: convert 1.0-5.0 to 0-100 for display (higher internal = better)
+	var v_speed_display: int = _speed_to_display(stats["vertical_speed"])
+	var v_speed_base: int = _speed_to_display(base_stats["vertical_speed"])
+	_update_stat_label(vertical_speed_label, "Vertical Speed", float(v_speed_display), float(v_speed_base))
+	var h_speed_display: int = _speed_to_display(stats["horizontal_speed"])
+	var h_speed_base: int = _speed_to_display(base_stats["horizontal_speed"])
+	_update_stat_label(horizontal_speed_label, "Horizontal Speed", float(h_speed_display), float(h_speed_base))
+
+
+## Convert internal speed (1.0-5.0) to a display value (0-100).
+func _speed_to_display(speed: float) -> int:
+	return roundi((speed - 1.0) / 4.0 * 100.0)
+
+
+## Update a single stat label with value and color based on comparison to base.
+func _update_stat_label(label: Label, stat_name: String, current: float, base: float) -> void:
+	label.text = "%s: %d" % [stat_name, roundi(current)]
+	if current > base:
+		label.modulate = Color(0.4, 1.0, 0.4)
+	elif current < base:
+		label.modulate = Color(1.0, 0.5, 0.5)
+	else:
+		label.modulate = Color(1.0, 1.0, 1.0)
+
+
+## Handle upgrade button selection — hide cards, let main.gd decide what shows next.
 func _select_upgrade(index: int) -> void:
 	upgrade_container.visible = false
 	upgrade_selected.emit(index)

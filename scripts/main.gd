@@ -14,19 +14,77 @@ extends Node2D
 @onready var hud: CanvasLayer = $HUD
 @onready var x01_game: Node = $X01Game
 
-# Upgrade type definitions — maps display names to throw_mechanic properties
+# Upgrade type definitions — 4 pure buffs, 2 tradeoffs (consistency stats penalize each other)
 const UPGRADE_TYPES: Array[Dictionary] = [
-	{"name": "Aim Accuracy", "property": "aim_accuracy", "scale": "direct", "description": "Narrows the horizontal aiming window"},
-	{"name": "Vertical Accuracy", "property": "vertical_accuracy", "scale": "direct", "description": "Shrinks the vertical positioning window"},
-	{"name": "Release Accuracy", "property": "release_accuracy", "scale": "direct", "description": "Tightens the vertical variance zone from the marker"},
-	{"name": "Release Control", "property": "release_speed", "scale": "speed", "description": "Slows the bouncing release marker"},
+	{
+		"name": "Horizontal Range",
+		"property": "horizontal_range",
+		"scale": "direct",
+		"tradeoff": false,
+		"description": "Narrows the horizontal aiming band",
+	},
+	{
+		"name": "Vertical Range",
+		"property": "vertical_range",
+		"scale": "direct",
+		"tradeoff": false,
+		"description": "Shrinks the vertical positioning window",
+	},
+	{
+		"name": "Vertical Speed",
+		"property": "vertical_speed",
+		"scale": "speed",
+		"tradeoff": false,
+		"description": "Slows the vertical release marker",
+	},
+	{
+		"name": "Horizontal Speed",
+		"property": "horizontal_speed",
+		"scale": "speed",
+		"tradeoff": false,
+		"description": "Slows the horizontal release marker",
+	},
+	{
+		"name": "Vertical Accuracy",
+		"property": "vertical_accuracy",
+		"scale": "direct",
+		"tradeoff": true,
+		"penalty_property": "horizontal_accuracy",
+		"penalty_name": "Horizontal Accuracy",
+		"penalty_amount": 3,
+		"description": "Tightens vertical variance, but widens horizontal",
+	},
+	{
+		"name": "Horizontal Accuracy",
+		"property": "horizontal_accuracy",
+		"scale": "direct",
+		"tradeoff": true,
+		"penalty_property": "vertical_accuracy",
+		"penalty_name": "Vertical Accuracy",
+		"penalty_amount": 3,
+		"description": "Tightens horizontal variance, but widens vertical",
+	},
 ]
 
-# Rarity tiers with value ranges and weighted probabilities
-const RARITY_TABLE: Array[Dictionary] = [
-	{"name": "Common", "min_value": 8, "max_value": 11, "weight": 60, "color": Color(0.6, 0.6, 0.6)},
-	{"name": "Uncommon", "min_value": 12, "max_value": 15, "weight": 27, "color": Color(0.3, 0.5, 1.0)},
-	{"name": "Rare", "min_value": 16, "max_value": 17, "weight": 13, "color": Color(0.7, 0.3, 0.9)},
+# Rarity tiers for standard (direct 1-100) stats
+const STANDARD_RARITY_TABLE: Array[Dictionary] = [
+	{"name": "Common", "min_value": 5, "max_value": 8, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+	{"name": "Uncommon", "min_value": 9, "max_value": 12, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+	{"name": "Rare", "min_value": 13, "max_value": 15, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
+]
+
+# Rarity tiers for speed stats (1.0-5.0 internal scale)
+const SPEED_RARITY_TABLE: Array[Dictionary] = [
+	{"name": "Common", "min_value": 2, "max_value": 4, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+	{"name": "Uncommon", "min_value": 5, "max_value": 7, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+	{"name": "Rare", "min_value": 8, "max_value": 10, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
+]
+
+# Rarity tiers for consistency stats (tradeoff upgrades — higher values to offset the penalty)
+const CONSISTENCY_RARITY_TABLE: Array[Dictionary] = [
+	{"name": "Common", "min_value": 8, "max_value": 12, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+	{"name": "Uncommon", "min_value": 13, "max_value": 16, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+	{"name": "Rare", "min_value": 17, "max_value": 20, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
 ]
 
 # Flow state — tracks what the game is waiting for between throws
@@ -36,16 +94,21 @@ var _awaiting_next_leg: bool = false
 var _run_over: bool = false
 
 # Base stats snapshot — saved at run start, restored on new run
-var _base_aim_accuracy: float = 0.0
+var _base_horizontal_range: float = 0.0
+var _base_vertical_range: float = 0.0
 var _base_vertical_accuracy: float = 0.0
-var _base_release_accuracy: float = 0.0
-var _base_release_speed: float = 0.0
+var _base_horizontal_accuracy: float = 0.0
+var _base_vertical_speed: float = 0.0
+var _base_horizontal_speed: float = 0.0
 
 # The 3 generated upgrade choices for the current leg-complete screen
 var _current_upgrades: Array[Dictionary] = []
 
 # How many upgrade selection rounds remain before advancing to the next leg
 var _upgrade_rounds_remaining: int = 0
+
+# Cumulative score for the current turn (resets each turn)
+var _turn_score: int = 0
 
 
 func _ready() -> void:
@@ -64,13 +127,13 @@ func _ready() -> void:
 	var viewport_size: Vector2 = get_viewport_rect().size
 	dartboard.position = viewport_size / 2.0
 
+	# Snapshot base stats before first run so colors are correct
+	_snapshot_base_stats()
+
 	# Start the first run
 	x01_game.start_run()
 	_update_all_hud()
 	_start_new_throw()
-
-	# Snapshot base stats so we can restore on new run
-	_snapshot_base_stats()
 
 
 ## Start a new throw (single dart).
@@ -100,6 +163,10 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Process through X01 game logic
 	var response: Dictionary = x01_game.process_throw(result)
 
+	# Accumulate turn score
+	_turn_score += result["total_score"]
+	hud.update_turn_score(_turn_score)
+
 	# Update remaining score display
 	hud.update_remaining(response["remaining_score"])
 
@@ -115,7 +182,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	elif response["is_leg_won"]:
-		# Leg complete — start upgrade selection (2 rounds)
+		# Leg complete — offer 2 rounds of upgrade selection
 		_upgrade_rounds_remaining = 2
 		_current_upgrades = _generate_upgrades()
 		hud.show_leg_complete_with_upgrades(
@@ -151,6 +218,8 @@ func _on_next_dart() -> void:
 ## Player presses "Next Turn" — advance to next turn after bust or using all darts.
 func _on_next_turn() -> void:
 	_awaiting_next_turn = false
+	_turn_score = 0
+	hud.update_turn_score(0)
 	_clear_darts()
 	x01_game.end_turn()
 	x01_game.start_turn()
@@ -161,6 +230,8 @@ func _on_next_turn() -> void:
 ## Player presses "Next Leg" — advance to next leg after picking an upgrade.
 func _on_next_leg() -> void:
 	_awaiting_next_leg = false
+	_turn_score = 0
+	hud.update_turn_score(0)
 	_clear_darts()
 	x01_game.advance_leg()
 	_update_all_hud()
@@ -170,6 +241,8 @@ func _on_next_leg() -> void:
 ## Player presses "New Run" — start fresh after game over.
 func _on_new_run() -> void:
 	_run_over = false
+	_turn_score = 0
+	hud.update_turn_score(0)
 	_clear_darts()
 	_restore_base_stats()
 	x01_game.start_run()
@@ -180,6 +253,7 @@ func _on_new_run() -> void:
 ## Player picks an upgrade card (index 0, 1, or 2).
 func _on_upgrade_selected(index: int) -> void:
 	_apply_upgrade(_current_upgrades[index])
+	_update_stats_display()
 	_upgrade_rounds_remaining -= 1
 
 	if _upgrade_rounds_remaining > 0:
@@ -193,24 +267,28 @@ func _on_upgrade_selected(index: int) -> void:
 
 ## Save throw_mechanic stats at the start of a run for later restoration.
 func _snapshot_base_stats() -> void:
-	_base_aim_accuracy = throw_mechanic.aim_accuracy
+	_base_horizontal_range = throw_mechanic.horizontal_range
+	_base_vertical_range = throw_mechanic.vertical_range
 	_base_vertical_accuracy = throw_mechanic.vertical_accuracy
-	_base_release_accuracy = throw_mechanic.release_accuracy
-	_base_release_speed = throw_mechanic.release_speed
+	_base_horizontal_accuracy = throw_mechanic.horizontal_accuracy
+	_base_vertical_speed = throw_mechanic.vertical_speed
+	_base_horizontal_speed = throw_mechanic.horizontal_speed
 
 
 ## Restore throw_mechanic stats to their initial values (on new run).
 func _restore_base_stats() -> void:
-	throw_mechanic.aim_accuracy = _base_aim_accuracy
+	throw_mechanic.horizontal_range = _base_horizontal_range
+	throw_mechanic.vertical_range = _base_vertical_range
 	throw_mechanic.vertical_accuracy = _base_vertical_accuracy
-	throw_mechanic.release_accuracy = _base_release_accuracy
-	throw_mechanic.release_speed = _base_release_speed
+	throw_mechanic.horizontal_accuracy = _base_horizontal_accuracy
+	throw_mechanic.vertical_speed = _base_vertical_speed
+	throw_mechanic.horizontal_speed = _base_horizontal_speed
 
 
 ## Generate 3 distinct upgrade cards with random rarities and values.
 func _generate_upgrades() -> Array[Dictionary]:
-	# Pick 3 distinct upgrade types from the 4 available
-	var indices: Array[int] = [0, 1, 2, 3]
+	# Pick 3 distinct upgrade types from the 6 available
+	var indices: Array[int] = [0, 1, 2, 3, 4, 5]
 	indices.shuffle()
 	var chosen_indices: Array[int] = [indices[0], indices[1], indices[2]]
 
@@ -218,15 +296,24 @@ func _generate_upgrades() -> Array[Dictionary]:
 	for idx: int in chosen_indices:
 		var upgrade_type: Dictionary = UPGRADE_TYPES[idx]
 
+		# Select rarity table based on stat type
+		var rarity_table: Array[Dictionary]
+		if upgrade_type["tradeoff"]:
+			rarity_table = CONSISTENCY_RARITY_TABLE
+		elif upgrade_type["scale"] == "speed":
+			rarity_table = SPEED_RARITY_TABLE
+		else:
+			rarity_table = STANDARD_RARITY_TABLE
+
 		# Roll rarity using weighted random (1-100 roll)
 		var roll: int = randi_range(1, 100)
 		var rarity: Dictionary
 		if roll <= 65:
-			rarity = RARITY_TABLE[0]
+			rarity = rarity_table[0]
 		elif roll <= 90:
-			rarity = RARITY_TABLE[1]
+			rarity = rarity_table[1]
 		else:
-			rarity = RARITY_TABLE[2]
+			rarity = rarity_table[2]
 
 		# Roll value within the rarity's range
 		var value: int = randi_range(rarity["min_value"], rarity["max_value"])
@@ -239,6 +326,10 @@ func _generate_upgrades() -> Array[Dictionary]:
 			"rarity": rarity["name"],
 			"color": rarity["color"],
 			"value": value,
+			"tradeoff": upgrade_type["tradeoff"],
+			"penalty_property": upgrade_type.get("penalty_property", ""),
+			"penalty_name": upgrade_type.get("penalty_name", ""),
+			"penalty_amount": upgrade_type.get("penalty_amount", 0),
 		})
 
 	return upgrades
@@ -246,17 +337,22 @@ func _generate_upgrades() -> Array[Dictionary]:
 
 ## Apply a chosen upgrade to the throw_mechanic.
 func _apply_upgrade(upgrade: Dictionary) -> void:
+	# Apply the main boost
 	if upgrade["scale"] == "direct":
-		# Direct 1-100 stat: add value and clamp to 100
 		var current: float = throw_mechanic.get(upgrade["property"])
 		var new_value: float = minf(current + float(upgrade["value"]), 100.0)
 		throw_mechanic.set(upgrade["property"], new_value)
 	elif upgrade["scale"] == "speed":
-		# Release speed uses a different internal scale (1.0-5.0)
-		# Convert displayed value (5-15 range) to internal boost
 		var internal_boost: float = float(upgrade["value"]) * (4.0 / 15.0)
-		var new_speed: float = minf(throw_mechanic.release_speed + internal_boost, 5.0)
-		throw_mechanic.release_speed = new_speed
+		var current: float = throw_mechanic.get(upgrade["property"])
+		var new_value: float = minf(current + internal_boost, 5.0)
+		throw_mechanic.set(upgrade["property"], new_value)
+
+	# Apply tradeoff penalty if applicable
+	if upgrade["tradeoff"]:
+		var penalty_current: float = throw_mechanic.get(upgrade["penalty_property"])
+		var new_penalty_value: float = penalty_current - float(upgrade["penalty_amount"])
+		throw_mechanic.set(upgrade["penalty_property"], new_penalty_value)
 
 
 ## Update all HUD elements to reflect current game state.
@@ -265,6 +361,28 @@ func _update_all_hud() -> void:
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	hud.update_remaining(x01_game.remaining_score)
 	hud.update_darts(3 - x01_game.darts_this_turn)
+	_update_stats_display()
+
+
+## Refresh the stats panel on the HUD with current throw_mechanic values.
+func _update_stats_display() -> void:
+	var current_stats: Dictionary = {
+		"horizontal_range": throw_mechanic.horizontal_range,
+		"vertical_range": throw_mechanic.vertical_range,
+		"vertical_accuracy": throw_mechanic.vertical_accuracy,
+		"horizontal_accuracy": throw_mechanic.horizontal_accuracy,
+		"vertical_speed": throw_mechanic.vertical_speed,
+		"horizontal_speed": throw_mechanic.horizontal_speed,
+	}
+	var base_stats: Dictionary = {
+		"horizontal_range": _base_horizontal_range,
+		"vertical_range": _base_vertical_range,
+		"vertical_accuracy": _base_vertical_accuracy,
+		"horizontal_accuracy": _base_horizontal_accuracy,
+		"vertical_speed": _base_vertical_speed,
+		"horizontal_speed": _base_horizontal_speed,
+	}
+	hud.update_stats(current_stats, base_stats)
 
 
 ## Remove all dart markers from the board.
@@ -284,11 +402,12 @@ func _place_dart(position: Vector2) -> void:
 
 
 func _on_throw_state_changed(new_state: int) -> void:
-	# Show appropriate instruction for each throw mechanic state
 	match new_state:
 		throw_mechanic.ThrowState.POSITIONING:
 			hud.show_instruction("W/S or Up/Down to move window, Enter/Space to lock")
-		throw_mechanic.ThrowState.RELEASING:
-			hud.show_instruction("Click or Space to release the dart")
+		throw_mechanic.ThrowState.VERTICAL_RELEASE:
+			hud.show_instruction("Click or Space to lock vertical position")
+		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
+			hud.show_instruction("Click or Space to lock horizontal position")
 		throw_mechanic.ThrowState.RESOLVING:
 			hud.show_instruction("Releasing...")
