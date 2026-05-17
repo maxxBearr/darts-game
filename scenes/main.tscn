@@ -4,9 +4,27 @@
 [ext_resource type="Script" uid="uid://bkin73sio7fkj" path="res://scripts/dartboard.gd" id="2_dartboard"]
 [ext_resource type="Script" uid="uid://cpoihemtl1lbe" path="res://scripts/throw_mechanic.gd" id="3_throw"]
 [ext_resource type="Script" uid="uid://ce8afk38vj2jj" path="res://scripts/hud.gd" id="4_hud"]
+[ext_resource type="Script" uid="uid://es5jr0ix8cry" path="res://scripts/x01_game.gd" id="5_x01"]
+[ext_resource type="Script" uid="uid://djajtxhtum6ei" path="res://scripts/dart_indicator.gd" id="6_dart_indicator"]
+
+[sub_resource type="LabelSettings" id="LabelSettings_info"]
+font_size = 22
+outline_size = 2
+outline_color = Color(0, 0, 0, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_remaining"]
+font_size = 48
+outline_size = 4
+outline_color = Color(0, 0, 0, 1)
 
 [sub_resource type="LabelSettings" id="LabelSettings_score"]
 font_size = 28
+outline_size = 3
+outline_color = Color(0, 0, 0, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_bust"]
+font_size = 32
+font_color = Color(1, 0.3, 0.3, 1)
 outline_size = 3
 outline_color = Color(0, 0, 0, 1)
 
@@ -21,7 +39,11 @@ flash_duration = 0.4
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
+aim_accuracy = 45.0
+vertical_accuracy = 28.0
+release_accuracy = 55.0
 release_marker_size = 6.0
+resolve_preview_duration = 1.19
 resolve_preview_color = Color(0.7647059, 0.68235296, 0, 0.54901963)
 
 [node name="DartContainer" type="Node2D" parent="." unique_id=1171324154]
@@ -29,26 +51,62 @@ resolve_preview_color = Color(0.7647059, 0.68235296, 0, 0.54901963)
 [node name="HUD" type="CanvasLayer" parent="." unique_id=654376527]
 script = ExtResource("4_hud")
 
+[node name="LegLabel" type="Label" parent="HUD" unique_id=462079680]
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 250.0
+offset_bottom = 50.0
+text = "Leg 1 — 101"
+label_settings = SubResource("LabelSettings_info")
+
+[node name="RemainingLabel" type="Label" parent="HUD" unique_id=1975752778]
+offset_left = 20.0
+offset_top = 50.0
+offset_right = 250.0
+offset_bottom = 110.0
+text = "101"
+label_settings = SubResource("LabelSettings_remaining")
+
+[node name="TurnLabel" type="Label" parent="HUD" unique_id=1646296989]
+offset_left = 20.0
+offset_top = 110.0
+offset_right = 250.0
+offset_bottom = 140.0
+text = "Turn 1/5"
+label_settings = SubResource("LabelSettings_info")
+
+[node name="DartLabel" type="Label" parent="HUD" unique_id=2140069321]
+offset_left = 20.0
+offset_top = 140.0
+offset_right = 250.0
+offset_bottom = 170.0
+text = "Dart 1/3"
+label_settings = SubResource("LabelSettings_info")
+
 [node name="ScoreLabel" type="Label" parent="HUD" unique_id=566361258]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -350.0
+offset_left = -471.0
 offset_top = 20.0
 offset_right = -20.0
 offset_bottom = 60.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 13
 label_settings = SubResource("LabelSettings_score")
 horizontal_alignment = 2
 
-[node name="TotalScoreLabel" type="Label" parent="HUD" unique_id=1310079631]
+[node name="BustLabel" type="Label" parent="HUD" unique_id=498016384]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -350.0
+offset_left = -430.0
 offset_top = 65.0
 offset_right = -20.0
-offset_bottom = 105.0
-label_settings = SubResource("LabelSettings_score")
+offset_bottom = 110.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 9
+label_settings = SubResource("LabelSettings_bust")
 horizontal_alignment = 2
 
 [node name="InstructionLabel" type="Label" parent="HUD" unique_id=910204298]
@@ -64,7 +122,7 @@ offset_bottom = -20.0
 label_settings = SubResource("LabelSettings_score")
 horizontal_alignment = 1
 
-[node name="ThrowAgainButton" type="Button" parent="HUD" unique_id=4360253]
+[node name="NextDartButton" type="Button" parent="HUD" unique_id=1286664645]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
@@ -72,14 +130,82 @@ offset_left = -180.0
 offset_top = 120.0
 offset_right = -20.0
 offset_bottom = 160.0
-text = "Throw Again"
+text = "Next Dart"
 
-[node name="ClearButton" type="Button" parent="HUD" unique_id=1486333871]
+[node name="NextTurnButton" type="Button" parent="HUD" unique_id=1391135062]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
 offset_left = -180.0
-offset_top = 170.0
+offset_top = 120.0
 offset_right = -20.0
-offset_bottom = 210.0
-text = "Clear Board"
+offset_bottom = 160.0
+text = "Next Turn"
+
+[node name="NextLegButton" type="Button" parent="HUD" unique_id=1727416231]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -180.0
+offset_top = 120.0
+offset_right = -20.0
+offset_bottom = 160.0
+text = "Next Leg"
+
+[node name="NewRunButton" type="Button" parent="HUD" unique_id=1036766083]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -180.0
+offset_top = 120.0
+offset_right = -20.0
+offset_bottom = 160.0
+text = "New Run"
+
+[node name="DartIndicator" type="Control" parent="HUD" unique_id=1514473938]
+layout_mode = 3
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -162.0
+offset_right = 169.0
+offset_bottom = -15.0
+grow_vertical = 0
+script = ExtResource("6_dart_indicator")
+active_color = Color(0.6283151, 0.62831503, 0.62831503, 0.9019608)
+line_width = 10.0
+line_height = 60.0
+spacing = 19.325
+
+[node name="UpgradeContainer" type="HBoxContainer" parent="HUD" unique_id=1583048928]
+visible = false
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -300.0
+offset_top = -180.0
+offset_right = 300.0
+offset_bottom = -70.0
+theme_override_constants/separation = 20
+alignment = 1
+
+[node name="UpgradeButton1" type="Button" parent="HUD/UpgradeContainer" unique_id=272256267]
+custom_minimum_size = Vector2(170, 100)
+layout_mode = 2
+size_flags_horizontal = 4
+
+[node name="UpgradeButton2" type="Button" parent="HUD/UpgradeContainer" unique_id=971707968]
+custom_minimum_size = Vector2(170, 100)
+layout_mode = 2
+size_flags_horizontal = 4
+
+[node name="UpgradeButton3" type="Button" parent="HUD/UpgradeContainer" unique_id=1350545551]
+custom_minimum_size = Vector2(170, 100)
+layout_mode = 2
+size_flags_horizontal = 4
+
+[node name="X01Game" type="Node" parent="." unique_id=617431942]
+script = ExtResource("5_x01")
