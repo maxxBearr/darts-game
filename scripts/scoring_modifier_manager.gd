@@ -82,11 +82,12 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 		"history_run": hit_history_run,
 		"effective_wedge_values": effective_wedge_values,
 		"effective_wedge_colors": effective_wedge_colors,
+		"is_preview": is_preview,
 	}
 
-	# Run through all active modifiers in acquisition order
+	# Run through all enabled PER_DART modifiers in acquisition order
 	for modifier: Resource in active_modifiers:
-		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
+		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.enabled:
 			result = modifier.apply(result, context)
 
 	# Only record to history if this is a real throw, not a hover preview

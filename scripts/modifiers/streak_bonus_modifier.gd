@@ -18,29 +18,37 @@ func _init() -> void:
 	config_type = ScoringEnums.ConfigType.NONE
 
 
-func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
+func apply(result: Dictionary, context: Dictionary) -> Dictionary:
+	var is_preview: bool = context.get("is_preview", false)
 	var wedge_index: int = result.get("wedge_index", -1)
 	var ring_name: String = result.get("ring_name", "")
 
 	if wedge_index < 0 or result.get("is_bull", false):
-		_reset_streak()
+		if not is_preview:
+			_reset_streak()
 		return result
 
 	var ring_zone: String = _ring_name_to_zone(ring_name)
 	if ring_zone.is_empty():
-		_reset_streak()
+		if not is_preview:
+			_reset_streak()
 		return result
 
-	if _is_qualifying_hit(wedge_index, ring_zone):
-		_streak_count += 1
-		_streak_wedge_index = wedge_index
-		_streak_ring = ring_zone
-	else:
-		_streak_wedge_index = wedge_index
-		_streak_ring = ring_zone
-		_streak_count = 1
+	# Calculate what the streak would be without mutating state during preview
+	var effective_count: int = _streak_count
+	var qualifies: bool = _is_qualifying_hit(wedge_index, ring_zone)
 
-	var bonus: int = _streak_count - 1
+	if qualifies:
+		effective_count += 1
+	else:
+		effective_count = 1
+
+	if not is_preview:
+		_streak_count = effective_count
+		_streak_wedge_index = wedge_index
+		_streak_ring = ring_zone
+
+	var bonus: int = effective_count - 1
 	if bonus > 0:
 		for i: int in range(bonus):
 			var old_mult: int = result["multiplier"]
@@ -49,7 +57,7 @@ func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
 			_track_modification(result, "multiplier", old_mult, result["multiplier"])
 		result["streak_triggered"] = true
 		result["streak_name"] = modifier_name
-		result["streak_count"] = _streak_count
+		result["streak_count"] = effective_count
 
 	return result
 

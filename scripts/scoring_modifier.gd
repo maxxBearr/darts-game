@@ -23,6 +23,9 @@ extends Resource
 ## The rarity tier of this modifier instance.
 @export var rarity_tier: ScoringEnums.Rarity = ScoringEnums.Rarity.COMMON
 
+## Whether this modifier is currently active. Toggled by the player at any time.
+var enabled: bool = true
+
 ## Rarity name for display — derived from rarity_tier.
 var rarity: String:
 	get:

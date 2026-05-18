@@ -470,18 +470,15 @@ func hide_hover_tooltip() -> void:
 
 ## Add a modifier square to the panel. Called when a scoring modifier is acquired.
 func add_modifier_to_panel(modifier: Resource) -> void:
-	var square: ColorRect = ColorRect.new()
+	var square: Panel = Panel.new()
 	square.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
-	# Tint by rarity color
-	square.color = modifier.rarity_color
-	# Store modifier reference for tooltip lookup
 	square.set_meta("modifier", modifier)
-	# Connect mouse signals for hover tooltip
 	square.mouse_entered.connect(_on_modifier_hover.bind(square))
 	square.mouse_exited.connect(_on_modifier_unhover)
-	# Make sure it accepts mouse events
+	square.gui_input.connect(_on_modifier_clicked.bind(square))
 	square.mouse_filter = Control.MOUSE_FILTER_STOP
 	modifier_panel.add_child(square)
+	_update_modifier_square_visual(square)
 
 
 ## Clear all modifier squares from the panel. Called on new run.
@@ -492,16 +489,46 @@ func clear_modifier_panel() -> void:
 
 
 ## Called when the mouse enters a modifier square.
-func _on_modifier_hover(square: ColorRect) -> void:
+func _on_modifier_hover(square: Panel) -> void:
 	var modifier: Resource = square.get_meta("modifier")
 	if modifier:
-		modifier_tooltip.text = "%s\n%s" % [modifier.modifier_name, modifier.description]
+		var status: String = "ON" if modifier.enabled else "OFF"
+		modifier_tooltip.text = "%s [%s]\n%s\nClick to toggle" % [modifier.modifier_name, status, modifier.description]
 		modifier_tooltip.visible = true
 
 
 ## Called when the mouse exits a modifier square.
 func _on_modifier_unhover() -> void:
 	modifier_tooltip.visible = false
+
+
+## Toggle modifier on click.
+func _on_modifier_clicked(event: InputEvent, square: Panel) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var modifier: Resource = square.get_meta("modifier")
+		if modifier:
+			modifier.enabled = not modifier.enabled
+			_update_modifier_square_visual(square)
+			# Refresh tooltip to show new state
+			_on_modifier_hover(square)
+
+
+## Update the visual appearance of a modifier square based on enabled state.
+func _update_modifier_square_visual(square: Panel) -> void:
+	var modifier: Resource = square.get_meta("modifier")
+	if not modifier:
+		return
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = modifier.rarity_color
+	style.set_corner_radius_all(3)
+	if modifier.enabled:
+		style.border_color = Color(1.0, 1.0, 1.0, 0.9)
+		style.set_border_width_all(2)
+		square.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	else:
+		style.set_border_width_all(0)
+		square.modulate = Color(0.3, 0.3, 0.3, 0.6)
+	square.add_theme_stylebox_override("panel", style)
 
 
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.

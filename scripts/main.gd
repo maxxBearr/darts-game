@@ -5,6 +5,10 @@ extends Node2D
 ## Radius of placed dart markers in pixels.
 @export var dart_size: float = 5.0
 
+## When enabled, the player picks a scoring modifier after building their dart,
+## before the first throw — same UI as the post-leg modifier pick.
+@export var debug_start_with_modifier: bool = false
+
 @onready var dartboard: Node2D = $Dartboard
 @onready var throw_mechanic: Node2D = $ThrowMechanic
 @onready var dart_container: Node2D = $DartContainer
@@ -140,6 +144,9 @@ var _original_gaussian_spread: float = 0.0
 
 # Whether a trigger animation is currently playing (suppresses hover tooltip).
 var _trigger_anim_active: bool = false
+
+# Whether the current modifier pick is the debug start-of-game pick.
+var _start_modifier_pending: bool = false
 
 
 func _ready() -> void:
@@ -383,6 +390,7 @@ func _on_new_run() -> void:
 	_run_over = false
 	_turn_score = 0
 	_leg_phase = ""
+	_start_modifier_pending = false
 	hud.update_turn_score(0)
 	hud.hide_picker()
 	scoring_modifier_manager.reset_for_run()
@@ -427,7 +435,17 @@ func _on_run_confirmed() -> void:
 	x01_game.start_run()
 	_update_all_hud()
 	_update_checkout_highlights()
-	_start_new_throw()
+
+	if debug_start_with_modifier:
+		_start_modifier_pending = true
+		_leg_phase = "modifier_pick"
+		_current_modifiers = []
+		var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3)
+		for mod: ScoringModifier in generated:
+			_current_modifiers.append(mod)
+		hud.show_modifier_choices(_current_modifiers)
+	else:
+		_start_new_throw()
 
 
 ## Player picks an accuracy upgrade card.
@@ -451,7 +469,11 @@ func _on_modifier_selected(index: int) -> void:
 	if modifier.config_type == ScoringEnums.ConfigType.NONE:
 		add_scoring_modifier(modifier, {})
 		_leg_phase = ""
-		hud.next_leg_button.visible = true
+		if _start_modifier_pending:
+			_start_modifier_pending = false
+			_start_new_throw()
+		else:
+			hud.next_leg_button.visible = true
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
 		_pending_modifier = modifier
 		_leg_phase = "wedge_picker"
@@ -764,7 +786,11 @@ func _finish_picker() -> void:
 	_pending_modifier = null
 	_picker_selected_wedge = -1
 	_leg_phase = ""
-	hud.next_leg_button.visible = true
+	if _start_modifier_pending:
+		_start_modifier_pending = false
+		_start_new_throw()
+	else:
+		hud.next_leg_button.visible = true
 
 
 func _update_picker_prompt(wedge_idx: int) -> void:
