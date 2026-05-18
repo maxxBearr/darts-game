@@ -145,27 +145,32 @@ func _draw() -> void:
 	for wedge_idx: int in range(20):
 		var start_angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
 		var end_angle_deg: float = start_angle_deg + WEDGE_ANGLE_DEG
-		var is_even: bool = wedge_idx % 2 == 0
+
+		var single_color: Color
+		var multi_color: Color
+		if effective_wedge_colors.size() == 20:
+			single_color = _segment_color_to_render(effective_wedge_colors[wedge_idx]["single"])
+			multi_color = _segment_color_to_render(effective_wedge_colors[wedge_idx]["multi"])
+		else:
+			var is_even: bool = wedge_idx % 2 == 0
+			single_color = wedge_a_single if is_even else wedge_b_single
+			multi_color = wedge_a_multi if is_even else wedge_b_multi
 
 		# Double ring
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER,
-			wedge_a_multi if is_even else wedge_b_multi)
+			RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, multi_color)
 
 		# Outer single
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER,
-			wedge_a_single if is_even else wedge_b_single)
+			RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, single_color)
 
 		# Triple ring
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER,
-			wedge_a_multi if is_even else wedge_b_multi)
+			RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, multi_color)
 
 		# Inner single
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER,
-			wedge_a_single if is_even else wedge_b_single)
+			RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, single_color)
 
 	# Bullseyes drawn on top as filled circles
 	draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, bull_single_color)
@@ -453,6 +458,20 @@ func _lookup_wedge_value(wedge_idx: int) -> int:
 	if effective_wedge_values.size() == 20:
 		return effective_wedge_values[wedge_idx]
 	return WEDGE_ORDER[wedge_idx]
+
+
+## Map a SegmentColor enum value to the actual render Color used for drawing.
+func _segment_color_to_render(seg_color: ScoringEnums.SegmentColor) -> Color:
+	match seg_color:
+		ScoringEnums.SegmentColor.BLACK:
+			return wedge_a_single
+		ScoringEnums.SegmentColor.WHITE:
+			return wedge_b_single
+		ScoringEnums.SegmentColor.RED:
+			return wedge_a_multi
+		ScoringEnums.SegmentColor.GREEN:
+			return wedge_b_multi
+	return wedge_a_single
 
 
 ## Look up the segment color for a wedge index and ring type.
