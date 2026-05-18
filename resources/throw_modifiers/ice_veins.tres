@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="IceVeinsModifier" format=3 uid="uid://etnmtjmrwwtx"]
+
+[ext_resource type="Script" uid="uid://drqj5p8lg24nk" path="res://scripts/throw_modifiers/ice_veins_modifier.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+checkout_threshold = 50
+active_color = Color(0.4, 0.7, 1.0, 1)
+modifier_name = "Ice Veins"
+description = "Tightens dart precision relative to aim spot. Rewards skilled precision, punishes sloppy timing"
+gaussian_spread_override = 0.25

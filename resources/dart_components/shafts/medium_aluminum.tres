@@ -6,9 +6,11 @@
 [resource]
 script = ExtResource("1")
 component_name = "Medium Aluminum"
-description = "A balanced shaft that offsets most barrels nicely"
+description = "Unremarkable, straight shooter"
 component_type = 1
 weight = 0.25
 texture = ExtResource("2_h0803")
 h_speed_bonus = 3.0
 v_speed_bonus = 3.0
+h_accuracy_bonus = 1.0
+v_accuracy_bonus = 1.0

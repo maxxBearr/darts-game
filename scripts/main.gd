@@ -35,14 +35,14 @@ const UPGRADE_TYPES: Array[Dictionary] = [
 		"description": "Shrinks the vertical positioning window",
 	},
 	{
-		"name": "Vertical Speed",
+		"name": "V Speed Control",
 		"property": "vertical_speed",
 		"scale": "speed",
 		"tradeoff": false,
 		"description": "Slows the vertical release marker",
 	},
 	{
-		"name": "Horizontal Speed",
+		"name": "H Speed Control",
 		"property": "horizontal_speed",
 		"scale": "speed",
 		"tradeoff": false,
@@ -122,6 +122,15 @@ var _turn_score: int = 0
 
 # Whether hover feedback is currently active (set based on game state)
 var _hover_active: bool = false
+
+# Tracks temporary throw modifier bonuses so they can be reverted after the throw.
+var _temp_throw_bonuses: Dictionary = {}
+
+# Names of currently active throw modifiers (for HUD display).
+var _active_throw_modifier_names: Array[String] = []
+
+# Stored original gaussian_spread for reverting after throw.
+var _original_gaussian_spread: float = 0.0
 
 
 func _ready() -> void:
@@ -211,6 +220,25 @@ func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
 func _start_new_throw() -> void:
 	_disable_hover()
 	hud.hide_score()
+
+	# Build context for throw modifier evaluation
+	var context: Dictionary = {
+		"remaining_score": x01_game.remaining_score,
+		"target_score": x01_game.target_score,
+		"darts_this_turn": x01_game.darts_this_turn,
+		"current_turn": x01_game.current_turn,
+		"current_leg": x01_game.current_leg,
+		"max_turns": x01_game.max_turns,
+	}
+
+	# Evaluate and apply temporary throw modifier bonuses
+	var result: Dictionary = dart_build.evaluate_throw_modifiers(context)
+	_temp_throw_bonuses = result["bonuses"]
+	_active_throw_modifier_names = result["activated"]
+	_apply_temp_bonuses()
+	_update_stats_display()
+	hud.update_modifier_status(_active_throw_modifier_names)
+
 	# Update dart counter to show which dart we're on
 	var darts_remaining: int = 3 - x01_game.darts_this_turn
 	hud.update_darts(darts_remaining)
@@ -220,6 +248,12 @@ func _start_new_throw() -> void:
 
 ## Called when a dart lands — process through X01 logic and update state.
 func _on_throw_completed(hit_position: Vector2) -> void:
+	# Revert any temporary throw modifier bonuses
+	_revert_temp_bonuses()
+	_update_stats_display()
+	var no_modifiers: Array[String] = []
+	hud.update_modifier_status(no_modifiers)
+
 	# Score the throw (raw, before modifiers)
 	var result: Dictionary = dartboard.calculate_score(hit_position)
 
@@ -228,6 +262,9 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# Place a dart marker at the hit position
 	_place_dart(hit_position)
+
+	# Floating score number
+	_spawn_floating_score(hit_position, result)
 
 	# Flash the hit segment for visual feedback
 	dartboard.flash_segment(hit_position)
@@ -329,6 +366,7 @@ func _on_new_run() -> void:
 	hud.update_turn_score(0)
 	scoring_modifier_manager.reset_for_run()
 	hud.clear_modifier_panel()
+	hud.clear_modifier_status()
 	_sync_board_state()
 	_clear_darts()
 	# Restore to raw stats (before any build) so the assembly screen starts fresh
@@ -352,6 +390,17 @@ func _on_run_confirmed() -> void:
 		dart_build.equipped_shaft,
 		dart_build.equipped_flight
 	)
+	# Set up throw perk status display
+	var modifier_info: Array[Dictionary] = []
+	for part: DartComponent in [dart_build.equipped_barrel, dart_build.equipped_shaft, dart_build.equipped_flight]:
+		if part != null and part.throw_modifier != null:
+			modifier_info.append({
+				"name": part.throw_modifier.modifier_name,
+				"description": part.throw_modifier.description,
+				"active_color": part.throw_modifier.active_color,
+			})
+	hud.setup_modifier_status(modifier_info)
+
 	x01_game.start_run()
 	_update_all_hud()
 	_update_checkout_highlights()
@@ -371,6 +420,44 @@ func _on_upgrade_selected(index: int) -> void:
 	else:
 		# All rounds done — show Next Leg button
 		hud.next_leg_button.visible = true
+
+
+## Apply temporary throw modifier bonuses to throw_mechanic.
+func _apply_temp_bonuses() -> void:
+	for key: String in _temp_throw_bonuses.keys():
+		var current: float = throw_mechanic.get(key)
+		throw_mechanic.set(key, current + _temp_throw_bonuses[key])
+
+	# Apply gaussian spread override if any active modifier provides one
+	_original_gaussian_spread = throw_mechanic.gaussian_spread
+	var tightest_spread: float = 0.0
+	for part: DartComponent in [dart_build.equipped_barrel, dart_build.equipped_shaft, dart_build.equipped_flight]:
+		if part == null or part.throw_modifier == null:
+			continue
+		if part.throw_modifier.gaussian_spread_override > 0.0:
+			var context: Dictionary = {
+				"remaining_score": x01_game.remaining_score,
+				"target_score": x01_game.target_score,
+				"darts_this_turn": x01_game.darts_this_turn,
+				"current_turn": x01_game.current_turn,
+				"current_leg": x01_game.current_leg,
+				"max_turns": x01_game.max_turns,
+			}
+			if part.throw_modifier.should_activate(context):
+				if tightest_spread == 0.0 or part.throw_modifier.gaussian_spread_override < tightest_spread:
+					tightest_spread = part.throw_modifier.gaussian_spread_override
+	if tightest_spread > 0.0:
+		throw_mechanic.gaussian_spread = tightest_spread
+
+
+## Revert temporary throw modifier bonuses after a throw completes.
+func _revert_temp_bonuses() -> void:
+	for key: String in _temp_throw_bonuses.keys():
+		var current: float = throw_mechanic.get(key)
+		throw_mechanic.set(key, current - _temp_throw_bonuses[key])
+	_temp_throw_bonuses = {}
+	_active_throw_modifier_names = []
+	throw_mechanic.gaussian_spread = _original_gaussian_spread
 
 
 ## Save throw_mechanic stats at the start of a run for later restoration.
@@ -477,7 +564,7 @@ func _apply_upgrade(upgrade: Dictionary) -> void:
 		var new_value: float = minf(current + float(upgrade["value"]), 100.0)
 		throw_mechanic.set(upgrade["property"], new_value)
 	elif upgrade["scale"] == "speed":
-		var internal_boost: float = float(upgrade["value"]) * (4.0 / 15.0)
+		var internal_boost: float = float(upgrade["value"]) * (4.0 / 40.0)
 		var current: float = throw_mechanic.get(upgrade["property"])
 		var new_value: float = minf(current + internal_boost, 5.0)
 		throw_mechanic.set(upgrade["property"], new_value)
@@ -566,3 +653,43 @@ func _on_throw_state_changed(new_state: int) -> void:
 		throw_mechanic.ThrowState.RESOLVING:
 			_disable_hover()
 			hud.show_instruction("Releasing...")
+
+
+func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> void:
+	var score: int = result["total_score"]
+	if score == 0:
+		return
+
+	var label: Label = Label.new()
+	label.text = str(score)
+	label.position = hit_position + Vector2(-10.0, -10.0)
+	label.z_index = 100
+	label.add_theme_font_size_override("font_size", 22)
+	label.add_theme_constant_override("outline_size", 3)
+
+	var segment_color: int = result.get("segment_color", -1)
+	match segment_color:
+		ScoringEnums.SegmentColor.RED:
+			label.add_theme_color_override("font_color", Color(1.0, 0.25, 0.25))
+			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+		ScoringEnums.SegmentColor.GREEN:
+			label.add_theme_color_override("font_color", Color(0.2, 0.85, 0.3))
+			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+		ScoringEnums.SegmentColor.BLACK:
+			label.add_theme_color_override("font_color", Color(0.25, 0.25, 0.3))
+			label.add_theme_color_override("font_outline_color", Color(0.85, 0.85, 0.85, 0.8))
+		ScoringEnums.SegmentColor.WHITE:
+			label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85))
+			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+		_:
+			label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+
+	add_child(label)
+
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(label, "position", label.position + Vector2(25.0, -55.0), 1.0).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_property(label, "modulate:a", 0.0, 1.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.set_parallel(false)
+	tween.tween_callback(label.queue_free)

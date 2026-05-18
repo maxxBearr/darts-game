@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="NervousSweaterModifier" format=3 uid="uid://d1eu3hoy6rmki"]
+
+[ext_resource type="Script" uid="uid://bs18nucnbawyy" path="res://scripts/throw_modifiers/nervous_sweater_modifier.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+active_color = Color(1.0, 0.35, 0.3, 1)
+modifier_name = "Nervous Sweater"
+description = "+10 accuracy while score is above 50. Sweats under pressure, bonus does not apply when under 50"
+h_accuracy_bonus = 10.0
+v_accuracy_bonus = 10.0

@@ -24,17 +24,17 @@ enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEAS
 ## 1 = almost no shrinkage (window stays near full height).
 ## 100 = shrinks to nearly zero height (extremely tight).
 ## Typical gameplay range: 30 to 70.
-@export var vertical_range: float = 10.0
+@export var vertical_range: float = 20.0
 
 ## Controls vertical marker bounce speed. Higher = slower = easier to time.
 ## Range ~1.0 (hard) to 5.0 (easy).
-@export var vertical_speed: float = 3.0
+@export var vertical_speed: float = 1.5
 
 ## Controls vertical accuracy of the release. Higher = more accurate = tighter glow zone.
 ## 1 = worst (half-height equals max_vertical_accuracy_half).
 ## 100 = best (half-height equals min_vertical_accuracy_half).
 ## Typical gameplay range: 30 to 80.
-@export var vertical_accuracy: float = 20.0
+@export var vertical_accuracy: float = 25.0
 
 ## Maximum vertical variance half-height in pixels (at vertical_accuracy = 1).
 @export var max_vertical_accuracy_half: float = 90.0
@@ -45,7 +45,7 @@ enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEAS
 ## Controls horizontal accuracy of the final dart landing. Higher = more accurate = tighter zone.
 ## 1 = worst (half-width equals max_horizontal_accuracy_half).
 ## 100 = best (half-width equals min_horizontal_accuracy_half).
-@export var horizontal_accuracy: float = 20.0
+@export var horizontal_accuracy: float = 25.0
 
 ## Maximum horizontal variance half-width in pixels (at horizontal_accuracy = 1).
 @export var max_horizontal_accuracy_half: float = 80.0
@@ -55,7 +55,7 @@ enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEAS
 
 ## Controls horizontal marker bounce speed. Higher = slower = easier to time.
 ## Range ~1.0 (hard) to 5.0 (easy).
-@export var horizontal_speed: float = 3.0
+@export var horizontal_speed: float = 1.5
 
 ## Vertical accuracy skew in pixels. Set by DartBuild based on balance.
 ## Positive = dart lands lower, Negative = dart lands higher.
@@ -93,6 +93,12 @@ var accuracy_skew_v: float = 0.0
 
 ## Color of the resolve preview zone showing where the dart could land.
 @export var resolve_preview_color: Color = Color(1.0, 0.9, 0.2, 0.25)
+
+## Controls how tightly the Gaussian distribution clusters toward the aim point.
+## Lower values = tighter clustering near center (more skill-rewarding).
+## Higher values = wider spread (more RNG).
+## At 0.4, roughly 95% of throws land in the inner 80% of the variance box.
+@export_range(0.2, 0.6, 0.01) var gaussian_spread: float = 0.4
 
 # Internal state
 var _state: ThrowState = ThrowState.IDLE
@@ -346,16 +352,26 @@ func _on_resolve_timer_finished() -> void:
 	_resolve_throw()
 
 
-## Resolve the final dart position using both consistency zones.
+## Resolve the final dart position using Gaussian-weighted variance zones.
+## Darts are most likely to land near the aimed position, with probability
+## falling off toward the edges of the variance box.
 func _resolve_throw() -> void:
-	# Horizontal: random within horizontal consistency zone, centered on locked horizontal X
+	# Horizontal: Gaussian-weighted within horizontal consistency zone
 	var h_half: float = _get_horizontal_accuracy_half()
-	var horizontal_offset: float = randf_range(-h_half, h_half)
+	var horizontal_offset: float = clampf(
+		randfn(0.0, h_half * gaussian_spread),
+		-h_half,
+		h_half
+	)
 	var final_x: float = _horizontal_x + horizontal_offset
 
-	# Vertical: random within vertical consistency zone, centered on locked release Y
+	# Vertical: Gaussian-weighted within vertical consistency zone
 	var v_half: float = _get_vertical_accuracy_half()
-	var vertical_offset: float = randf_range(-v_half, v_half)
+	var vertical_offset: float = clampf(
+		randfn(0.0, v_half * gaussian_spread),
+		-v_half,
+		v_half
+	)
 	var final_y: float = _locked_release_y + vertical_offset + accuracy_skew_v
 
 	var hit_position: Vector2 = Vector2(final_x, final_y)

@@ -25,6 +25,11 @@ extends Resource
 @export var h_accuracy_bonus: float = 0.0
 @export var v_accuracy_bonus: float = 0.0
 
+## Optional throw modifier ability. When this component is equipped,
+## this modifier is evaluated before each throw. Leave null for
+## components with no conditional ability.
+@export var throw_modifier: ThrowModifier
+
 
 var rarity_name: String:
 	get:
@@ -44,9 +49,9 @@ func get_tooltip_lines() -> Array[String]:
 	if v_range_bonus != 0.0:
 		lines.append("V Range: %+.0f" % v_range_bonus)
 	if h_speed_bonus != 0.0:
-		lines.append("H Speed: %+.0f" % h_speed_bonus)
+		lines.append("H Speed Control: %+.0f" % h_speed_bonus)
 	if v_speed_bonus != 0.0:
-		lines.append("V Speed: %+.0f" % v_speed_bonus)
+		lines.append("V Speed Control: %+.0f" % v_speed_bonus)
 	if h_accuracy_bonus != 0.0:
 		lines.append("H Accuracy: %+.0f" % h_accuracy_bonus)
 	if v_accuracy_bonus != 0.0:
@@ -61,8 +66,8 @@ func get_bbcode_tooltip() -> String:
 	var stats: Array[Array] = [
 		["H Range", h_range_bonus],
 		["V Range", v_range_bonus],
-		["H Speed", h_speed_bonus],
-		["V Speed", v_speed_bonus],
+		["H Speed Control", h_speed_bonus],
+		["V Speed Control", v_speed_bonus],
 		["H Accuracy", h_accuracy_bonus],
 		["V Accuracy", v_accuracy_bonus],
 	]

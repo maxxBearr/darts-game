@@ -1,0 +1,354 @@
+# ThrowModifier System — Implementation Spec
+
+## Overview
+
+A modifier system for temporary, conditional throw stat changes. Parallel to `ScoringModifier` (which modifies scores), `ThrowModifier` modifies throw *stats* (range, speed, accuracy) on a per-throw basis. Each modifier has a condition checked before every throw and stat effects applied temporarily for that throw only.
+
+Dart components can optionally carry a `ThrowModifier`. When equipped, that modifier is automatically evaluated each throw. This enables component abilities like "bonus accuracy while score is high" or "bonus accuracy during checkout."
+
+---
+
+## 1. ThrowModifier Base Resource
+
+**File:** `res://scripts/throw_modifiers/throw_modifier.gd`
+
+```gdscript
+class_name ThrowModifier
+extends Resource
+## Base class for conditional throw stat modifiers.
+## Subclass this and override should_activate() to create new effects.
+## Stat bonuses are applied temporarily before each throw and reverted after.
+
+## Human-readable name shown in tooltips and HUD.
+@export var modifier_name: String = ""
+
+## Description of the condition and effect, shown on hover.
+@export var description: String = ""
+
+## --- Temporary stat bonuses applied when the condition is met ---
+## All default to 0.0. Only set the ones this modifier affects.
+
+## Temporary bonus to horizontal_range while active.
+@export var h_range_bonus: float = 0.0
+
+## Temporary bonus to vertical_range while active.
+@export var v_range_bonus: float = 0.0
+
+## Temporary bonus to horizontal_speed while active.
+@export var h_speed_bonus: float = 0.0
+
+## Temporary bonus to vertical_speed while active.
+@export var v_speed_bonus: float = 0.0
+
+## Temporary bonus to horizontal_accuracy while active.
+@export var h_accuracy_bonus: float = 0.0
+
+## Temporary bonus to vertical_accuracy while active.
+@export var v_accuracy_bonus: float = 0.0
+
+
+## Override in subclasses. Return true if this modifier should activate
+## for the current throw. Context dictionary contains game state info:
+## - "remaining_score": int — current x01 remaining score
+## - "target_score": int — the leg's starting target (101, 201, etc.)
+## - "darts_this_turn": int — how many darts thrown this turn (0, 1, or 2)
+## - "current_turn": int — which turn of the leg (1-based)
+## - "current_leg": int — which leg of the run (1-based)
+## - "max_turns": int — total turns allowed per leg
+func should_activate(context: Dictionary) -> bool:
+    return false
+
+
+## Returns a dictionary of all non-zero stat bonuses for tooltip display.
+func get_active_bonuses() -> Dictionary:
+    var bonuses: Dictionary = {}
+    if h_range_bonus != 0.0:
+        bonuses["horizontal_range"] = h_range_bonus
+    if v_range_bonus != 0.0:
+        bonuses["vertical_range"] = v_range_bonus
+    if h_speed_bonus != 0.0:
+        bonuses["horizontal_speed"] = h_speed_bonus
+    if v_speed_bonus != 0.0:
+        bonuses["vertical_speed"] = v_speed_bonus
+    if h_accuracy_bonus != 0.0:
+        bonuses["horizontal_accuracy"] = h_accuracy_bonus
+    if v_accuracy_bonus != 0.0:
+        bonuses["vertical_accuracy"] = v_accuracy_bonus
+    return bonuses
+```
+
+---
+
+## 2. Starter ThrowModifier Subclasses
+
+### 2a. Nervous Sweater
+
+**File:** `res://scripts/throw_modifiers/nervous_sweater_modifier.gd`
+
+```gdscript
+class_name NervousSweaterModifier
+extends ThrowModifier
+## +5 to both accuracy stats while remaining score is above a threshold.
+## The player is calm and steady during bulk scoring, but loses the bonus
+## once checkout range approaches. "Sweats when it gets real."
+
+## Score must be above this value for the bonus to activate.
+## At or below this threshold, the modifier turns off.
+@export var score_threshold: int = 50
+
+
+## Activates when the remaining score is above the threshold.
+func should_activate(context: Dictionary) -> bool:
+    var remaining: int = context.get("remaining_score", 0) as int
+    return remaining > score_threshold
+```
+
+**`.tres` configuration** (`res://resources/throw_modifiers/nervous_sweater.tres`):
+- `modifier_name`: "Nervous Sweater"
+- `description`: "+5 accuracy while score is above 50. Sweats when it gets real."
+- `h_accuracy_bonus`: 5.0
+- `v_accuracy_bonus`: 5.0
+- `score_threshold`: 50
+
+### 2b. Ice Veins
+
+**File:** `res://scripts/throw_modifiers/ice_veins_modifier.gd`
+
+```gdscript
+class_name IceVeinsModifier
+extends ThrowModifier
+## +10 to both accuracy stats when checkout is possible.
+## Checkout = remaining score is <= 40 (max single-dart double-out).
+## Dead weight during bulk scoring, clutch at the finish.
+
+## Remaining score must be at or below this for the bonus to activate.
+## 40 = highest double (D20). Adjust if board modifiers change this.
+@export var checkout_threshold: int = 40
+
+
+## Activates when remaining score is within checkout range.
+func should_activate(context: Dictionary) -> bool:
+    var remaining: int = context.get("remaining_score", 0) as int
+    return remaining <= checkout_threshold and remaining > 0
+```
+
+**`.tres` configuration** (`res://resources/throw_modifiers/ice_veins.tres`):
+- `modifier_name`: "Ice Veins"
+- `description`: "+10 accuracy when checkout is possible. Ice cold closer."
+- `h_accuracy_bonus`: 10.0
+- `v_accuracy_bonus`: 10.0
+- `checkout_threshold`: 40
+
+---
+
+## 3. Linking ThrowModifiers to DartComponents
+
+Add this field to `DartComponent` (the resource class from the dart customization spec):
+
+```gdscript
+## Optional throw modifier ability. When this component is equipped,
+## this modifier is evaluated before each throw. Leave null for
+## components with no conditional ability.
+@export var throw_modifier: ThrowModifier
+```
+
+Assign in the starter flight `.tres` files:
+- **Standard Fin** → set `throw_modifier` to `nervous_sweater.tres`
+- **Wide Sail** → set `throw_modifier` to `ice_veins.tres`
+
+The three starter barrels and two starter shafts have `throw_modifier` set to null (no ability).
+
+---
+
+## 4. DartBuild — Evaluating ThrowModifiers
+
+Add these methods to the `DartBuild` node (from the dart customization spec):
+
+```gdscript
+## Collect all ThrowModifiers from equipped components.
+func _get_active_throw_modifiers() -> Array[ThrowModifier]:
+    var modifiers: Array[ThrowModifier] = []
+    for part: DartComponent in [equipped_barrel, equipped_shaft, equipped_flight]:
+        if part == null:
+            continue
+        if part.throw_modifier != null:
+            modifiers.append(part.throw_modifier)
+    return modifiers
+
+
+## Evaluate all throw modifiers against current game state.
+## Returns a dictionary with "bonuses" (stat dict) and "activated" (name list).
+func evaluate_throw_modifiers(context: Dictionary) -> Dictionary:
+    var total_bonuses: Dictionary = {
+        "horizontal_range": 0.0,
+        "vertical_range": 0.0,
+        "horizontal_speed": 0.0,
+        "vertical_speed": 0.0,
+        "horizontal_accuracy": 0.0,
+        "vertical_accuracy": 0.0,
+    }
+    var activated_names: Array[String] = []
+
+    for modifier: ThrowModifier in _get_active_throw_modifiers():
+        if modifier.should_activate(context):
+            var bonuses: Dictionary = modifier.get_active_bonuses()
+            for key: String in bonuses.keys():
+                total_bonuses[key] += bonuses[key]
+            activated_names.append(modifier.modifier_name)
+
+    return {
+        "bonuses": total_bonuses,
+        "activated": activated_names,
+    }
+```
+
+---
+
+## 5. Integration with main.gd
+
+### 5a. New properties on main.gd
+
+```gdscript
+## Tracks temporary throw modifier bonuses so they can be reverted after the throw.
+var _temp_throw_bonuses: Dictionary = {}
+
+## Names of currently active throw modifiers (for HUD display).
+var _active_throw_modifier_names: Array[String] = []
+```
+
+### 5b. Update `_start_new_throw()`
+
+Replace the existing method. The throw modifier evaluation happens before the throw starts:
+
+```gdscript
+func _start_new_throw() -> void:
+    _disable_hover()
+    hud.hide_score()
+
+    # Build context for throw modifier evaluation
+    var context: Dictionary = {
+        "remaining_score": x01_game.remaining_score,
+        "target_score": x01_game.target_score,
+        "darts_this_turn": x01_game.darts_this_turn,
+        "current_turn": x01_game.current_turn,
+        "current_leg": x01_game.current_leg,
+        "max_turns": x01_game.max_turns,
+    }
+
+    # Evaluate and apply temporary throw modifier bonuses
+    var result: Dictionary = dart_build.evaluate_throw_modifiers(context)
+    _temp_throw_bonuses = result["bonuses"]
+    _active_throw_modifier_names = result["activated"]
+    _apply_temp_bonuses()
+
+    # Update dart counter
+    var darts_remaining: int = 3 - x01_game.darts_this_turn
+    hud.update_darts(darts_remaining)
+    hud.show_instruction("Click or Space to lock aim position")
+
+    # Optional: show active modifier names on HUD
+    # e.g. hud.show_active_throw_modifiers(_active_throw_modifier_names)
+
+    throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
+
+
+## Apply temporary throw modifier bonuses to throw_mechanic.
+func _apply_temp_bonuses() -> void:
+    for key: String in _temp_throw_bonuses.keys():
+        var current: float = throw_mechanic.get(key)
+        throw_mechanic.set(key, current + _temp_throw_bonuses[key])
+
+
+## Revert temporary throw modifier bonuses after a throw completes.
+func _revert_temp_bonuses() -> void:
+    for key: String in _temp_throw_bonuses.keys():
+        var current: float = throw_mechanic.get(key)
+        throw_mechanic.set(key, current - _temp_throw_bonuses[key])
+    _temp_throw_bonuses = {}
+    _active_throw_modifier_names = []
+```
+
+### 5c. Update `_on_throw_completed()`
+
+Add the revert call at the very start, before any scoring:
+
+```gdscript
+func _on_throw_completed(hit_position: Vector2) -> void:
+    # Revert any temporary throw modifier bonuses
+    _revert_temp_bonuses()
+
+    # ... rest of existing throw completion logic unchanged ...
+```
+
+---
+
+## 6. Developer Guide — How to Create a New ThrowModifier
+
+### Step 1 — Create the subclass script
+
+Create a new `.gd` file in `res://scripts/throw_modifiers/`. Extend `ThrowModifier` and override `should_activate()`:
+
+```gdscript
+class_name MyNewModifier
+extends ThrowModifier
+## Brief description of what this modifier does.
+
+## Any exported parameters for tuning the condition.
+## Always include ## doc comments explaining what the param controls.
+@export var my_threshold: int = 10
+
+
+## Describe when this activates.
+func should_activate(context: Dictionary) -> bool:
+    # Available context keys:
+    #   "remaining_score": int
+    #   "target_score": int
+    #   "darts_this_turn": int (0, 1, or 2)
+    #   "current_turn": int (1-based)
+    #   "current_leg": int (1-based)
+    #   "max_turns": int
+    #
+    # Return true when the condition is met.
+    return context.get("remaining_score", 0) <= my_threshold
+```
+
+### Step 2 — Create the `.tres` Resource file
+
+1. In the FileSystem dock, right-click `res://resources/throw_modifiers/`
+2. Select **New Resource...**, search for your new class name (e.g., `MyNewModifier`)
+3. Save it with a descriptive name, e.g., `my_new_modifier.tres`
+
+### Step 3 — Configure in the Inspector
+
+- Set `modifier_name` — the display name (e.g., "Clutch Player")
+- Set `description` — explain the condition and effect in one sentence
+- Set the stat bonuses — only change the ones this modifier affects, leave others at 0.0
+- Set any custom exported parameters (e.g., `my_threshold`)
+
+### Step 4 — Attach to a DartComponent
+
+1. Open the DartComponent `.tres` file you want to give this ability to
+2. Drag your new ThrowModifier `.tres` into the `throw_modifier` field in the Inspector
+3. Done — when the player equips that component, the modifier automatically evaluates each throw
+
+### Available context keys for conditions
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `remaining_score` | int | Current X01 remaining score |
+| `target_score` | int | The leg's starting target (101, 201, etc.) |
+| `darts_this_turn` | int | Darts thrown this turn so far (0, 1, or 2) |
+| `current_turn` | int | Which turn of the leg (1-based) |
+| `current_leg` | int | Which leg of the run (1-based) |
+| `max_turns` | int | Total turns allowed per leg |
+
+To add new context keys (e.g., streak data, last hit info): add them to the `context` dictionary in `main.gd`'s `_start_new_throw()` method. They're then available to all ThrowModifiers automatically.
+
+### Example ideas for future modifiers
+
+- **"Opening Salvo"** — bonus on first dart of each turn (`darts_this_turn == 0`)
+- **"Pressure Player"** — bonus on final turn (`current_turn == max_turns`)
+- **"Marathon Runner"** — bonus on later legs (`current_leg >= 3`)
+- **"Last Dart Hero"** — bonus on third dart (`darts_this_turn == 2`)
+- **"Warmup"** — bonus on turns after the first (`current_turn > 1`)
+- **"Comeback Kid"** — bonus when remaining score is higher than a percentage of target (`remaining_score > target_score * 0.75` on turn 3+)

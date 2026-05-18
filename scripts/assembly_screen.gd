@@ -28,6 +28,9 @@ var _flight_name: Label
 var _barrel_stats: RichTextLabel
 var _shaft_stats: RichTextLabel
 var _flight_stats: RichTextLabel
+var _barrel_perk: Label
+var _shaft_perk: Label
+var _flight_perk: Label
 var _barrel_preview: ColorRect
 var _shaft_preview: ColorRect
 var _flight_preview: ColorRect
@@ -51,8 +54,8 @@ const STAT_KEYS: Array[String] = [
 const STAT_DISPLAY_NAMES: Dictionary = {
 	"horizontal_range": "H Range",
 	"vertical_range": "V Range",
-	"horizontal_speed": "H Speed",
-	"vertical_speed": "V Speed",
+	"horizontal_speed": "H Speed Control",
+	"vertical_speed": "V Speed Control",
 	"horizontal_accuracy": "H Accuracy",
 	"vertical_accuracy": "V Accuracy",
 }
@@ -61,6 +64,15 @@ const SLOT_COLORS: Dictionary = {
 	"barrel": Color(0.5, 0.4, 0.35),
 	"shaft": Color(0.4, 0.45, 0.5),
 	"flight": Color(0.35, 0.5, 0.4),
+}
+
+const STAT_DESCRIPTIONS: Dictionary = {
+	"horizontal_range": "Narrows the horizontal aiming band. Also reduces the distance the horizontal marker travels, making it easier to time.",
+	"vertical_range": "Shrinks the vertical positioning window. Also reduces the distance the vertical marker travels, making it easier to time.",
+	"horizontal_speed": "Slows the horizontal release marker. Higher = easier to time your click.",
+	"vertical_speed": "Slows the vertical release marker. Higher = easier to time your click.",
+	"horizontal_accuracy": "Tightens horizontal dart landing variance. Higher = dart lands closer to where you clicked.",
+	"vertical_accuracy": "Tightens vertical dart landing variance. Higher = dart lands closer to where you clicked.",
 }
 
 const BAR_MAX_WIDTH: float = 180.0
@@ -243,17 +255,30 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 	stats_label.add_theme_font_size_override("normal_font_size", 13)
 	container.add_child(stats_label)
 
+	# Perk label (shown below stats when component has a throw modifier)
+	var perk_label: Label = Label.new()
+	perk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	perk_label.custom_minimum_size = Vector2(260.0, 0.0)
+	perk_label.add_theme_font_size_override("font_size", 12)
+	perk_label.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+	perk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	perk_label.visible = false
+	container.add_child(perk_label)
+
 	# Store references
 	match slot_name:
 		"barrel":
 			_barrel_name = name_label
 			_barrel_stats = stats_label
+			_barrel_perk = perk_label
 		"shaft":
 			_shaft_name = name_label
 			_shaft_stats = stats_label
+			_shaft_perk = perk_label
 		"flight":
 			_flight_name = name_label
 			_flight_stats = stats_label
+			_flight_perk = perk_label
 
 
 func _build_stat_bars() -> void:
@@ -261,6 +286,7 @@ func _build_stat_bars() -> void:
 	stats_container.position = Vector2(40.0, 430.0)
 	stats_container.size = Vector2(300.0, 200.0)
 	stats_container.add_theme_constant_override("separation", 4)
+	stats_container.theme = _create_tooltip_theme()
 	add_child(stats_container)
 
 	var stats_title: Label = Label.new()
@@ -272,6 +298,8 @@ func _build_stat_bars() -> void:
 	for key: String in STAT_KEYS:
 		var row: HBoxContainer = HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
+		row.mouse_filter = Control.MOUSE_FILTER_STOP
+		row.tooltip_text = STAT_DESCRIPTIONS[key]
 		stats_container.add_child(row)
 
 		var name_lbl: Label = Label.new()
@@ -366,6 +394,7 @@ func _draw_balance_bar() -> void:
 
 
 ## Show the assembly screen with the given base stats for bar display.
+## Preserves the player's previous dart build when returning between runs.
 func show_assembly(p_base_stats: Dictionary) -> void:
 	base_stats = p_base_stats
 
@@ -374,21 +403,29 @@ func show_assembly(p_base_stats: Dictionary) -> void:
 		_shafts = registry.get_unlocked_shafts()
 		_flights = registry.get_unlocked_flights()
 
-	# Default to first available of each
-	_barrel_idx = 0
-	_shaft_idx = 0
-	_flight_idx = 0
-
 	if dart_build:
+		_barrel_idx = _find_component_index(_barrels, dart_build.equipped_barrel)
+		_shaft_idx = _find_component_index(_shafts, dart_build.equipped_shaft)
+		_flight_idx = _find_component_index(_flights, dart_build.equipped_flight)
+
 		if _barrels.size() > 0:
-			dart_build.equip_barrel(_barrels[0])
+			dart_build.equip_barrel(_barrels[_barrel_idx])
 		if _shafts.size() > 0:
-			dart_build.equip_shaft(_shafts[0])
+			dart_build.equip_shaft(_shafts[_shaft_idx])
 		if _flights.size() > 0:
-			dart_build.equip_flight(_flights[0])
+			dart_build.equip_flight(_flights[_flight_idx])
 
 	_refresh_all()
 	visible = true
+
+
+## Find the index of a component in a list, defaulting to 0 if not found.
+func _find_component_index(parts: Array[DartComponent], current: DartComponent) -> int:
+	if current != null:
+		for i: int in range(parts.size()):
+			if parts[i] == current:
+				return i
+	return 0
 
 
 func _on_arrow_pressed(slot_name: String, direction: int) -> void:
@@ -428,6 +465,7 @@ func _refresh_slot(slot_name: String) -> void:
 	var stats_label: RichTextLabel = null
 	var preview: ColorRect = null
 	var tex_rect: TextureRect = null
+	var perk_label: Label = null
 
 	match slot_name:
 		"barrel":
@@ -436,24 +474,28 @@ func _refresh_slot(slot_name: String) -> void:
 			stats_label = _barrel_stats
 			preview = _barrel_preview
 			tex_rect = _barrel_tex
+			perk_label = _barrel_perk
 		"shaft":
 			part = _shafts[_shaft_idx] if _shaft_idx < _shafts.size() else null
 			name_label = _shaft_name
 			stats_label = _shaft_stats
 			preview = _shaft_preview
 			tex_rect = _shaft_tex
+			perk_label = _shaft_perk
 		"flight":
 			part = _flights[_flight_idx] if _flight_idx < _flights.size() else null
 			name_label = _flight_name
 			stats_label = _flight_stats
 			preview = _flight_preview
 			tex_rect = _flight_tex
+			perk_label = _flight_perk
 
 	if part == null:
 		if name_label:
 			name_label.text = "(none)"
 		if stats_label:
 			stats_label.text = ""
+		_update_perk_display(null, perk_label)
 		return
 
 	if name_label:
@@ -461,6 +503,8 @@ func _refresh_slot(slot_name: String) -> void:
 
 	if stats_label:
 		stats_label.text = "[center]" + part.get_bbcode_tooltip() + "[/center]"
+
+	_update_perk_display(part, perk_label)
 
 	# Update preview texture or placeholder
 	if tex_rect:
@@ -524,6 +568,55 @@ func _refresh_balance() -> void:
 
 	if _balance_bar:
 		_balance_bar.queue_redraw()
+
+
+func _update_perk_display(part: DartComponent, perk_label: Label) -> void:
+	if perk_label == null:
+		return
+	if part == null or part.throw_modifier == null:
+		perk_label.visible = false
+		return
+
+	perk_label.visible = true
+	var modifier: ThrowModifier = part.throw_modifier
+	var lines: String = "── PERK ──\n"
+	lines += '"%s"\n' % modifier.modifier_name
+
+	var bonus_parts: Array[String] = []
+	if modifier.h_range_bonus != 0.0:
+		bonus_parts.append("H Range %+.0f" % modifier.h_range_bonus)
+	if modifier.v_range_bonus != 0.0:
+		bonus_parts.append("V Range %+.0f" % modifier.v_range_bonus)
+	if modifier.h_speed_bonus != 0.0:
+		bonus_parts.append("H Speed Control %+.0f" % modifier.h_speed_bonus)
+	if modifier.v_speed_bonus != 0.0:
+		bonus_parts.append("V Speed Control %+.0f" % modifier.v_speed_bonus)
+	if modifier.h_accuracy_bonus != 0.0:
+		bonus_parts.append("H Accuracy %+.0f" % modifier.h_accuracy_bonus)
+	if modifier.v_accuracy_bonus != 0.0:
+		bonus_parts.append("V Accuracy %+.0f" % modifier.v_accuracy_bonus)
+	if modifier.gaussian_spread_override > 0.0:
+		bonus_parts.append("Precision → %.2f" % modifier.gaussian_spread_override)
+
+	if bonus_parts.size() > 0:
+		lines += ", ".join(bonus_parts) + "\n"
+
+	lines += modifier.description
+	perk_label.text = lines
+
+
+func _create_tooltip_theme() -> Theme:
+	var t: Theme = Theme.new()
+	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.08, 0.08, 0.12, 0.95)
+	panel_style.set_corner_radius_all(4)
+	panel_style.set_content_margin_all(8)
+	panel_style.border_color = Color(0.4, 0.4, 0.5, 0.6)
+	panel_style.set_border_width_all(1)
+	t.set_stylebox("panel", "TooltipPanel", panel_style)
+	t.set_font_size("font_size", "TooltipLabel", 13)
+	t.set_color("font_color", "TooltipLabel", Color(0.9, 0.9, 0.9))
+	return t
 
 
 func _on_begin_run() -> void:

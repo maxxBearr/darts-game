@@ -30,12 +30,40 @@ signal upgrade_selected(index: int)
 
 ## Size of each modifier square in the relic bar (pixels).
 @export var modifier_square_size: int = 40
-@onready var horizontal_range_label: Label = $StatsContainer/HorizontalRangeLabel
-@onready var vertical_range_label: Label = $StatsContainer/VerticalRangeLabel
-@onready var vertical_accuracy_label: Label = $StatsContainer/VerticalAccuracyLabel
-@onready var horizontal_accuracy_label: Label = $StatsContainer/HorizontalAccuracyLabel
-@onready var vertical_speed_label: Label = $StatsContainer/VerticalSpeedLabel
-@onready var horizontal_speed_label: Label = $StatsContainer/HorizontalSpeedLabel
+@onready var stats_container: VBoxContainer = $StatsContainer
+
+const STAT_KEYS: Array[String] = [
+	"horizontal_range", "vertical_range",
+	"horizontal_speed", "vertical_speed",
+	"horizontal_accuracy", "vertical_accuracy",
+]
+
+const STAT_DISPLAY_NAMES: Dictionary = {
+	"horizontal_range": "H Range",
+	"vertical_range": "V Range",
+	"horizontal_speed": "H Spd Ctrl",
+	"vertical_speed": "V Spd Ctrl",
+	"horizontal_accuracy": "H Accuracy",
+	"vertical_accuracy": "V Accuracy",
+}
+
+const STAT_DESCRIPTIONS: Dictionary = {
+	"horizontal_range": "Narrows the horizontal aiming band. Also reduces the distance the horizontal marker travels, making it easier to time.",
+	"vertical_range": "Shrinks the vertical positioning window. Also reduces the distance the vertical marker travels, making it easier to time.",
+	"horizontal_speed": "Slows the horizontal release marker. Higher = easier to time your click.",
+	"vertical_speed": "Slows the vertical release marker. Higher = easier to time your click.",
+	"horizontal_accuracy": "Tightens horizontal dart landing variance. Higher = dart lands closer to where you clicked.",
+	"vertical_accuracy": "Tightens vertical dart landing variance. Higher = dart lands closer to where you clicked.",
+}
+
+const BAR_MAX_WIDTH: float = 120.0
+const BAR_HEIGHT: float = 12.0
+const STAT_MAX_VALUE: float = 100.0
+
+var _stat_bars: Dictionary = {}
+var _stat_value_labels: Dictionary = {}
+var _modifier_status_title: Label
+var _modifier_rows: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -56,6 +84,8 @@ func _ready() -> void:
 	upgrade_container.visible = false
 	hover_tooltip.visible = false
 	modifier_tooltip.visible = false
+
+	_build_stat_bars()
 
 
 ## Display the result of the current throw (per-dart feedback).
@@ -80,13 +110,23 @@ func update_remaining(score: int) -> void:
 
 ## Update the turn counter display.
 func update_turn(turn: int, max_turns: int) -> void:
-	turn_label.text = "Turn %d/%d" % [turn, max_turns]
+	if turn == max_turns:
+		turn_label.text = "Turn %d/%d — LAST TURN!" % [turn, max_turns]
+		turn_label.modulate = Color(1.0, 0.4, 0.3)
+	else:
+		turn_label.text = "Turn %d/%d" % [turn, max_turns]
+		turn_label.modulate = Color(1.0, 1.0, 1.0)
 
 
 ## Update the dart counter display and visual indicator.
 func update_darts(darts_remaining: int) -> void:
 	dart_label.text = "Dart %d/3" % [3 - darts_remaining]
 	dart_indicator.set_darts_remaining(darts_remaining)
+	if darts_remaining == 1:
+		dart_label.text += " — LAST DART!"
+		dart_label.modulate = Color(1.0, 0.6, 0.2)
+	else:
+		dart_label.modulate = Color(1.0, 1.0, 1.0)
 
 
 ## Update the leg label display.
@@ -108,9 +148,7 @@ func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upg
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
 		var upgrade: Dictionary = upgrades[i]
-		# Speed upgrades show "-" to indicate slowing down the marker
-		var sign: String = "-" if upgrade["scale"] == "speed" else "+"
-		var button_text: String = "%s\n%s\n%s%d" % [upgrade["rarity"], upgrade["name"], sign, upgrade["value"]]
+		var button_text: String = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
 		if upgrade["tradeoff"]:
 			button_text += "\n-%d %s" % [upgrade["penalty_amount"], upgrade["penalty_name"]]
 		buttons[i].text = button_text
@@ -164,8 +202,7 @@ func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
 		var upgrade: Dictionary = upgrades[i]
-		var sign: String = "-" if upgrade["scale"] == "speed" else "+"
-		var button_text: String = "%s\n%s\n%s%d" % [upgrade["rarity"], upgrade["name"], sign, upgrade["value"]]
+		var button_text: String = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
 		if upgrade["tradeoff"]:
 			button_text += "\n-%d %s" % [upgrade["penalty_amount"], upgrade["penalty_name"]]
 		buttons[i].text = button_text
@@ -181,21 +218,78 @@ func update_turn_score(score: int) -> void:
 	turn_score_label.text = "Turn Score: %d" % score
 
 
-## Update the stats panel with current values and color coding.
-## base_stats is a Dictionary with keys matching stat names, values are the defaults.
-## Speed is displayed as an interpreted 0-100 value (internal 1.0-5.0 mapped to 0-100).
+## Build stat bar rows inside the StatsContainer, replacing scene-defined labels.
+func _build_stat_bars() -> void:
+	for child: Node in stats_container.get_children():
+		child.queue_free()
+
+	var tooltip_theme: Theme = _create_tooltip_theme()
+	stats_container.theme = tooltip_theme
+
+	var title: Label = Label.new()
+	title.text = "— Stats —"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 14)
+	title.modulate = Color(0.8, 0.8, 0.6)
+	stats_container.add_child(title)
+
+	for key: String in STAT_KEYS:
+		var row: HBoxContainer = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.mouse_filter = Control.MOUSE_FILTER_STOP
+		row.tooltip_text = STAT_DESCRIPTIONS[key]
+		stats_container.add_child(row)
+
+		var name_lbl: Label = Label.new()
+		name_lbl.text = STAT_DISPLAY_NAMES[key] + ":"
+		name_lbl.custom_minimum_size = Vector2(90.0, BAR_HEIGHT + 2.0)
+		name_lbl.add_theme_font_size_override("font_size", 12)
+		row.add_child(name_lbl)
+
+		var bar_bg: ColorRect = ColorRect.new()
+		bar_bg.color = Color(0.15, 0.15, 0.2)
+		bar_bg.custom_minimum_size = Vector2(BAR_MAX_WIDTH, BAR_HEIGHT)
+		row.add_child(bar_bg)
+
+		var bar_fill: ColorRect = ColorRect.new()
+		bar_fill.color = Color(0.3, 0.7, 0.4)
+		bar_fill.size = Vector2(0.0, BAR_HEIGHT)
+		bar_bg.add_child(bar_fill)
+
+		var val_lbl: Label = Label.new()
+		val_lbl.custom_minimum_size = Vector2(30.0, BAR_HEIGHT + 2.0)
+		val_lbl.add_theme_font_size_override("font_size", 12)
+		row.add_child(val_lbl)
+
+		_stat_bars[key] = bar_fill
+		_stat_value_labels[key] = val_lbl
+
+
+## Update the stats panel bars with current values and color coding.
 func update_stats(stats: Dictionary, base_stats: Dictionary) -> void:
-	_update_stat_label(horizontal_range_label, "Horizontal Range", stats["horizontal_range"], base_stats["horizontal_range"])
-	_update_stat_label(vertical_range_label, "Vertical Range", stats["vertical_range"], base_stats["vertical_range"])
-	_update_stat_label(vertical_accuracy_label, "Vertical Accuracy", stats["vertical_accuracy"], base_stats["vertical_accuracy"])
-	_update_stat_label(horizontal_accuracy_label, "Horizontal Accuracy", stats["horizontal_accuracy"], base_stats["horizontal_accuracy"])
-	# Speed stats: convert 1.0-5.0 to 0-100 for display (higher internal = better)
-	var v_speed_display: int = _speed_to_display(stats["vertical_speed"])
-	var v_speed_base: int = _speed_to_display(base_stats["vertical_speed"])
-	_update_stat_label(vertical_speed_label, "Vertical Speed", float(v_speed_display), float(v_speed_base))
-	var h_speed_display: int = _speed_to_display(stats["horizontal_speed"])
-	var h_speed_base: int = _speed_to_display(base_stats["horizontal_speed"])
-	_update_stat_label(horizontal_speed_label, "Horizontal Speed", float(h_speed_display), float(h_speed_base))
+	for key: String in STAT_KEYS:
+		var current: float = stats[key]
+		var base: float = base_stats[key]
+
+		if key == "horizontal_speed" or key == "vertical_speed":
+			current = float(_speed_to_display(current))
+			base = float(_speed_to_display(base))
+
+		var bar_fill: ColorRect = _stat_bars[key]
+		var val_label: Label = _stat_value_labels[key]
+
+		var fill_fraction: float = clampf(current / STAT_MAX_VALUE, 0.0, 1.0)
+		bar_fill.size = Vector2(BAR_MAX_WIDTH * fill_fraction, BAR_HEIGHT)
+
+		if current > base:
+			bar_fill.color = Color(0.3, 0.75, 0.4)
+		elif current < base:
+			bar_fill.color = Color(0.75, 0.35, 0.3)
+		else:
+			bar_fill.color = Color(0.5, 0.5, 0.5)
+
+		val_label.text = str(roundi(current))
 
 
 ## Convert internal speed (1.0-5.0) to a display value (0-100).
@@ -203,15 +297,88 @@ func _speed_to_display(speed: float) -> int:
 	return roundi((speed - 1.0) / 4.0 * 100.0)
 
 
-## Update a single stat label with value and color based on comparison to base.
-func _update_stat_label(label: Label, stat_name: String, current: float, base: float) -> void:
-	label.text = "%s: %d" % [stat_name, roundi(current)]
-	if current > base:
-		label.modulate = Color(0.4, 1.0, 0.4)
-	elif current < base:
-		label.modulate = Color(1.0, 0.5, 0.5)
-	else:
-		label.modulate = Color(1.0, 1.0, 1.0)
+## Create a Theme with opaque tooltip styling for readability.
+func _create_tooltip_theme() -> Theme:
+	var t: Theme = Theme.new()
+	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.08, 0.08, 0.12, 0.95)
+	panel_style.set_corner_radius_all(4)
+	panel_style.set_content_margin_all(8)
+	panel_style.border_color = Color(0.4, 0.4, 0.5, 0.6)
+	panel_style.set_border_width_all(1)
+	t.set_stylebox("panel", "TooltipPanel", panel_style)
+	t.set_font_size("font_size", "TooltipLabel", 13)
+	t.set_color("font_color", "TooltipLabel", Color(0.9, 0.9, 0.9))
+	return t
+
+
+## Populate the throw perk status section below stat bars.
+func setup_modifier_status(modifiers: Array[Dictionary]) -> void:
+	clear_modifier_status()
+	if modifiers.is_empty():
+		return
+
+	_modifier_status_title = Label.new()
+	_modifier_status_title.text = "— Throw Perks —"
+	_modifier_status_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_modifier_status_title.add_theme_font_size_override("font_size", 14)
+	_modifier_status_title.modulate = Color(0.8, 0.8, 0.6)
+	stats_container.add_child(_modifier_status_title)
+
+	for mod: Dictionary in modifiers:
+		var row_container: VBoxContainer = VBoxContainer.new()
+		row_container.add_theme_constant_override("separation", 1)
+		stats_container.add_child(row_container)
+
+		var name_label: Label = Label.new()
+		name_label.text = "%s: Inactive" % mod["name"]
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_label.add_theme_font_size_override("font_size", 12)
+		name_label.modulate = Color(0.5, 0.5, 0.5)
+		row_container.add_child(name_label)
+
+		var desc_label: Label = Label.new()
+		desc_label.text = mod["description"]
+		desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		desc_label.add_theme_font_size_override("font_size", 10)
+		desc_label.modulate = Color(0.6, 0.8, 1.0, 0.0)
+		desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc_label.custom_minimum_size = Vector2(280.0, 0.0)
+		row_container.add_child(desc_label)
+
+		_modifier_rows.append({
+			"name": mod["name"],
+			"active_color": mod.get("active_color", Color(0.3, 1.0, 0.4)),
+			"name_label": name_label,
+			"desc_label": desc_label,
+		})
+
+
+## Update throw perk active/inactive state each throw.
+func update_modifier_status(active_names: Array[String]) -> void:
+	for row: Dictionary in _modifier_rows:
+		var is_active: bool = row["name"] in active_names
+		var name_label: Label = row["name_label"]
+		var desc_label: Label = row["desc_label"]
+		var color: Color = row["active_color"]
+		if is_active:
+			name_label.text = "%s: Active" % row["name"]
+			name_label.modulate = color
+			desc_label.modulate = Color(color.r, color.g, color.b, 0.8)
+		else:
+			name_label.text = "%s: Inactive" % row["name"]
+			name_label.modulate = Color(0.5, 0.5, 0.5)
+			desc_label.modulate = Color(color.r, color.g, color.b, 0.0)
+
+
+## Remove all throw perk status rows.
+func clear_modifier_status() -> void:
+	for row: Dictionary in _modifier_rows:
+		(row["name_label"] as Label).get_parent().queue_free()
+	_modifier_rows.clear()
+	if _modifier_status_title != null:
+		_modifier_status_title.queue_free()
+		_modifier_status_title = null
 
 
 ## Show hover tooltip with score info for the hovered segment.
