@@ -479,7 +479,10 @@ func _on_modifier_selected(index: int) -> void:
 		_leg_phase = "wedge_picker"
 		_picker_selected_wedge = -1
 		dartboard.set_picker_mode(true)
-		hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		if modifier is ColorFlipModifier:
+			hud.show_picker_header("Flip a wedge's colors")
+		else:
+			hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
 		hud.show_picker_prompt("Hover over a wedge and click to select")
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
 		_pending_modifier = modifier
@@ -805,8 +808,15 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 
 	if _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
 		var current_val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
-		var new_val: int = current_val + _pending_modifier.bonus_value
-		hud.show_picker_prompt("Make %d into %d? Click to confirm, Escape to cancel" % [current_val, new_val])
+		if _pending_modifier is ColorFlipModifier:
+			var current_single: ScoringEnums.SegmentColor = scoring_modifier_manager.get_effective_color(wedge_idx, false)
+			var from_name: String = ColorFlipModifier.get_color_pair_name(current_single)
+			var to_single: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.WHITE if current_single == ScoringEnums.SegmentColor.BLACK else ScoringEnums.SegmentColor.BLACK
+			var to_name: String = ColorFlipModifier.get_color_pair_name(to_single)
+			hud.show_picker_prompt("Flip %d from %s to %s? Click to confirm, Escape to cancel" % [current_val, from_name, to_name])
+		else:
+			var new_val: int = current_val + _pending_modifier.bonus_value
+			hud.show_picker_prompt("Make %d into %d? Click to confirm, Escape to cancel" % [current_val, new_val])
 	elif _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
 		if _picker_selected_wedge < 0:
 			var val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
