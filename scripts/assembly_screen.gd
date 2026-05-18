@@ -44,6 +44,11 @@ var _balance_needle_x: float = 0.0
 var _balance_label: Label
 var _zone_label: Label
 var _begin_button: Button
+var _color_panel: VBoxContainer
+var _color_toggle_button: Button
+var _outer_color_picker: ColorPickerButton
+var _inner_color_picker: ColorPickerButton
+var _dart_preview: Control
 
 const STAT_KEYS: Array[String] = [
 	"horizontal_range", "vertical_range",
@@ -112,6 +117,9 @@ func _ready() -> void:
 
 	# Balance bar (center-bottom)
 	_build_balance_bar()
+
+	# Dart color customizer (bottom-right)
+	_build_dart_color_ui()
 
 	# Begin Run button
 	_begin_button = Button.new()
@@ -393,6 +401,84 @@ func _draw_balance_bar() -> void:
 	_balance_bar.draw_rect(Rect2(0.0, 0.0, w, h), Color(0.5, 0.5, 0.5, 0.6), false, 1.0)
 
 
+func _build_dart_color_ui() -> void:
+	var container: VBoxContainer = VBoxContainer.new()
+	container.position = Vector2(920.0, 480.0)
+	container.size = Vector2(300.0, 160.0)
+	container.add_theme_constant_override("separation", 6)
+	add_child(container)
+
+	_color_toggle_button = Button.new()
+	_color_toggle_button.text = "Customize Dart Colors"
+	_color_toggle_button.add_theme_font_size_override("font_size", 14)
+	_color_toggle_button.pressed.connect(_on_color_toggle)
+	container.add_child(_color_toggle_button)
+
+	_color_panel = VBoxContainer.new()
+	_color_panel.add_theme_constant_override("separation", 6)
+	_color_panel.visible = false
+	container.add_child(_color_panel)
+
+	# Dart preview circle
+	_dart_preview = Control.new()
+	_dart_preview.custom_minimum_size = Vector2(60.0, 60.0)
+	_dart_preview.draw.connect(_draw_dart_preview)
+	_color_panel.add_child(_dart_preview)
+
+	# Outer color row
+	var outer_row: HBoxContainer = HBoxContainer.new()
+	outer_row.add_theme_constant_override("separation", 8)
+	_color_panel.add_child(outer_row)
+
+	var outer_label: Label = Label.new()
+	outer_label.text = "Outer:"
+	outer_label.add_theme_font_size_override("font_size", 13)
+	outer_label.custom_minimum_size = Vector2(50.0, 0.0)
+	outer_row.add_child(outer_label)
+
+	_outer_color_picker = ColorPickerButton.new()
+	_outer_color_picker.custom_minimum_size = Vector2(80.0, 30.0)
+	_outer_color_picker.color = Color(0.9, 0.85, 0.0)
+	_outer_color_picker.color_changed.connect(_on_dart_color_changed)
+	outer_row.add_child(_outer_color_picker)
+
+	# Inner color row
+	var inner_row: HBoxContainer = HBoxContainer.new()
+	inner_row.add_theme_constant_override("separation", 8)
+	_color_panel.add_child(inner_row)
+
+	var inner_label: Label = Label.new()
+	inner_label.text = "Inner:"
+	inner_label.add_theme_font_size_override("font_size", 13)
+	inner_label.custom_minimum_size = Vector2(50.0, 0.0)
+	inner_row.add_child(inner_label)
+
+	_inner_color_picker = ColorPickerButton.new()
+	_inner_color_picker.custom_minimum_size = Vector2(80.0, 30.0)
+	_inner_color_picker.color = Color(0.2, 0.2, 0.2)
+	_inner_color_picker.color_changed.connect(_on_dart_color_changed)
+	inner_row.add_child(_inner_color_picker)
+
+
+func _on_color_toggle() -> void:
+	_color_panel.visible = not _color_panel.visible
+
+
+func _on_dart_color_changed(_color: Color) -> void:
+	if dart_build:
+		dart_build.dart_outer_color = _outer_color_picker.color
+		dart_build.dart_inner_color = _inner_color_picker.color
+	_dart_preview.queue_redraw()
+
+
+func _draw_dart_preview() -> void:
+	var center: Vector2 = Vector2(30.0, 30.0)
+	var outer_color: Color = _outer_color_picker.color if _outer_color_picker else Color(0.9, 0.85, 0.0)
+	var inner_color: Color = _inner_color_picker.color if _inner_color_picker else Color(0.2, 0.2, 0.2)
+	_dart_preview.draw_circle(center, 16.0, outer_color)
+	_dart_preview.draw_circle(center, 6.0, inner_color)
+
+
 ## Show the assembly screen with the given base stats for bar display.
 ## Preserves the player's previous dart build when returning between runs.
 func show_assembly(p_base_stats: Dictionary) -> void:
@@ -414,6 +500,14 @@ func show_assembly(p_base_stats: Dictionary) -> void:
 			dart_build.equip_shaft(_shafts[_shaft_idx])
 		if _flights.size() > 0:
 			dart_build.equip_flight(_flights[_flight_idx])
+
+		# Sync color pickers with stored dart colors
+		if _outer_color_picker:
+			_outer_color_picker.color = dart_build.dart_outer_color
+		if _inner_color_picker:
+			_inner_color_picker.color = dart_build.dart_inner_color
+		if _dart_preview:
+			_dart_preview.queue_redraw()
 
 	_refresh_all()
 	visible = true

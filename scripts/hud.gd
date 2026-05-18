@@ -119,14 +119,30 @@ func update_turn(turn: int, max_turns: int) -> void:
 
 
 ## Update the dart counter display and visual indicator.
-func update_darts(darts_remaining: int) -> void:
+func update_darts(darts_remaining: int, is_last_turn: bool = false) -> void:
 	dart_label.text = "Dart %d/3" % [3 - darts_remaining]
 	dart_indicator.set_darts_remaining(darts_remaining)
-	if darts_remaining == 1:
+	if darts_remaining == 1 and is_last_turn:
+		dart_label.text = "FINAL DART!"
+		dart_label.add_theme_font_size_override("font_size", 28)
+		dart_label.modulate = Color(1.0, 0.25, 0.2)
+		_shake_label(dart_label)
+	elif darts_remaining == 1:
 		dart_label.text += " — LAST DART!"
-		dart_label.modulate = Color(1.0, 0.6, 0.2)
-	else:
+		dart_label.remove_theme_font_size_override("font_size")
 		dart_label.modulate = Color(1.0, 1.0, 1.0)
+	else:
+		dart_label.remove_theme_font_size_override("font_size")
+		dart_label.modulate = Color(1.0, 1.0, 1.0)
+
+
+func _shake_label(label: Label) -> void:
+	var original_pos: Vector2 = label.position
+	var tween: Tween = create_tween()
+	for i: int in range(6):
+		var offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
+		tween.tween_property(label, "position", original_pos + offset, 0.05)
+	tween.tween_property(label, "position", original_pos, 0.05)
 
 
 ## Update the leg label display.

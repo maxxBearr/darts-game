@@ -21,6 +21,12 @@ signal build_changed
 ## Maximum accuracy skew in pixels at deep red imbalance.
 @export var max_red_skew_pixels: float = 30.0
 
+## Player-chosen dart marker outer ring color.
+var dart_outer_color: Color = Color(0.9, 0.85, 0.0)
+
+## Player-chosen dart marker inner ring color.
+var dart_inner_color: Color = Color(0.2, 0.2, 0.2)
+
 
 func get_balance_value() -> float:
 	var total: float = 0.0

@@ -2,9 +2,6 @@ extends Node2D
 ## Main scene controller. Orchestrates the dartboard, throw mechanic, X01 game logic, and HUD.
 ## Manages game flow: X01 run → legs → turns → darts → score → upgrades → repeat.
 
-## Color of placed dart markers on the board.
-@export var dart_color: Color = Color(0.9, 0.85, 0.0)
-
 ## Radius of placed dart markers in pixels.
 @export var dart_size: float = 5.0
 
@@ -241,7 +238,8 @@ func _start_new_throw() -> void:
 
 	# Update dart counter to show which dart we're on
 	var darts_remaining: int = 3 - x01_game.darts_this_turn
-	hud.update_darts(darts_remaining)
+	var is_last_turn: bool = x01_game.current_turn == x01_game.max_turns
+	hud.update_darts(darts_remaining, is_last_turn)
 	hud.show_instruction("Click or Space to lock aim position")
 	throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
 
@@ -318,7 +316,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		_awaiting_next_dart = true
 
 	# Update dart counter
-	hud.update_darts(response["darts_remaining"])
+	hud.update_darts(response["darts_remaining"], x01_game.current_turn == x01_game.max_turns)
 
 	# Re-enable hover so the player can inspect the board while deciding
 	_enable_hover()
@@ -581,7 +579,7 @@ func _update_all_hud() -> void:
 	hud.update_leg(x01_game.current_leg, x01_game.target_score)
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	hud.update_remaining(x01_game.remaining_score)
-	hud.update_darts(3 - x01_game.darts_this_turn)
+	hud.update_darts(3 - x01_game.darts_this_turn, x01_game.current_turn == x01_game.max_turns)
 	_update_stats_display()
 
 
@@ -632,7 +630,8 @@ func _place_dart(position: Vector2) -> void:
 	var dart: Node2D = Node2D.new()
 	dart.position = position
 	dart.set_script(preload("res://scripts/dart_marker.gd"))
-	dart.set("dart_color", dart_color)
+	dart.set("dart_color", dart_build.dart_outer_color)
+	dart.set("dart_inner_color", dart_build.dart_inner_color)
 	dart.set("dart_size", dart_size)
 	dart_container.add_child(dart)
 
