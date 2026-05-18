@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://bundwdj1qxg6e"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_4idmk"]
+[ext_resource type="Texture2D" uid="uid://ccx8nps35lkb2" path="res://sprites/DartComponents/DartBarrels/barrel-long.png" id="2_qlcf4"]
+
+[resource]
+script = ExtResource("1_4idmk")
+component_name = "Laid Back"
+description = "A light barrel that favors vertical range and is easy to balance"
+weight = -0.31999999999999995
+texture = ExtResource("2_qlcf4")
+h_range_bonus = 3.0
+v_range_bonus = 8.0
+v_speed_bonus = 2.0
+v_accuracy_bonus = 1.0

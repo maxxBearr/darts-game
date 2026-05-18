@@ -36,6 +36,13 @@ enum ConfigType {
 	PICK_TWO_WEDGES, ## Player picks two wedges (for swaps, etc.)
 }
 
+## Which slot a dart component fits in.
+enum ComponentSlot {
+	BARREL,
+	SHAFT,
+	FLIGHT,
+}
+
 ## Item rarity tiers. Determines value ranges and visual presentation.
 enum Rarity {
 	COMMON,

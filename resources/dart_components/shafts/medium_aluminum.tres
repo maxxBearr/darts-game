@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://deni7pnn3rbeo"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://ms8q7de5l5oi" path="res://sprites/DartComponents/DartShafts/shaft-medium.png" id="2_h0803"]
+
+[resource]
+script = ExtResource("1")
+component_name = "Medium Aluminum"
+description = "A balanced shaft that offsets most barrels nicely"
+component_type = 1
+weight = 0.3
+texture = ExtResource("2_h0803")
+h_speed_bonus = 3.0
+v_speed_bonus = 3.0

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://x480m4oe8lx1"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://b72wre2xowl7o" path="res://sprites/DartComponents/DartBarrels/barrel-medium.png" id="2_cwk7d"]
+
+[resource]
+script = ExtResource("1")
+component_name = "Ole Reliable"
+description = "A balanced barrel with modest bonuses across the board"
+weight = -0.15000000000000002
+texture = ExtResource("2_cwk7d")
+h_range_bonus = 10.0
+v_range_bonus = 10.0
+h_speed_bonus = 2.0
+v_speed_bonus = 2.0

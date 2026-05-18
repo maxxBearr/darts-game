@@ -57,6 +57,10 @@ enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEAS
 ## Range ~1.0 (hard) to 5.0 (easy).
 @export var horizontal_speed: float = 3.0
 
+## Vertical accuracy skew in pixels. Set by DartBuild based on balance.
+## Positive = dart lands lower, Negative = dart lands higher.
+var accuracy_skew_v: float = 0.0
+
 ## Semi-transparent color of the aim line band.
 @export var aim_line_color: Color = Color(0.2, 0.5, 1.0, 0.3)
 
@@ -340,7 +344,7 @@ func _resolve_throw() -> void:
 	# Vertical: random within vertical consistency zone, centered on locked release Y
 	var v_half: float = _get_vertical_accuracy_half()
 	var vertical_offset: float = randf_range(-v_half, v_half)
-	var final_y: float = _locked_release_y + vertical_offset
+	var final_y: float = _locked_release_y + vertical_offset + accuracy_skew_v
 
 	var hit_position: Vector2 = Vector2(final_x, final_y)
 	queue_redraw()

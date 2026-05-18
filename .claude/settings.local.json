@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" -Directory)",
+      "Bash(Select-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" -Recurse -Directory | Select-Object -ExpandProperty FullName | Where-Object { $_ -match '\\(resources|assets\\)' })"
+    ]
+  }
+}

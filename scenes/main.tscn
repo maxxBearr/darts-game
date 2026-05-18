@@ -7,6 +7,17 @@
 [ext_resource type="Script" uid="uid://es5jr0ix8cry" path="res://scripts/x01_game.gd" id="5_x01"]
 [ext_resource type="Script" uid="uid://djajtxhtum6ei" path="res://scripts/dart_indicator.gd" id="6_dart_indicator"]
 [ext_resource type="Script" uid="uid://8qvpweyuffgk" path="res://scripts/scoring_modifier_manager.gd" id="7_scoring_modifier_manager"]
+[ext_resource type="Script" uid="uid://bbtynog0o5nce" path="res://scripts/dart_component_registry.gd" id="8_registry"]
+[ext_resource type="Script" uid="uid://csh5aay86yaif" path="res://scripts/dart_build.gd" id="9_dart_build"]
+[ext_resource type="Script" uid="uid://c1ysk27utx6w6" path="res://scripts/assembly_screen.gd" id="10_assembly"]
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="10_dp3eg"]
+[ext_resource type="Resource" uid="uid://x480m4oe8lx1" path="res://resources/dart_components/barrels/standard_grip.tres" id="11_standard_grip"]
+[ext_resource type="Resource" uid="uid://b1jftchcqtt6h" path="res://resources/dart_components/barrels/tungsten_heavy.tres" id="12_tungsten_heavy"]
+[ext_resource type="Resource" uid="uid://bundwdj1qxg6e" path="res://resources/dart_components/barrels/laid_back.tres" id="13_0ld40"]
+[ext_resource type="Resource" uid="uid://deni7pnn3rbeo" path="res://resources/dart_components/shafts/medium_aluminum.tres" id="14_medium_aluminum"]
+[ext_resource type="Resource" uid="uid://b80s62nbxiw8n" path="res://resources/dart_components/shafts/long_carbon.tres" id="15_long_carbon"]
+[ext_resource type="Resource" uid="uid://dhxsq8p6g7wk" path="res://resources/dart_components/flights/blue_whisp.tres" id="16_blue_whisp"]
+[ext_resource type="Resource" uid="uid://brot5un8cr0vx" path="res://resources/dart_components/flights/wide_sail.tres" id="17_wide_sail"]
 
 [sub_resource type="LabelSettings" id="LabelSettings_info"]
 font_size = 22
@@ -304,8 +315,27 @@ offset_right = 600.0
 offset_bottom = -8.0
 grow_vertical = 0
 
+[node name="AssemblyScreen" type="Control" parent="HUD" unique_id=257147988]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("10_assembly")
+
 [node name="X01Game" type="Node" parent="." unique_id=617431942]
 script = ExtResource("5_x01")
 
 [node name="ScoringModifierManager" type="Node" parent="." unique_id=900075023]
 script = ExtResource("7_scoring_modifier_manager")
+
+[node name="DartComponentRegistry" type="Node" parent="." unique_id=109236783]
+script = ExtResource("8_registry")
+barrels = Array[ExtResource("10_dp3eg")]([ExtResource("11_standard_grip"), ExtResource("12_tungsten_heavy"), ExtResource("13_0ld40")])
+shafts = Array[ExtResource("10_dp3eg")]([ExtResource("14_medium_aluminum"), ExtResource("15_long_carbon")])
+flights = Array[ExtResource("10_dp3eg")]([ExtResource("16_blue_whisp"), ExtResource("17_wide_sail")])
+
+[node name="DartBuild" type="Node" parent="." unique_id=955901845]
+script = ExtResource("9_dart_build")

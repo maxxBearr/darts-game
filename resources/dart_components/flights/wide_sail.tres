@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://brot5un8cr0vx"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://bgtfglmko0nng" path="res://sprites/DartComponents/DartFlights/flight-2.png" id="2_yx5qc"]
+
+[resource]
+script = ExtResource("1")
+component_name = "Wide Sail"
+description = "good vertical accuracy from air resistance, but catches crosswind"
+component_type = 2
+weight = 0.15
+texture = ExtResource("2_yx5qc")
+h_speed_bonus = -1.0
+v_speed_bonus = 3.0
+h_accuracy_bonus = 1.0
+v_accuracy_bonus = 8.0

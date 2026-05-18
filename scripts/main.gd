@@ -14,6 +14,9 @@ extends Node2D
 @onready var hud: CanvasLayer = $HUD
 @onready var x01_game: Node = $X01Game
 @onready var scoring_modifier_manager: Node = $ScoringModifierManager
+@onready var dart_component_registry: DartComponentRegistry = $DartComponentRegistry
+@onready var dart_build: DartBuild = $DartBuild
+@onready var assembly_screen: AssemblyScreen = $HUD/AssemblyScreen
 
 # Upgrade type definitions — 4 pure buffs, 2 tradeoffs (consistency stats penalize each other)
 const UPGRADE_TYPES: Array[Dictionary] = [
@@ -94,13 +97,19 @@ var _awaiting_next_turn: bool = false
 var _awaiting_next_leg: bool = false
 var _run_over: bool = false
 
-# Base stats snapshot — saved at run start, restored on new run
+# Raw stats — the throw_mechanic defaults before any dart build is applied.
+# Captured once in _ready(), used to feed the assembly screen and dart build.
+var _raw_stats: Dictionary = {}
+
+# Base stats snapshot — saved after build is applied, restored between runs.
+# Upgrades during a run are relative to these values.
 var _base_horizontal_range: float = 0.0
 var _base_vertical_range: float = 0.0
 var _base_vertical_accuracy: float = 0.0
 var _base_horizontal_accuracy: float = 0.0
 var _base_vertical_speed: float = 0.0
 var _base_horizontal_speed: float = 0.0
+var _base_accuracy_skew_v: float = 0.0
 
 # The 3 generated upgrade choices for the current leg-complete screen
 var _current_upgrades: Array[Dictionary] = []
@@ -127,11 +136,24 @@ func _ready() -> void:
 	hud.new_run_pressed.connect(_on_new_run)
 	hud.upgrade_selected.connect(_on_upgrade_selected)
 
+	# Connect assembly screen
+	assembly_screen.dart_build = dart_build
+	assembly_screen.registry = dart_component_registry
+	assembly_screen.run_confirmed.connect(_on_run_confirmed)
+
 	# Center the dartboard on screen
 	var viewport_size: Vector2 = get_viewport_rect().size
 	dartboard.position = viewport_size / 2.0
 
-	# Snapshot base stats before first run so colors are correct
+	# Capture raw stats (throw_mechanic defaults before any build)
+	_raw_stats = {
+		"horizontal_range": throw_mechanic.horizontal_range,
+		"vertical_range": throw_mechanic.vertical_range,
+		"vertical_accuracy": throw_mechanic.vertical_accuracy,
+		"horizontal_accuracy": throw_mechanic.horizontal_accuracy,
+		"vertical_speed": throw_mechanic.vertical_speed,
+		"horizontal_speed": throw_mechanic.horizontal_speed,
+	}
 	_snapshot_base_stats()
 
 	# Sync dartboard with modifier manager's effective board state
@@ -141,11 +163,8 @@ func _ready() -> void:
 	for modifier: Resource in scoring_modifier_manager.active_modifiers:
 		hud.add_modifier_to_panel(modifier)
 
-	# Start the first run
-	x01_game.start_run()
-	_update_all_hud()
-	_update_checkout_highlights()
-	_start_new_throw()
+	# Show assembly screen instead of starting immediately
+	_show_assembly()
 
 
 func _process(_delta: float) -> void:
@@ -312,11 +331,31 @@ func _on_new_run() -> void:
 	hud.clear_modifier_panel()
 	_sync_board_state()
 	_clear_darts()
-	_restore_base_stats()
+	# Restore to raw stats (before any build) so the assembly screen starts fresh
+	_restore_raw_stats()
+	_show_assembly()
+
+
+## Show the dart assembly screen before starting a run.
+func _show_assembly() -> void:
+	assembly_screen.show_assembly(_raw_stats)
+
+
+## Called when the player confirms their dart build on the assembly screen.
+func _on_run_confirmed() -> void:
+	dart_build.apply_to_throw_mechanic(throw_mechanic, _raw_stats)
+	# Re-snapshot after applying build so upgrades are relative to the built dart
+	_snapshot_base_stats()
+	# Update dart indicator with equipped component visuals
+	hud.dart_indicator.set_dart_components(
+		dart_build.equipped_barrel,
+		dart_build.equipped_shaft,
+		dart_build.equipped_flight
+	)
 	x01_game.start_run()
 	_update_all_hud()
-	_start_new_throw()
 	_update_checkout_highlights()
+	_start_new_throw()
 
 
 ## Player picks an upgrade card (index 0, 1, or 2).
@@ -342,9 +381,22 @@ func _snapshot_base_stats() -> void:
 	_base_horizontal_accuracy = throw_mechanic.horizontal_accuracy
 	_base_vertical_speed = throw_mechanic.vertical_speed
 	_base_horizontal_speed = throw_mechanic.horizontal_speed
+	_base_accuracy_skew_v = throw_mechanic.accuracy_skew_v
 
 
-## Restore throw_mechanic stats to their initial values (on new run).
+## Restore throw_mechanic stats to raw defaults (before any dart build).
+## Used when starting a new run so the assembly screen begins from scratch.
+func _restore_raw_stats() -> void:
+	throw_mechanic.horizontal_range = _raw_stats["horizontal_range"]
+	throw_mechanic.vertical_range = _raw_stats["vertical_range"]
+	throw_mechanic.vertical_accuracy = _raw_stats["vertical_accuracy"]
+	throw_mechanic.horizontal_accuracy = _raw_stats["horizontal_accuracy"]
+	throw_mechanic.vertical_speed = _raw_stats["vertical_speed"]
+	throw_mechanic.horizontal_speed = _raw_stats["horizontal_speed"]
+	throw_mechanic.accuracy_skew_v = 0.0
+
+
+## Restore throw_mechanic stats to their base values (post-build, pre-upgrades).
 func _restore_base_stats() -> void:
 	throw_mechanic.horizontal_range = _base_horizontal_range
 	throw_mechanic.vertical_range = _base_vertical_range
@@ -352,6 +404,19 @@ func _restore_base_stats() -> void:
 	throw_mechanic.horizontal_accuracy = _base_horizontal_accuracy
 	throw_mechanic.vertical_speed = _base_vertical_speed
 	throw_mechanic.horizontal_speed = _base_horizontal_speed
+	throw_mechanic.accuracy_skew_v = _base_accuracy_skew_v
+
+
+## Get base stats as a dictionary for the assembly screen and dart build.
+func _get_base_stats_dict() -> Dictionary:
+	return {
+		"horizontal_range": _base_horizontal_range,
+		"vertical_range": _base_vertical_range,
+		"vertical_accuracy": _base_vertical_accuracy,
+		"horizontal_accuracy": _base_horizontal_accuracy,
+		"vertical_speed": _base_vertical_speed,
+		"horizontal_speed": _base_horizontal_speed,
+	}
 
 
 ## Generate 3 distinct upgrade cards with random rarities and values.

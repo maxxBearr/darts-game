@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://dhxsq8p6g7wk"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_px5ie"]
+[ext_resource type="Texture2D" uid="uid://dbbv2n0pbac1d" path="res://sprites/DartComponents/DartFlights/Flight-1.png" id="2_frsux"]
+
+[resource]
+script = ExtResource("1_px5ie")
+component_name = "Blue Whisp"
+description = "Like a shooting star, stays in a straight line"
+component_type = 2
+weight = 0.1
+texture = ExtResource("2_frsux")
+h_speed_bonus = 1.0
+v_speed_bonus = 1.0
+h_accuracy_bonus = 4.0
+v_accuracy_bonus = 4.0

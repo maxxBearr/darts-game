@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://b80s62nbxiw8n"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://cg70e0kc152pu" path="res://sprites/DartComponents/DartShafts/shaft-long.png" id="2_p84gr"]
+
+[resource]
+script = ExtResource("1")
+component_name = "Long Carbon"
+description = "Great for balancing heavy barrels, but the length adds wobble"
+component_type = 1
+weight = 0.5
+texture = ExtResource("2_p84gr")
+h_range_bonus = -1.0
+v_range_bonus = 2.0
+h_speed_bonus = 1.0
+v_speed_bonus = 7.0
+h_accuracy_bonus = -1.0
+v_accuracy_bonus = -2.0

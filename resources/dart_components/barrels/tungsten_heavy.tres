@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://b1jftchcqtt6h"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://b2cn856kbf0ib" path="res://sprites/DartComponents/DartBarrels/barrel-short.png" id="2_2ss1f"]
+
+[resource]
+script = ExtResource("1")
+component_name = "Tungsten Heavy"
+description = "A heavy front-loaded barrel with excellent horizontal control"
+weight = -0.7
+texture = ExtResource("2_2ss1f")
+h_range_bonus = 16.0
+h_speed_bonus = 3.0
+v_speed_bonus = -3.0
+h_accuracy_bonus = 5.0
+v_accuracy_bonus = -3.0
