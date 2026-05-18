@@ -1,0 +1,19 @@
+[gd_scene format=3 uid="uid://da8fhdrthfrse"]
+
+[ext_resource type="Script" uid="uid://cmbf6t5pl1j4h" path="res://scripts/auido_manager.gd" id="1_br6uc"]
+[ext_resource type="AudioStream" uid="uid://bpm07kpn761hv" path="res://sounds/dart_hit1.mp3" id="2_xrkb2"]
+[ext_resource type="AudioStream" uid="uid://7oh7pmay1mn6" path="res://sounds/dart_hit2.mp3" id="3_46k76"]
+[ext_resource type="AudioStream" uid="uid://cbst0vmvcf6tl" path="res://sounds/bonus_score_sound_effect.mp3" id="4_2jm2t"]
+
+[node name="AuidoManager" type="Node" unique_id=993361023]
+script = ExtResource("1_br6uc")
+
+[node name="DartThunk1" type="AudioStreamPlayer" parent="." unique_id=718304847]
+stream = ExtResource("2_xrkb2")
+
+[node name="DartThunk2" type="AudioStreamPlayer" parent="." unique_id=13366770]
+stream = ExtResource("3_46k76")
+
+[node name="BonusScore" type="AudioStreamPlayer" parent="." unique_id=201550028]
+stream = ExtResource("4_2jm2t")
+pitch_scale = 0.9

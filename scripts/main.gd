@@ -287,9 +287,10 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# Place a dart marker at the hit position
 	_place_dart(hit_position)
+	AuidoManager.play_dart_thunk()
 
 	# Floating score number
-	_spawn_floating_score(hit_position, result)
+	var score_tween: Tween = _spawn_floating_score(hit_position, result)
 
 	# Flash the hit segment for visual feedback
 	dartboard.flash_segment(hit_position)
@@ -319,16 +320,12 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	elif response["is_leg_won"]:
-		# Leg complete — Phase 1: accuracy pick, Phase 2: modifier pick
-		_leg_phase = "accuracy_pick"
-		_current_upgrades = _generate_upgrades()
-		hud.show_leg_complete_with_upgrades(
-			response["current_leg"],
-			response["target_score"],
-			response["current_turn"],
-			_current_upgrades
-		)
+		# Leg complete — wait for score animation, then show upgrades
 		_awaiting_next_leg = true
+		if score_tween != null and score_tween.is_valid():
+			score_tween.tween_callback(_show_leg_upgrades.bind(response))
+		else:
+			_show_leg_upgrades(response)
 	elif response["is_turn_over"]:
 		# Used all 3 darts without bust or win
 		if response["is_game_over"]:
@@ -349,6 +346,18 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	_enable_hover()
 
 	_update_checkout_highlights()
+
+
+## Show the leg-complete upgrade UI. Called after the score animation finishes.
+func _show_leg_upgrades(response: Dictionary) -> void:
+	_leg_phase = "accuracy_pick"
+	_current_upgrades = _generate_upgrades()
+	hud.show_leg_complete_with_upgrades(
+		response["current_leg"],
+		response["target_score"],
+		response["current_turn"],
+		_current_upgrades
+	)
 
 
 ## Player presses "Next Dart" — throw another dart in the same turn.
@@ -827,10 +836,10 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 			hud.show_picker_prompt("Swap %d and %d? Click to confirm, Escape to cancel" % [val1, val2])
 
 
-func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> void:
+func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> Tween:
 	var score: int = result["total_score"]
 	if score == 0:
-		return
+		return null
 
 	var modifications: Array = result.get("modifications", [])
 	var multiplier_mods: Array[Dictionary] = []
@@ -839,12 +848,12 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> void:
 			multiplier_mods.append(mod)
 
 	if multiplier_mods.is_empty():
-		_spawn_simple_floating_score(hit_position, result)
+		return _spawn_simple_floating_score(hit_position, result)
 	else:
-		_spawn_trigger_animation(hit_position, result, multiplier_mods)
+		return _spawn_trigger_animation(hit_position, result, multiplier_mods)
 
 
-func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary) -> void:
+func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary) -> Tween:
 	var label: Label = _create_score_label(result["total_score"], hit_position, result)
 	add_child(label)
 
@@ -854,9 +863,10 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary) -> 
 	tween.tween_property(label, "modulate:a", 0.0, 1.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tween.set_parallel(false)
 	tween.tween_callback(label.queue_free)
+	return tween
 
 
-func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary]) -> void:
+func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary]) -> Tween:
 	var face_value: int = result["face_value"]
 	var base_score: int = face_value * int(multiplier_mods[0]["old_value"])
 	var main_label: Label = _create_score_label(base_score, hit_position, result, 30)
@@ -898,7 +908,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 
 		tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
 		tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-		tween.tween_callback(_on_trigger_impact.bind(trigger_lbl, main_label, final_total, scale_bump))
+		tween.tween_callback(_on_trigger_impact.bind(trigger_lbl, main_label, final_total, scale_bump, i))
 		var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
 		tween.tween_property(main_label, "position", main_label.position + shake_offset, 0.04)
 		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
@@ -912,12 +922,14 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 	tween.tween_property(main_label, "modulate:a", 0.0, 0.8).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tween.set_parallel(false)
 	tween.tween_callback(main_label.queue_free)
+	return tween
 
 
-func _on_trigger_impact(trigger_lbl: Label, main_label: Label, total: int, scale: float) -> void:
+func _on_trigger_impact(trigger_lbl: Label, main_label: Label, total: int, scale: float, trigger_index: int) -> void:
 	trigger_lbl.queue_free()
 	main_label.text = str(total)
 	main_label.scale = Vector2(scale, scale)
+	AuidoManager.play_bonus_hit(trigger_index)
 
 
 func _create_score_label(score: int, hit_position: Vector2, result: Dictionary, font_size: int = 26) -> Label:
