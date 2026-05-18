@@ -37,7 +37,7 @@ enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEAS
 @export var vertical_accuracy: float = 20.0
 
 ## Maximum vertical variance half-height in pixels (at vertical_accuracy = 1).
-@export var max_vertical_accuracy_half: float = 60.0
+@export var max_vertical_accuracy_half: float = 90.0
 
 ## Minimum vertical variance half-height in pixels (at vertical_accuracy = 100).
 @export var min_vertical_accuracy_half: float = 5.0

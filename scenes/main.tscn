@@ -43,6 +43,8 @@ flash_duration = 0.4
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
+vertical_accuracy = 25.0
+horizontal_accuracy = 25.0
 marker_size = 6.0
 resolve_preview_duration = 1.19
 resolve_preview_color = Color(0.7647059, 0.68235296, 0, 0.54901963)
