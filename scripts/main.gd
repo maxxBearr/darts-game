@@ -13,6 +13,7 @@ extends Node2D
 @onready var dart_container: Node2D = $DartContainer
 @onready var hud: CanvasLayer = $HUD
 @onready var x01_game: Node = $X01Game
+@onready var scoring_modifier_manager: Node = $ScoringModifierManager
 
 # Upgrade type definitions — 4 pure buffs, 2 tradeoffs (consistency stats penalize each other)
 const UPGRADE_TYPES: Array[Dictionary] = [
@@ -110,6 +111,9 @@ var _upgrade_rounds_remaining: int = 0
 # Cumulative score for the current turn (resets each turn)
 var _turn_score: int = 0
 
+# Whether hover feedback is currently active (set based on game state)
+var _hover_active: bool = false
+
 
 func _ready() -> void:
 	# Connect throw mechanic signals
@@ -130,14 +134,63 @@ func _ready() -> void:
 	# Snapshot base stats before first run so colors are correct
 	_snapshot_base_stats()
 
+	# Sync dartboard with modifier manager's effective board state
+	_sync_board_state()
+
+	# Sync any debug modifiers to the HUD panel
+	for modifier: Resource in scoring_modifier_manager.active_modifiers:
+		hud.add_modifier_to_panel(modifier)
+
 	# Start the first run
 	x01_game.start_run()
 	_update_all_hud()
+	_update_checkout_highlights()
 	_start_new_throw()
+
+
+func _process(_delta: float) -> void:
+	if not _hover_active:
+		return
+
+	# Feed the current mouse position to the dartboard for hover detection
+	var mouse_pos: Vector2 = get_global_mouse_position()
+	var hover_result: Dictionary = dartboard.update_hover(mouse_pos)
+
+	# Update the hover tooltip on the HUD
+	if hover_result.is_empty():
+		hud.hide_hover_tooltip()
+	else:
+		# Run through the modifier pipeline in preview mode to get the fully
+		# modified score without recording to hit history
+		var modified_result: Dictionary = scoring_modifier_manager.process_score(hover_result, true)
+		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER)
+
+
+## Enable hover feedback on the board and tooltip display.
+func _enable_hover() -> void:
+	_hover_active = true
+	dartboard.hover_enabled = true
+
+
+## Disable hover feedback and clear any active highlight/tooltip.
+func _disable_hover() -> void:
+	_hover_active = false
+	dartboard.hover_enabled = false
+	dartboard.clear_hover()
+	hud.hide_hover_tooltip()
+
+
+## Add a scoring modifier to the game. Handles both the manager and HUD panel.
+func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
+	scoring_modifier_manager.add_modifier(modifier, config)
+	hud.add_modifier_to_panel(modifier)
+	_sync_board_state()
+	_update_checkout_highlights()
 
 
 ## Start a new throw (single dart).
 func _start_new_throw() -> void:
+	_disable_hover()
 	hud.hide_score()
 	# Update dart counter to show which dart we're on
 	var darts_remaining: int = 3 - x01_game.darts_this_turn
@@ -148,8 +201,11 @@ func _start_new_throw() -> void:
 
 ## Called when a dart lands — process through X01 logic and update state.
 func _on_throw_completed(hit_position: Vector2) -> void:
-	# Score the throw
+	# Score the throw (raw, before modifiers)
 	var result: Dictionary = dartboard.calculate_score(hit_position)
+
+	# Run through scoring modifier pipeline (color bonuses, streak effects, etc.)
+	result = scoring_modifier_manager.process_score(result)
 
 	# Place a dart marker at the hit position
 	_place_dart(hit_position)
@@ -160,7 +216,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Show per-dart score feedback
 	hud.show_score(result)
 
-	# Process through X01 game logic
+	# Process through X01 game logic (uses modified score)
 	var response: Dictionary = x01_game.process_throw(result)
 
 	# Accumulate turn score
@@ -208,6 +264,11 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Update dart counter
 	hud.update_darts(response["darts_remaining"])
 
+	# Re-enable hover so the player can inspect the board while deciding
+	_enable_hover()
+
+	_update_checkout_highlights()
+
 
 ## Player presses "Next Dart" — throw another dart in the same turn.
 func _on_next_dart() -> void:
@@ -220,11 +281,13 @@ func _on_next_turn() -> void:
 	_awaiting_next_turn = false
 	_turn_score = 0
 	hud.update_turn_score(0)
+	scoring_modifier_manager.reset_for_turn()
 	_clear_darts()
 	x01_game.end_turn()
 	x01_game.start_turn()
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	_start_new_throw()
+	_update_checkout_highlights()
 
 
 ## Player presses "Next Leg" — advance to next leg after picking an upgrade.
@@ -232,10 +295,12 @@ func _on_next_leg() -> void:
 	_awaiting_next_leg = false
 	_turn_score = 0
 	hud.update_turn_score(0)
+	scoring_modifier_manager.reset_for_leg()
 	_clear_darts()
 	x01_game.advance_leg()
 	_update_all_hud()
 	_start_new_throw()
+	_update_checkout_highlights()
 
 
 ## Player presses "New Run" — start fresh after game over.
@@ -243,11 +308,15 @@ func _on_new_run() -> void:
 	_run_over = false
 	_turn_score = 0
 	hud.update_turn_score(0)
+	scoring_modifier_manager.reset_for_run()
+	hud.clear_modifier_panel()
+	_sync_board_state()
 	_clear_darts()
 	_restore_base_stats()
 	x01_game.start_run()
 	_update_all_hud()
 	_start_new_throw()
+	_update_checkout_highlights()
 
 
 ## Player picks an upgrade card (index 0, 1, or 2).
@@ -385,6 +454,21 @@ func _update_stats_display() -> void:
 	hud.update_stats(current_stats, base_stats)
 
 
+## Recalculate and update which double segments would win the current leg.
+func _update_checkout_highlights() -> void:
+	var remaining: int = x01_game.remaining_score
+	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(remaining)
+	dartboard.set_checkout_segments(checkout_segments)
+
+
+## Push the modifier manager's effective wedge values and colors to the dartboard
+## so it renders and scores correctly. Call after any modifier changes.
+func _sync_board_state() -> void:
+	dartboard.effective_wedge_values = scoring_modifier_manager.effective_wedge_values
+	dartboard.effective_wedge_colors = scoring_modifier_manager.effective_wedge_colors
+	dartboard.queue_redraw()
+
+
 ## Remove all dart markers from the board.
 func _clear_darts() -> void:
 	for child: Node in dart_container.get_children():
@@ -403,11 +487,17 @@ func _place_dart(position: Vector2) -> void:
 
 func _on_throw_state_changed(new_state: int) -> void:
 	match new_state:
+		throw_mechanic.ThrowState.AIMING:
+			_enable_hover()
 		throw_mechanic.ThrowState.POSITIONING:
+			_disable_hover()
 			hud.show_instruction("W/S or Up/Down to move window, Enter/Space to lock")
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
+			_disable_hover()
 			hud.show_instruction("Click or Space to lock vertical position")
 		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
+			_disable_hover()
 			hud.show_instruction("Click or Space to lock horizontal position")
 		throw_mechanic.ThrowState.RESOLVING:
+			_disable_hover()
 			hud.show_instruction("Releasing...")

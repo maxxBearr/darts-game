@@ -6,6 +6,7 @@
 [ext_resource type="Script" uid="uid://ce8afk38vj2jj" path="res://scripts/hud.gd" id="4_hud"]
 [ext_resource type="Script" uid="uid://es5jr0ix8cry" path="res://scripts/x01_game.gd" id="5_x01"]
 [ext_resource type="Script" uid="uid://djajtxhtum6ei" path="res://scripts/dart_indicator.gd" id="6_dart_indicator"]
+[ext_resource type="Script" uid="uid://8qvpweyuffgk" path="res://scripts/scoring_modifier_manager.gd" id="7_scoring_modifier_manager"]
 
 [sub_resource type="LabelSettings" id="LabelSettings_info"]
 font_size = 22
@@ -270,5 +271,41 @@ text = "Horizontal Speed: 50"
 label_settings = SubResource("LabelSettings_stats")
 horizontal_alignment = 2
 
+[node name="HoverTooltip" type="Label" parent="HUD" unique_id=923567872]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 20.0
+offset_right = 200.0
+offset_bottom = 100.0
+grow_horizontal = 2
+label_settings = SubResource("LabelSettings_stats")
+horizontal_alignment = 1
+
+[node name="ModifierTooltip" type="Label" parent="HUD" unique_id=827575158]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 200.0
+offset_top = -80.0
+offset_right = 500.0
+offset_bottom = -50.0
+grow_vertical = 0
+label_settings = SubResource("LabelSettings_stats")
+
+[node name="ModifierPanel" type="HBoxContainer" parent="HUD" unique_id=361525660]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 200.0
+offset_top = -48.0
+offset_right = 600.0
+offset_bottom = -8.0
+grow_vertical = 0
+
 [node name="X01Game" type="Node" parent="." unique_id=617431942]
 script = ExtResource("5_x01")
+
+[node name="ScoringModifierManager" type="Node" parent="." unique_id=900075023]
+script = ExtResource("7_scoring_modifier_manager")

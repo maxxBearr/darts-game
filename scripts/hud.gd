@@ -24,6 +24,12 @@ signal upgrade_selected(index: int)
 @onready var upgrade_button_3: Button = $UpgradeContainer/UpgradeButton3
 @onready var dart_indicator: Control = $DartIndicator
 @onready var turn_score_label: Label = $TurnScoreLabel
+@onready var hover_tooltip: Label = $HoverTooltip
+@onready var modifier_tooltip: Label = $ModifierTooltip
+@onready var modifier_panel: HBoxContainer = $ModifierPanel
+
+## Size of each modifier square in the relic bar (pixels).
+@export var modifier_square_size: int = 40
 @onready var horizontal_range_label: Label = $StatsContainer/HorizontalRangeLabel
 @onready var vertical_range_label: Label = $StatsContainer/VerticalRangeLabel
 @onready var vertical_accuracy_label: Label = $StatsContainer/VerticalAccuracyLabel
@@ -48,6 +54,8 @@ func _ready() -> void:
 	hide_all_buttons()
 	bust_label.visible = false
 	upgrade_container.visible = false
+	hover_tooltip.visible = false
+	modifier_tooltip.visible = false
 
 
 ## Display the result of the current throw (per-dart feedback).
@@ -204,6 +212,99 @@ func _update_stat_label(label: Label, stat_name: String, current: float, base: f
 		label.modulate = Color(1.0, 0.5, 0.5)
 	else:
 		label.modulate = Color(1.0, 1.0, 1.0)
+
+
+## Show hover tooltip with score info for the hovered segment.
+## Displays the base score, then any modifier effects with highlights.
+func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int]) -> void:
+	if result.is_empty():
+		hover_tooltip.visible = false
+		return
+
+	var ring_name: String = result["ring_name"]
+	var face_value: int = result["face_value"]
+	var total_score: int = result["total_score"]
+	var multiplier: int = result["multiplier"]
+	var wedge_index: int = result.get("wedge_index", -1)
+	var is_bull: bool = result.get("is_bull", false)
+
+	if ring_name == "Off Board":
+		hover_tooltip.visible = false
+		return
+
+	var lines: PackedStringArray = PackedStringArray()
+
+	# Line 1: Segment name
+	if is_bull:
+		lines.append(ring_name)
+	else:
+		var original_value: int = original_wedge_order[wedge_index] if wedge_index >= 0 and wedge_index < original_wedge_order.size() else face_value
+		if face_value != original_value:
+			lines.append("%s %d (was %d)" % [ring_name, face_value, original_value])
+		else:
+			lines.append("%s %d" % [ring_name, face_value])
+
+	var modifications: Array = result.get("modifications", [])
+
+	if modifications.size() > 0:
+		# Show each modifier effect, then final total
+		for mod: Dictionary in modifications:
+			var field: String = mod["field"]
+			var source: String = mod["source_name"]
+			if field == "multiplier":
+				lines.append("%s x%d -> x%d" % [source, mod["old_value"], mod["new_value"]])
+			elif field == "total_score":
+				lines.append("%s +%d" % [source, int(mod["new_value"]) - int(mod["old_value"])])
+			else:
+				lines.append("%s: %s -> %s" % [source, str(mod["old_value"]), str(mod["new_value"])])
+		lines.append("= %d pts" % total_score)
+	else:
+		# No modifiers — just show base score
+		lines.append("%d x%d = %d" % [face_value, multiplier, total_score])
+
+	hover_tooltip.text = "\n".join(lines)
+	hover_tooltip.visible = true
+
+
+## Hide the hover tooltip.
+func hide_hover_tooltip() -> void:
+	hover_tooltip.visible = false
+
+
+## Add a modifier square to the panel. Called when a scoring modifier is acquired.
+func add_modifier_to_panel(modifier: Resource) -> void:
+	var square: ColorRect = ColorRect.new()
+	square.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
+	# Tint by rarity color
+	square.color = modifier.rarity_color
+	# Store modifier reference for tooltip lookup
+	square.set_meta("modifier", modifier)
+	# Connect mouse signals for hover tooltip
+	square.mouse_entered.connect(_on_modifier_hover.bind(square))
+	square.mouse_exited.connect(_on_modifier_unhover)
+	# Make sure it accepts mouse events
+	square.mouse_filter = Control.MOUSE_FILTER_STOP
+	modifier_panel.add_child(square)
+
+
+## Clear all modifier squares from the panel. Called on new run.
+func clear_modifier_panel() -> void:
+	for child: Node in modifier_panel.get_children():
+		child.queue_free()
+	modifier_tooltip.visible = false
+
+
+## Called when the mouse enters a modifier square.
+func _on_modifier_hover(square: ColorRect) -> void:
+	var modifier: Resource = square.get_meta("modifier")
+	if modifier:
+		modifier_tooltip.text = "%s\n%s" % [modifier.modifier_name, modifier.description]
+		modifier_tooltip.visible = true
+
+
+## Called when the mouse exits a modifier square.
+func _on_modifier_unhover() -> void:
+	modifier_tooltip.visible = false
 
 
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.

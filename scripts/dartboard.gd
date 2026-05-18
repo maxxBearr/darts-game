@@ -60,6 +60,34 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## Color of the wedge numbers.
 @export var number_color: Color = Color(0.9, 0.9, 0.85)
 
+## Color for wedge numbers that have been modified by upgrades.
+## Should stand out from the default number_color so players can spot changes.
+@export var modified_number_color: Color = Color(0.2, 1.0, 0.4)
+
+## Color overlaid on the hovered board segment for highlighting.
+@export var hover_highlight_color: Color = Color(1.0, 1.0, 1.0, 0.15)
+
+## Border color for the hovered segment outline.
+@export var hover_border_color: Color = Color(1.0, 1.0, 1.0, 0.5)
+
+## Border thickness for the hovered segment outline in pixels.
+@export var hover_border_thickness: float = 2.0
+
+## Color of the checkout pulse glow on valid finishing doubles.
+@export var checkout_pulse_color: Color = Color(1.0, 0.85, 0.2, 0.8)
+
+## Speed of the checkout pulse animation (higher = faster shimmer).
+@export var checkout_pulse_speed: float = 3.0
+
+## Minimum opacity of the checkout pulse (the "dim" part of the cycle).
+@export var checkout_pulse_min_alpha: float = 0.15
+
+## Maximum opacity of the checkout pulse (the "bright" part of the cycle).
+@export var checkout_pulse_max_alpha: float = 0.7
+
+## Border thickness for checkout pulse outlines.
+@export var checkout_border_thickness: float = 3.0
+
 ## Normalized radius for number placement. Controls how far from center
 ## the numbers are drawn. Should be between RING_DOUBLE_OUTER (0.83) and
 ## surround_outer_multiplier (1.15). Default 0.93 centers them in the surround.
@@ -75,6 +103,29 @@ const WEDGE_OFFSET_DEG: float = -9.0
 var _flash_alpha: float = 0.0
 var _flash_ring_name: String = ""
 var _flash_wedge_idx: int = -1
+
+## The effective wedge values used for scoring and number display.
+## Set by ScoringModifierManager. When empty, falls back to WEDGE_ORDER.
+var effective_wedge_values: Array[int] = []
+
+## The effective wedge colors for segment color reporting.
+## Set by ScoringModifierManager. Each entry is a dict with "single" and "multi" keys.
+## When empty, derives colors from wedge index (standard board colors).
+var effective_wedge_colors: Array[Dictionary] = []
+
+## Whether hover highlighting is currently enabled. Controlled by main.gd.
+var hover_enabled: bool = false
+
+# Hover state — tracks which segment the mouse is currently over
+var _hover_wedge_idx: int = -1
+var _hover_ring_name: String = ""
+var _hover_active: bool = false
+var _hover_result: Dictionary = {}
+
+# Checkout highlight state — which segments would win the leg
+var _checkout_segments: Array[Dictionary] = []
+var _checkout_pulse_active: bool = false
+var _checkout_pulse_time: float = 0.0
 
 
 func _draw() -> void:
@@ -128,7 +179,16 @@ func _draw() -> void:
 		var outer_point: Vector2 = direction * board_radius * RING_DOUBLE_OUTER
 		draw_line(inner_point, outer_point, wire_color, wire_thickness)
 
+	# Draw hover highlight on the segment under the mouse (if active)
+	if _hover_active and _hover_ring_name != "":
+		_draw_hover_segment()
+
+	# Draw checkout pulse on valid finishing double segments
+	if _checkout_pulse_active and _checkout_segments.size() > 0:
+		_draw_checkout_pulses()
+
 	# Draw wedge numbers around the board in the surround ring
+	# Uses effective_wedge_values if available, so modified values are shown
 	var font: Font = ThemeDB.fallback_font
 	for wedge_idx: int in range(20):
 		# Center angle of this wedge (no offset — wedge 0 is centered at 0° / 12 o'clock)
@@ -137,12 +197,22 @@ func _draw() -> void:
 		# Position along that angle at the number radius
 		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
 		var pos: Vector2 = direction * board_radius * number_radius_multiplier
-		# Get the number text for this wedge
-		var number_text: String = str(WEDGE_ORDER[wedge_idx])
+
+		# Look up effective value (may differ from original if modifiers applied)
+		var effective_value: int = WEDGE_ORDER[wedge_idx]
+		var is_modified: bool = false
+		if effective_wedge_values.size() == 20:
+			effective_value = effective_wedge_values[wedge_idx]
+			is_modified = effective_value != WEDGE_ORDER[wedge_idx]
+
+		var number_text: String = str(effective_value)
 		# Calculate text offset for centering
 		var text_width: float = font.get_string_size(number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size).x
 		var draw_pos: Vector2 = Vector2(pos.x - text_width / 2.0, pos.y + number_font_size / 2.0)
-		draw_string(font, draw_pos, number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size, number_color)
+
+		# Color-code: modified values show in a highlight color, originals in default
+		var text_color: Color = modified_number_color if is_modified else number_color
+		draw_string(font, draw_pos, number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size, text_color)
 
 	# Draw flash overlay on the hit segment (if active)
 	if _flash_alpha > 0.0:
@@ -195,11 +265,19 @@ func flash_segment(global_hit_position: Vector2) -> void:
 	set_process(true)
 
 
-func _process(_delta: float) -> void:
-	# Redraw while flash is active, then stop processing
+func _process(delta: float) -> void:
+	var needs_redraw: bool = false
+
 	if _flash_alpha > 0.0:
+		needs_redraw = true
+
+	if _checkout_pulse_active:
+		_checkout_pulse_time += delta
+		needs_redraw = true
+
+	if needs_redraw:
 		queue_redraw()
-	else:
+	elif not _checkout_pulse_active:
 		set_process(false)
 
 
@@ -265,7 +343,10 @@ func _draw_ring_wire(normalized_radius: float) -> void:
 
 
 ## Calculate the score for a dart landing at the given global pixel position.
-## Returns a dictionary with: face_value, multiplier, total_score, ring_name.
+## Returns an enriched dictionary with: face_value, multiplier, total_score,
+## ring_name, wedge_index, segment_color, is_bull.
+## Uses effective_wedge_values for face value lookup if available.
+## Uses effective_wedge_colors for segment color if available.
 func calculate_score(global_hit_position: Vector2) -> Dictionary:
 	# Convert to board-relative coordinates
 	var relative: Vector2 = global_hit_position - global_position
@@ -276,31 +357,46 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 	var ring_name: String = ""
 	var multiplier: int = 0
 	var face_value: int = 0
+	var wedge_index: int = -1
+	var segment_color: int = -1
+	var is_bull: bool = false
 
 	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
 		ring_name = "Double Bull"
 		face_value = 25
 		multiplier = 2
+		is_bull = true
+		segment_color = ScoringEnums.SegmentColor.RED
 	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
 		ring_name = "Single Bull"
 		face_value = 25
 		multiplier = 1
+		is_bull = true
+		segment_color = ScoringEnums.SegmentColor.GREEN
 	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
 		ring_name = "Single"
 		multiplier = 1
-		face_value = _get_wedge_value(relative)
+		wedge_index = _get_wedge_index(relative)
+		face_value = _lookup_wedge_value(wedge_index)
+		segment_color = _lookup_segment_color(wedge_index, false)
 	elif normalized_distance <= RING_TRIPLE_OUTER:
 		ring_name = "Triple"
 		multiplier = 3
-		face_value = _get_wedge_value(relative)
+		wedge_index = _get_wedge_index(relative)
+		face_value = _lookup_wedge_value(wedge_index)
+		segment_color = _lookup_segment_color(wedge_index, true)
 	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
 		ring_name = "Single"
 		multiplier = 1
-		face_value = _get_wedge_value(relative)
+		wedge_index = _get_wedge_index(relative)
+		face_value = _lookup_wedge_value(wedge_index)
+		segment_color = _lookup_segment_color(wedge_index, false)
 	elif normalized_distance <= RING_DOUBLE_OUTER:
 		ring_name = "Double"
 		multiplier = 2
-		face_value = _get_wedge_value(relative)
+		wedge_index = _get_wedge_index(relative)
+		face_value = _lookup_wedge_value(wedge_index)
+		segment_color = _lookup_segment_color(wedge_index, true)
 	else:
 		ring_name = "Off Board"
 		face_value = 0
@@ -311,12 +407,16 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		"face_value": face_value,
 		"multiplier": multiplier,
 		"total_score": total_score,
-		"ring_name": ring_name
+		"ring_name": ring_name,
+		"wedge_index": wedge_index,
+		"segment_color": segment_color,
+		"is_bull": is_bull,
 	}
 
 
-## Determine which wedge number a relative position falls in.
-func _get_wedge_value(relative: Vector2) -> int:
+## Determine which wedge index (0-19) a board-relative position falls in.
+## This is the physical position on the board, not the face value.
+func _get_wedge_index(relative: Vector2) -> int:
 	# atan2(x, -y) gives angle from 12 o'clock, clockwise positive
 	var angle_rad: float = atan2(relative.x, -relative.y)
 	var angle_deg: float = rad_to_deg(angle_rad)
@@ -331,5 +431,198 @@ func _get_wedge_value(relative: Vector2) -> int:
 		angle_deg += 360.0
 
 	# Determine wedge index
-	var wedge_idx: int = int(angle_deg / WEDGE_ANGLE_DEG) % 20
+	return int(angle_deg / WEDGE_ANGLE_DEG) % 20
+
+
+## Look up the effective face value for a wedge index.
+## Uses effective_wedge_values if populated, otherwise falls back to WEDGE_ORDER.
+func _lookup_wedge_value(wedge_idx: int) -> int:
+	if effective_wedge_values.size() == 20:
+		return effective_wedge_values[wedge_idx]
 	return WEDGE_ORDER[wedge_idx]
+
+
+## Look up the segment color for a wedge index and ring type.
+## is_multi = true for double/triple rings, false for single rings.
+## Uses effective_wedge_colors if populated, otherwise derives from wedge index.
+func _lookup_segment_color(wedge_idx: int, is_multi: bool) -> ScoringEnums.SegmentColor:
+	if effective_wedge_colors.size() == 20:
+		var color_entry: Dictionary = effective_wedge_colors[wedge_idx]
+		return color_entry["multi"] if is_multi else color_entry["single"]
+	# Fallback: standard board colors based on wedge index parity
+	var is_even: bool = wedge_idx % 2 == 0
+	if is_multi:
+		return ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
+	else:
+		return ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
+
+
+## Update hover state based on the current global mouse position.
+## Call this from main.gd during hover-active game states.
+## Returns the score dictionary for the hovered segment (for tooltip display),
+## or an empty dictionary if the mouse is off the board.
+func update_hover(global_mouse_pos: Vector2) -> Dictionary:
+	if not hover_enabled:
+		_clear_hover()
+		return {}
+
+	var relative: Vector2 = global_mouse_pos - global_position
+	var distance: float = relative.length()
+	var normalized_distance: float = distance / board_radius
+
+	# Determine which ring the mouse is in
+	var new_ring_name: String = ""
+	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
+		new_ring_name = "double_bull"
+	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
+		new_ring_name = "single_bull"
+	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
+		new_ring_name = "inner_single"
+	elif normalized_distance <= RING_TRIPLE_OUTER:
+		new_ring_name = "triple"
+	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
+		new_ring_name = "outer_single"
+	elif normalized_distance <= RING_DOUBLE_OUTER:
+		new_ring_name = "double"
+	else:
+		# Off board — clear hover
+		_clear_hover()
+		return {}
+
+	# Determine wedge index (not needed for bullseyes)
+	var new_wedge_idx: int = -1
+	if new_ring_name != "double_bull" and new_ring_name != "single_bull":
+		new_wedge_idx = _get_wedge_index(relative)
+
+	# Only redraw if the hovered segment actually changed
+	if new_ring_name != _hover_ring_name or new_wedge_idx != _hover_wedge_idx:
+		_hover_ring_name = new_ring_name
+		_hover_wedge_idx = new_wedge_idx
+		_hover_active = true
+		# Calculate score for this segment using effective values
+		_hover_result = calculate_score(global_mouse_pos)
+		queue_redraw()
+
+	return _hover_result
+
+
+## Clear hover state — call when hover should be disabled.
+func clear_hover() -> void:
+	_clear_hover()
+
+
+## Internal clear hover and trigger redraw if needed.
+func _clear_hover() -> void:
+	if _hover_active:
+		_hover_ring_name = ""
+		_hover_wedge_idx = -1
+		_hover_active = false
+		_hover_result = {}
+		queue_redraw()
+
+
+## Draw a subtle highlight on the currently hovered segment.
+func _draw_hover_segment() -> void:
+	match _hover_ring_name:
+		"double_bull":
+			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, hover_highlight_color)
+			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(points, hover_border_color, hover_border_thickness)
+		"single_bull":
+			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, hover_highlight_color)
+			var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
+			draw_polyline(outer_points, hover_border_color, hover_border_thickness)
+			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(inner_points, hover_border_color, hover_border_thickness)
+		"inner_single":
+			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_highlight_color)
+			_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_border_color, hover_border_thickness)
+		"triple":
+			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_highlight_color)
+			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_border_color, hover_border_thickness)
+		"outer_single":
+			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, hover_highlight_color)
+			_draw_segment_border(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, hover_border_color, hover_border_thickness)
+		"double":
+			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_highlight_color)
+			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_border_color, hover_border_thickness)
+
+
+## Draw a border outline around a wedge segment.
+## Used for hover highlighting and checkout pulse effects.
+func _draw_segment_border(start_deg: float, end_deg: float, outer_norm: float, inner_norm: float, color: Color, thickness: float) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	var outer_r: float = board_radius * outer_norm
+	var inner_r: float = board_radius * inner_norm
+
+	# Outer arc from start to end
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var angle_rad: float = deg_to_rad(lerpf(start_deg, end_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(direction * outer_r)
+
+	# Inner arc from end back to start
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var angle_rad: float = deg_to_rad(lerpf(end_deg, start_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(direction * inner_r)
+
+	# Close the polygon outline
+	points.append(points[0])
+	draw_polyline(points, color, thickness)
+
+
+## Generate circle points for a border at a given normalized radius.
+func _make_circle_points(normalized_radius: float) -> PackedVector2Array:
+	var r: float = board_radius * normalized_radius
+	var points: PackedVector2Array = PackedVector2Array()
+	var num_points: int = 64
+	for i: int in range(num_points + 1):
+		var angle: float = TAU * float(i) / float(num_points)
+		points.append(Vector2(cos(angle), sin(angle)) * r)
+	return points
+
+
+## Set which segments should pulse as valid checkouts.
+func set_checkout_segments(segments: Array[Dictionary]) -> void:
+	_checkout_segments = segments
+	_checkout_pulse_active = segments.size() > 0
+	if _checkout_pulse_active:
+		set_process(true)
+	queue_redraw()
+
+
+## Clear all checkout highlights.
+func clear_checkout_segments() -> void:
+	_checkout_segments.clear()
+	_checkout_pulse_active = false
+	queue_redraw()
+
+
+## Draw pulsing border outlines on all valid checkout segments.
+func _draw_checkout_pulses() -> void:
+	var t: float = sin(_checkout_pulse_time * checkout_pulse_speed)
+	var alpha: float = lerpf(checkout_pulse_min_alpha, checkout_pulse_max_alpha, (t + 1.0) / 2.0)
+	var pulse_color: Color = Color(checkout_pulse_color, alpha)
+
+	for segment: Dictionary in _checkout_segments:
+		var segment_type: String = segment["type"]
+
+		if segment_type == "double_bull":
+			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(points, pulse_color, checkout_border_thickness)
+		elif segment_type == "wedge":
+			var wedge_idx: int = segment["wedge_idx"]
+			var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, pulse_color, checkout_border_thickness)

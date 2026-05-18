@@ -133,6 +133,7 @@ func start_throw(board_center: Vector2, board_radius: float) -> void:
 	_horizontal_bounce_t = 0.0
 	_is_shrink_complete = false
 	set_process(true)
+	state_changed.emit(ThrowState.AIMING)
 	queue_redraw()
 
 
