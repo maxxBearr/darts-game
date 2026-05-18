@@ -27,3 +27,46 @@ func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
 		result["total_score"] = result["face_value"] * result["multiplier"]
 		_track_modification(result, "multiplier", old_multiplier, result["multiplier"])
 	return result
+
+
+const COLOR_NAMES: Dictionary = {
+	ScoringEnums.SegmentColor.RED: "Red",
+	ScoringEnums.SegmentColor.GREEN: "Green",
+	ScoringEnums.SegmentColor.BLACK: "Black",
+	ScoringEnums.SegmentColor.WHITE: "White",
+}
+
+
+static func get_pool_weight() -> int:
+	return 30
+
+
+static func get_rarity_weights() -> Array[int]:
+	return [65, 25, 10]
+
+
+static func generate(rarity_tier: ScoringEnums.Rarity) -> ColorBonusModifier:
+	var mod: ColorBonusModifier = ColorBonusModifier.new()
+	mod.rarity_tier = rarity_tier
+
+	var colors: Array[ScoringEnums.SegmentColor] = [
+		ScoringEnums.SegmentColor.RED,
+		ScoringEnums.SegmentColor.GREEN,
+		ScoringEnums.SegmentColor.BLACK,
+		ScoringEnums.SegmentColor.WHITE,
+	]
+	mod.target_color = colors[randi_range(0, colors.size() - 1)]
+
+	match rarity_tier:
+		ScoringEnums.Rarity.COMMON:
+			mod.bonus_multiplier = 1
+		ScoringEnums.Rarity.UNCOMMON:
+			mod.bonus_multiplier = 2
+		ScoringEnums.Rarity.RARE:
+			mod.bonus_multiplier = 3
+
+	var color_name: String = COLOR_NAMES[mod.target_color]
+	mod.modifier_name = "%s Bonus +%dx" % [color_name, mod.bonus_multiplier]
+	mod.description = "+%d multiplier on %s segments" % [mod.bonus_multiplier, color_name]
+
+	return mod

@@ -20,11 +20,18 @@ extends Resource
 ## Config type — whether the player must make a selection after acquiring.
 @export var config_type: ScoringEnums.ConfigType = ScoringEnums.ConfigType.NONE
 
-## Rarity name for display (e.g., "Common", "Uncommon", "Rare").
-@export var rarity: String = "Common"
+## The rarity tier of this modifier instance.
+@export var rarity_tier: ScoringEnums.Rarity = ScoringEnums.Rarity.COMMON
 
-## Rarity color for card/button tinting.
-@export var rarity_color: Color = Color(0.6, 0.6, 0.6)
+## Rarity name for display — derived from rarity_tier.
+var rarity: String:
+	get:
+		return ScoringEnums.RARITY_DATA[rarity_tier]["name"]
+
+## Rarity color for card/button tinting — derived from rarity_tier.
+var rarity_color: Color:
+	get:
+		return ScoringEnums.RARITY_DATA[rarity_tier]["color"]
 
 
 ## Override in PER_DART subclasses. Receives the enriched score dictionary and
@@ -53,3 +60,31 @@ func _track_modification(result: Dictionary, field: String, old_value: Variant, 
 		"old_value": old_value,
 		"new_value": new_value,
 	})
+
+
+## Relative weight for how likely this modifier type is to appear in the pool.
+static func get_pool_weight() -> int:
+	return 10
+
+
+## Internal rarity distribution: [common_weight, uncommon_weight, rare_weight].
+static func get_rarity_weights() -> Array[int]:
+	return [65, 25, 10]
+
+
+## Generate a random instance of this modifier type at the given rarity.
+## Override in subclasses to randomize type-specific parameters.
+static func generate(_rarity_tier: ScoringEnums.Rarity) -> ScoringModifier:
+	return null
+
+
+## Roll a rarity tier using the given weights [common, uncommon, rare].
+static func roll_rarity(weights: Array[int]) -> ScoringEnums.Rarity:
+	var total: int = weights[0] + weights[1] + weights[2]
+	var roll: int = randi_range(1, total)
+	if roll <= weights[0]:
+		return ScoringEnums.Rarity.COMMON
+	elif roll <= weights[0] + weights[1]:
+		return ScoringEnums.Rarity.UNCOMMON
+	else:
+		return ScoringEnums.Rarity.RARE

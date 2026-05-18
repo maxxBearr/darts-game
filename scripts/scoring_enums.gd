@@ -35,3 +35,17 @@ enum ConfigType {
 	PICK_WEDGE,      ## Player picks one wedge on the board to target
 	PICK_TWO_WEDGES, ## Player picks two wedges (for swaps, etc.)
 }
+
+## Item rarity tiers. Determines value ranges and visual presentation.
+enum Rarity {
+	COMMON,
+	UNCOMMON,
+	RARE,
+}
+
+## Display data for each rarity tier: name string and card tint color.
+const RARITY_DATA: Dictionary = {
+	Rarity.COMMON: {"name": "Common", "color": Color(0.6, 0.6, 0.6)},
+	Rarity.UNCOMMON: {"name": "Uncommon", "color": Color(0.3, 0.5, 1.0)},
+	Rarity.RARE: {"name": "Rare", "color": Color(0.7, 0.3, 0.9)},
+}

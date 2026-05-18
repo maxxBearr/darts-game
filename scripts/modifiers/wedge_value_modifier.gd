@@ -28,5 +28,30 @@ func apply_to_board(wedge_values: Array[int], _wedge_colors: Array[Dictionary], 
 	original_value = wedge_values[target_index]
 	wedge_values[target_index] += bonus_value
 	applied_wedge_index = target_index
-	# Update description to reflect the specific choice made
 	description = "+%d to wedge %d (now %d)" % [bonus_value, original_value, wedge_values[target_index]]
+
+
+static func get_pool_weight() -> int:
+	return 25
+
+
+static func get_rarity_weights() -> Array[int]:
+	return [65, 25, 10]
+
+
+static func generate(rarity_tier: ScoringEnums.Rarity) -> WedgeValueModifier:
+	var mod: WedgeValueModifier = WedgeValueModifier.new()
+	mod.rarity_tier = rarity_tier
+
+	match rarity_tier:
+		ScoringEnums.Rarity.COMMON:
+			mod.bonus_value = randi_range(1, 2)
+		ScoringEnums.Rarity.UNCOMMON:
+			mod.bonus_value = randi_range(3, 4)
+		ScoringEnums.Rarity.RARE:
+			mod.bonus_value = randi_range(5, 7)
+
+	mod.modifier_name = "Wedge Boost +%d" % mod.bonus_value
+	mod.description = "+%d to a chosen wedge value" % mod.bonus_value
+
+	return mod

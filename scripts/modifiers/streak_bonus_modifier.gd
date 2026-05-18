@@ -62,3 +62,39 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 		result["streak_bonus"] = bonus_points
 
 	return result
+
+
+static func get_pool_weight() -> int:
+	return 15
+
+
+static func get_rarity_weights() -> Array[int]:
+	return [50, 30, 20]
+
+
+static func generate(rarity_tier: ScoringEnums.Rarity) -> StreakBonusModifier:
+	var mod: StreakBonusModifier = StreakBonusModifier.new()
+	mod.rarity_tier = rarity_tier
+
+	var scopes: Array[ScoringEnums.StreakScope] = [
+		ScoringEnums.StreakScope.WITHIN_TURN,
+		ScoringEnums.StreakScope.WITHIN_LEG,
+	]
+	mod.streak_scope = scopes[randi_range(0, scopes.size() - 1)]
+
+	match rarity_tier:
+		ScoringEnums.Rarity.COMMON:
+			mod.required_streak = 2
+			mod.bonus_points = randi_range(5, 8)
+		ScoringEnums.Rarity.UNCOMMON:
+			mod.required_streak = 2
+			mod.bonus_points = randi_range(10, 15)
+		ScoringEnums.Rarity.RARE:
+			mod.required_streak = 3
+			mod.bonus_points = randi_range(20, 30)
+
+	var scope_name: String = "turn" if mod.streak_scope == ScoringEnums.StreakScope.WITHIN_TURN else "leg"
+	mod.modifier_name = "%d-Streak +%d" % [mod.required_streak, mod.bonus_points]
+	mod.description = "+%d pts for %d consecutive same-color hits (per %s)" % [mod.bonus_points, mod.required_streak, scope_name]
+
+	return mod
