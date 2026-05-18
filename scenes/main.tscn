@@ -11,8 +11,8 @@
 [ext_resource type="Script" uid="uid://csh5aay86yaif" path="res://scripts/dart_build.gd" id="9_dart_build"]
 [ext_resource type="Script" uid="uid://c1ysk27utx6w6" path="res://scripts/assembly_screen.gd" id="10_assembly"]
 [ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="10_dp3eg"]
-[ext_resource type="Resource" uid="uid://x480m4oe8lx1" path="res://resources/dart_components/barrels/standard_grip.tres" id="11_standard_grip"]
-[ext_resource type="Resource" uid="uid://b1jftchcqtt6h" path="res://resources/dart_components/barrels/tungsten_heavy.tres" id="12_tungsten_heavy"]
+[ext_resource type="Resource" uid="uid://x480m4oe8lx1" path="res://resources/dart_components/barrels/ole_reliable.tres" id="11_standard_grip"]
+[ext_resource type="Resource" uid="uid://b1jftchcqtt6h" path="res://resources/dart_components/barrels/torpedo.tres" id="12_tungsten_heavy"]
 [ext_resource type="Resource" uid="uid://bundwdj1qxg6e" path="res://resources/dart_components/barrels/laid_back.tres" id="13_0ld40"]
 [ext_resource type="Resource" uid="uid://deni7pnn3rbeo" path="res://resources/dart_components/shafts/medium_aluminum.tres" id="14_medium_aluminum"]
 [ext_resource type="Resource" uid="uid://b80s62nbxiw8n" path="res://resources/dart_components/shafts/long_carbon.tres" id="15_long_carbon"]
@@ -339,3 +339,4 @@ flights = Array[ExtResource("10_dp3eg")]([ExtResource("16_blue_whisp"), ExtResou
 
 [node name="DartBuild" type="Node" parent="." unique_id=955901845]
 script = ExtResource("9_dart_build")
+max_red_skew_pixels = 700.0

@@ -25,9 +25,9 @@ var _title_label: Label
 var _barrel_name: Label
 var _shaft_name: Label
 var _flight_name: Label
-var _barrel_stats: Label
-var _shaft_stats: Label
-var _flight_stats: Label
+var _barrel_stats: RichTextLabel
+var _shaft_stats: RichTextLabel
+var _flight_stats: RichTextLabel
 var _barrel_preview: ColorRect
 var _shaft_preview: ColorRect
 var _flight_preview: ColorRect
@@ -234,13 +234,13 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 	right_btn.pressed.connect(_on_arrow_pressed.bind(slot_name, 1))
 	arrow_row.add_child(right_btn)
 
-	# Stat tooltip
-	var stats_label: Label = Label.new()
-	stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# Stat tooltip (RichTextLabel for per-line coloring)
+	var stats_label: RichTextLabel = RichTextLabel.new()
+	stats_label.bbcode_enabled = true
+	stats_label.fit_content = true
+	stats_label.scroll_active = false
 	stats_label.custom_minimum_size = Vector2(260.0, 0.0)
-	stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stats_label.add_theme_font_size_override("font_size", 13)
-	stats_label.modulate = Color(0.7, 0.85, 0.7)
+	stats_label.add_theme_font_size_override("normal_font_size", 13)
 	container.add_child(stats_label)
 
 	# Store references
@@ -425,7 +425,7 @@ func _refresh_all() -> void:
 func _refresh_slot(slot_name: String) -> void:
 	var part: DartComponent = null
 	var name_label: Label = null
-	var stats_label: Label = null
+	var stats_label: RichTextLabel = null
 	var preview: ColorRect = null
 	var tex_rect: TextureRect = null
 
@@ -460,8 +460,7 @@ func _refresh_slot(slot_name: String) -> void:
 		name_label.text = part.component_name
 
 	if stats_label:
-		var lines: Array[String] = part.get_tooltip_lines()
-		stats_label.text = "\n".join(lines)
+		stats_label.text = "[center]" + part.get_bbcode_tooltip() + "[/center]"
 
 	# Update preview texture or placeholder
 	if tex_rect:

@@ -122,6 +122,9 @@ var _window_height: float = 0.0
 var _window_center_y: float = 0.0
 var _is_shrink_complete: bool = false
 
+# Animated skew — tweens from 0.0 to accuracy_skew_v during resolve preview
+var _current_skew_offset: float = 0.0
+
 
 func _ready() -> void:
 	set_process(false)
@@ -213,6 +216,9 @@ func _process(delta: float) -> void:
 			_horizontal_bounce_t += delta * bounce_speed
 			var aim_half_w: float = _get_aim_half_width()
 			_horizontal_x = _locked_aim_x + sin(_horizontal_bounce_t) * aim_half_w
+			queue_redraw()
+
+		ThrowState.RESOLVING:
 			queue_redraw()
 
 		ThrowState.DONE:
@@ -320,12 +326,18 @@ func _on_shrink_complete() -> void:
 ## Transition to RESOLVING: freeze the marker, show landing zone preview, start timer.
 func _enter_resolving() -> void:
 	_state = ThrowState.RESOLVING
-	set_process(false)
 	state_changed.emit(ThrowState.RESOLVING)
-	queue_redraw()
 
-	# Start a timer for the resolve preview duration, then land the dart
-	get_tree().create_timer(resolve_preview_duration).timeout.connect(_on_resolve_timer_finished)
+	_current_skew_offset = 0.0
+	if absf(accuracy_skew_v) > 0.1:
+		var tween: Tween = create_tween()
+		tween.tween_property(self, "_current_skew_offset", accuracy_skew_v, resolve_preview_duration).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+		tween.tween_callback(_on_resolve_timer_finished)
+	else:
+		get_tree().create_timer(resolve_preview_duration).timeout.connect(_on_resolve_timer_finished)
+
+	set_process(true)
+	queue_redraw()
 
 
 ## Called when the resolve preview timer expires — land the dart.
@@ -466,7 +478,7 @@ func _draw_horizontal_release() -> void:
 	draw_rect(window_rect, Color(window_color, 0.15))
 	draw_rect(window_rect, Color(window_border_color, 0.3), false, 1.5)
 
-	# Static vertical consistency strip at _locked_release_y
+	# Static vertical consistency strip at locked release position (no skew yet)
 	var v_half: float = _get_vertical_accuracy_half()
 	var strip_top: float = maxf(_locked_release_y - v_half, _window_top)
 	var strip_bottom: float = minf(_locked_release_y + v_half, _window_bottom)
@@ -514,21 +526,20 @@ func _draw_resolving() -> void:
 	draw_rect(window_rect, Color(window_color, 0.15))
 	draw_rect(window_rect, Color(window_border_color, 0.3), false, 1.5)
 
-	# Final variance box centered on (_horizontal_x, _locked_release_y)
+	# Final variance box — drifts by _current_skew_offset (animated during resolve)
 	var h_half: float = _get_horizontal_accuracy_half()
 	var v_half: float = _get_vertical_accuracy_half()
-	# Clip to aim band bounds horizontally
+	var skewed_center_y: float = _locked_release_y + _current_skew_offset
 	var box_left: float = maxf(_horizontal_x - h_half, band_left)
 	var box_right: float = minf(_horizontal_x + h_half, band_left + band_width)
-	# Clip to window bounds vertically
-	var box_top: float = maxf(_locked_release_y - v_half, _window_top)
-	var box_bottom: float = minf(_locked_release_y + v_half, _window_bottom)
+	var box_top: float = maxf(skewed_center_y - v_half, _window_top)
+	var box_bottom: float = minf(skewed_center_y + v_half, _window_bottom)
 	var preview_rect: Rect2 = Rect2(
 		Vector2(box_left, box_top) - global_position,
 		Vector2(box_right - box_left, box_bottom - box_top)
 	)
 	draw_rect(preview_rect, resolve_preview_color)
 
-	# Frozen marker dot at center
-	var marker_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y) - global_position
+	# Frozen marker dot — drifts with the skew
+	var marker_pos: Vector2 = Vector2(_horizontal_x, skewed_center_y) - global_position
 	draw_circle(marker_pos, marker_size, marker_color)

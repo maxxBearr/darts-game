@@ -53,3 +53,25 @@ func get_tooltip_lines() -> Array[String]:
 		lines.append("V Accuracy: %+.0f" % v_accuracy_bonus)
 	lines.append("Weight: %+.2f" % weight)
 	return lines
+
+
+## Build BBCode tooltip with positive stats in green and negative in red-orange.
+func get_bbcode_tooltip() -> String:
+	var lines: Array[String] = []
+	var stats: Array[Array] = [
+		["H Range", h_range_bonus],
+		["V Range", v_range_bonus],
+		["H Speed", h_speed_bonus],
+		["V Speed", v_speed_bonus],
+		["H Accuracy", h_accuracy_bonus],
+		["V Accuracy", v_accuracy_bonus],
+	]
+	for entry: Array in stats:
+		var val: float = entry[1]
+		if val == 0.0:
+			continue
+		var color_hex: String = "#8ad68a" if val > 0.0 else "#d6886a"
+		lines.append("[color=%s]%s: %+.0f[/color]" % [color_hex, entry[0], val])
+	var weight_color: String = "#aaaaaa"
+	lines.append("[color=%s]Weight: %+.2f[/color]" % [weight_color, weight])
+	return "\n".join(lines)
