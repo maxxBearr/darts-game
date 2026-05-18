@@ -153,4 +153,7 @@ func equip_shaft(part: DartComponent) -> void:
 
 func equip_flight(part: DartComponent) -> void:
 	equipped_flight = part
+	if part != null:
+		dart_outer_color = part.dart_outer_color
+		dart_inner_color = part.dart_inner_color
 	build_changed.emit()

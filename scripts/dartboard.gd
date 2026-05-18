@@ -127,6 +127,15 @@ var _checkout_segments: Array[Dictionary] = []
 var _checkout_pulse_active: bool = false
 var _checkout_pulse_time: float = 0.0
 
+## Picker mode state — for interactive wedge selection UI
+var picker_mode: bool = false
+var _picker_hover_wedge: int = -1
+var _picker_selected_wedges: Array[int] = []
+
+@export var picker_highlight_color: Color = Color(0.2, 0.7, 1.0, 0.25)
+@export var picker_selected_color: Color = Color(0.2, 1.0, 0.4, 0.3)
+@export var picker_border_color: Color = Color(0.2, 0.7, 1.0, 0.6)
+
 
 func _draw() -> void:
 	# Draw surround ring (off-board area)
@@ -182,6 +191,10 @@ func _draw() -> void:
 	# Draw hover highlight on the segment under the mouse (if active)
 	if _hover_active and _hover_ring_name != "":
 		_draw_hover_segment()
+
+	# Draw picker highlights for interactive wedge selection
+	if picker_mode:
+		_draw_picker_highlights()
 
 	# Draw checkout pulse on valid finishing double segments
 	if _checkout_pulse_active and _checkout_segments.size() > 0:
@@ -374,7 +387,7 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		is_bull = true
 		segment_color = ScoringEnums.SegmentColor.GREEN
 	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
-		ring_name = "Single"
+		ring_name = "Inner Single"
 		multiplier = 1
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
@@ -386,7 +399,7 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		face_value = _lookup_wedge_value(wedge_index)
 		segment_color = _lookup_segment_color(wedge_index, true)
 	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
-		ring_name = "Single"
+		ring_name = "Outer Single"
 		multiplier = 1
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
@@ -607,6 +620,57 @@ func clear_checkout_segments() -> void:
 	_checkout_segments.clear()
 	_checkout_pulse_active = false
 	queue_redraw()
+
+
+## Enable/disable picker mode for interactive wedge selection.
+func set_picker_mode(enabled: bool) -> void:
+	picker_mode = enabled
+	_picker_hover_wedge = -1
+	_picker_selected_wedges.clear()
+	if enabled:
+		hover_enabled = false
+	queue_redraw()
+
+
+## Get the wedge index at a global position, or -1 if off the wedge area.
+func get_wedge_at_position(global_pos: Vector2) -> int:
+	var relative: Vector2 = global_pos - global_position
+	var distance: float = relative.length()
+	var normalized: float = distance / board_radius
+	if normalized > RING_DOUBLE_OUTER or normalized < RING_SINGLE_BULL_OUTER:
+		return -1
+	return _get_wedge_index(relative)
+
+
+## Update picker hover and return the hovered wedge index.
+func update_picker_hover(global_pos: Vector2) -> int:
+	var wedge: int = get_wedge_at_position(global_pos)
+	if wedge != _picker_hover_wedge:
+		_picker_hover_wedge = wedge
+		queue_redraw()
+	return wedge
+
+
+## Set which wedges are visually selected in picker mode.
+func set_picker_selected(wedges: Array[int]) -> void:
+	_picker_selected_wedges = wedges
+	queue_redraw()
+
+
+## Draw picker highlights — selected wedges and hovered wedge.
+func _draw_picker_highlights() -> void:
+	for wedge_idx: int in _picker_selected_wedges:
+		_draw_full_wedge_highlight(wedge_idx, picker_selected_color, picker_border_color)
+	if _picker_hover_wedge >= 0 and _picker_hover_wedge not in _picker_selected_wedges:
+		_draw_full_wedge_highlight(_picker_hover_wedge, picker_highlight_color, picker_border_color)
+
+
+## Draw a highlight overlay covering all rings of a single wedge.
+func _draw_full_wedge_highlight(wedge_idx: int, fill_color: Color, border_col: Color) -> void:
+	var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+	_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, fill_color)
+	_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, border_col, hover_border_thickness)
 
 
 ## Draw pulsing border outlines on all valid checkout segments.

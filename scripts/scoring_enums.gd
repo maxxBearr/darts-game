@@ -36,6 +36,22 @@ enum ConfigType {
 	PICK_TWO_WEDGES, ## Player picks two wedges (for swaps, etc.)
 }
 
+## How strict streak matching is for consecutive hit modifiers.
+enum StreakLeniency {
+	SAME_RING,          ## Must hit the exact same ring on the exact same wedge
+	ADJACENT_SECTIONS,  ## Same wedge, ring must be same or directly adjacent
+	WHOLE_WEDGE,        ## Any ring on the same wedge number counts
+}
+
+## Ring adjacency for ADJACENT_SECTIONS leniency checks.
+## Order from inside out: inner_single ↔ triple ↔ outer_single ↔ double.
+const RING_ADJACENCY: Dictionary = {
+	"inner_single": ["triple"],
+	"triple": ["inner_single", "outer_single"],
+	"outer_single": ["triple", "double"],
+	"double": ["outer_single"],
+}
+
 ## Which slot a dart component fits in.
 enum ComponentSlot {
 	BARREL,

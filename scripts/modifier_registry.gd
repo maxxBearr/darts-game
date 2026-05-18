@@ -4,10 +4,18 @@ extends RefCounted
 ## Handles weighted random selection and rarity rolling to produce fully
 ## configured modifier instances ready for the player to acquire.
 
+const _ColorBonus = preload("res://scripts/modifiers/color_bonus_modifier.gd")
+const _WedgeValue = preload("res://scripts/modifiers/wedge_value_modifier.gd")
+const _StreakBonus = preload("res://scripts/modifiers/streak_bonus_modifier.gd")
+const _WedgeSwap = preload("res://scripts/modifiers/wedge_swap_modifier.gd")
+const _OddEvenBonus = preload("res://scripts/modifiers/odd_even_bonus_modifier.gd")
+
 const MODIFIER_TYPES: Array = [
-	ColorBonusModifier,
-	WedgeValueModifier,
-	StreakBonusModifier,
+	_ColorBonus,
+	_WedgeValue,
+	_StreakBonus,
+	_WedgeSwap,
+	_OddEvenBonus,
 ]
 
 

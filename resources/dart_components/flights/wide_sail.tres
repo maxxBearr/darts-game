@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
 [ext_resource type="Texture2D" uid="uid://bgtfglmko0nng" path="res://sprites/DartComponents/DartFlights/flight-2.png" id="2_yx5qc"]
-[ext_resource type="Resource" path="res://resources/throw_modifiers/nervous_sweater.tres" id="3_throw_mod"]
+[ext_resource type="Resource" uid="uid://d1eu3hoy6rmki" path="res://resources/throw_modifiers/nervous_sweater.tres" id="3_throw_mod"]
 
 [resource]
 script = ExtResource("1")
@@ -15,3 +15,5 @@ v_speed_bonus = 3.0
 h_accuracy_bonus = 1.0
 v_accuracy_bonus = 10.0
 throw_modifier = ExtResource("3_throw_mod")
+dart_outer_color = Color(0.7081978, 0, 0.13751924, 1)
+dart_inner_color = Color(0, 0, 0, 1)

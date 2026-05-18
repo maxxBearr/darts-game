@@ -22,10 +22,11 @@ func _init() -> void:
 ## to the multiplier and recalculates total_score.
 func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
 	if result.get("segment_color", -1) == target_color:
-		var old_multiplier: int = result["multiplier"]
-		result["multiplier"] += bonus_multiplier
-		result["total_score"] = result["face_value"] * result["multiplier"]
-		_track_modification(result, "multiplier", old_multiplier, result["multiplier"])
+		for i: int in range(bonus_multiplier):
+			var old_mult: int = result["multiplier"]
+			result["multiplier"] += 1
+			result["total_score"] = result["face_value"] * result["multiplier"]
+			_track_modification(result, "multiplier", old_mult, result["multiplier"])
 	return result
 
 

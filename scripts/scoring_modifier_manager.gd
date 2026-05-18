@@ -131,12 +131,15 @@ func get_bull_color(is_double_bull: bool) -> ScoringEnums.SegmentColor:
 ## Clear turn-level history. Call from main.gd at the start of each new turn.
 func reset_for_turn() -> void:
 	hit_history_turn.clear()
+	_reset_modifier_streaks(ScoringEnums.StreakScope.WITHIN_TURN)
 
 
 ## Clear leg-level history (and turn history). Call from main.gd at leg transitions.
 func reset_for_leg() -> void:
 	hit_history_turn.clear()
 	hit_history_leg.clear()
+	_reset_modifier_streaks(ScoringEnums.StreakScope.WITHIN_TURN)
+	_reset_modifier_streaks(ScoringEnums.StreakScope.WITHIN_LEG)
 
 
 ## Full reset for a new run. Clears all history, all modifiers, resets board state.
@@ -146,6 +149,13 @@ func reset_for_run() -> void:
 	hit_history_run.clear()
 	active_modifiers.clear()
 	_init_default_board_state()
+
+
+## Reset streak state on modifiers matching the given scope.
+func _reset_modifier_streaks(scope: ScoringEnums.StreakScope) -> void:
+	for modifier: Resource in active_modifiers:
+		if modifier.streak_scope == scope and modifier.has_method("reset_streak_state"):
+			modifier.reset_streak_state()
 
 
 ## Calculate which double segments would win the leg at the given remaining score.

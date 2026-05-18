@@ -30,6 +30,12 @@ extends Resource
 ## components with no conditional ability.
 @export var throw_modifier: ThrowModifier
 
+## Dart marker outer ring color (used by flights to theme the on-board dart).
+@export var dart_outer_color: Color = Color(0.9, 0.85, 0.0)
+
+## Dart marker inner dot color (used by flights to theme the on-board dart).
+@export var dart_inner_color: Color = Color(0.2, 0.2, 0.2)
+
 
 var rarity_name: String:
 	get:

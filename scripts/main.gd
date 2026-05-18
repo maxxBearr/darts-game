@@ -111,8 +111,17 @@ var _base_accuracy_skew_v: float = 0.0
 # The 3 generated upgrade choices for the current leg-complete screen
 var _current_upgrades: Array[Dictionary] = []
 
-# How many upgrade selection rounds remain before advancing to the next leg
-var _upgrade_rounds_remaining: int = 0
+## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker"
+var _leg_phase: String = ""
+
+## The 3 generated modifier choices for the modifier pick phase.
+var _current_modifiers: Array[ScoringModifier] = []
+
+## The modifier awaiting wedge picker configuration.
+var _pending_modifier: ScoringModifier = null
+
+## First selected wedge in PICK_TWO_WEDGES flow (-1 = none).
+var _picker_selected_wedge: int = -1
 
 # Cumulative score for the current turn (resets each turn)
 var _turn_score: int = 0
@@ -129,6 +138,9 @@ var _active_throw_modifier_names: Array[String] = []
 # Stored original gaussian_spread for reverting after throw.
 var _original_gaussian_spread: float = 0.0
 
+# Whether a trigger animation is currently playing (suppresses hover tooltip).
+var _trigger_anim_active: bool = false
+
 
 func _ready() -> void:
 	# Connect throw mechanic signals
@@ -141,6 +153,7 @@ func _ready() -> void:
 	hud.next_leg_pressed.connect(_on_next_leg)
 	hud.new_run_pressed.connect(_on_new_run)
 	hud.upgrade_selected.connect(_on_upgrade_selected)
+	hud.modifier_selected.connect(_on_modifier_selected)
 
 	# Connect assembly screen
 	assembly_screen.dart_build = dart_build
@@ -174,6 +187,13 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	# Picker mode hover — update wedge highlight under cursor
+	if _leg_phase == "wedge_picker" and dartboard.picker_mode:
+		var mouse_pos: Vector2 = get_global_mouse_position()
+		var wedge_idx: int = dartboard.update_picker_hover(mouse_pos)
+		_update_picker_prompt(wedge_idx)
+		return
+
 	if not _hover_active:
 		return
 
@@ -181,8 +201,8 @@ func _process(_delta: float) -> void:
 	var mouse_pos: Vector2 = get_global_mouse_position()
 	var hover_result: Dictionary = dartboard.update_hover(mouse_pos)
 
-	# Update the hover tooltip on the HUD
-	if hover_result.is_empty():
+	# Update the hover tooltip on the HUD (suppress during trigger animations)
+	if _trigger_anim_active or hover_result.is_empty():
 		hud.hide_hover_tooltip()
 	else:
 		# Run through the modifier pipeline in preview mode to get the fully
@@ -292,8 +312,8 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	elif response["is_leg_won"]:
-		# Leg complete — offer 2 rounds of upgrade selection
-		_upgrade_rounds_remaining = 2
+		# Leg complete — Phase 1: accuracy pick, Phase 2: modifier pick
+		_leg_phase = "accuracy_pick"
 		_current_upgrades = _generate_upgrades()
 		hud.show_leg_complete_with_upgrades(
 			response["current_leg"],
@@ -348,6 +368,7 @@ func _on_next_turn() -> void:
 func _on_next_leg() -> void:
 	_awaiting_next_leg = false
 	_turn_score = 0
+	_leg_phase = ""
 	hud.update_turn_score(0)
 	scoring_modifier_manager.reset_for_leg()
 	_clear_darts()
@@ -361,12 +382,16 @@ func _on_next_leg() -> void:
 func _on_new_run() -> void:
 	_run_over = false
 	_turn_score = 0
+	_leg_phase = ""
 	hud.update_turn_score(0)
+	hud.hide_picker()
 	scoring_modifier_manager.reset_for_run()
 	hud.clear_modifier_panel()
 	hud.clear_modifier_status()
 	_sync_board_state()
 	_clear_darts()
+	if dartboard.picker_mode:
+		dartboard.set_picker_mode(false)
 	# Restore to raw stats (before any build) so the assembly screen starts fresh
 	_restore_raw_stats()
 	_show_assembly()
@@ -405,19 +430,42 @@ func _on_run_confirmed() -> void:
 	_start_new_throw()
 
 
-## Player picks an upgrade card (index 0, 1, or 2).
+## Player picks an accuracy upgrade card.
 func _on_upgrade_selected(index: int) -> void:
 	_apply_upgrade(_current_upgrades[index])
 	_update_stats_display()
-	_upgrade_rounds_remaining -= 1
 
-	if _upgrade_rounds_remaining > 0:
-		# Generate and show another round of upgrade choices
-		_current_upgrades = _generate_upgrades()
-		hud.show_upgrade_choices(_current_upgrades)
-	else:
-		# All rounds done — show Next Leg button
+	# Move to Phase 2: modifier pick
+	_leg_phase = "modifier_pick"
+	_current_modifiers = []
+	var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3)
+	for mod: ScoringModifier in generated:
+		_current_modifiers.append(mod)
+	hud.show_modifier_choices(_current_modifiers)
+
+
+## Player picks a scoring modifier card.
+func _on_modifier_selected(index: int) -> void:
+	var modifier: ScoringModifier = _current_modifiers[index]
+
+	if modifier.config_type == ScoringEnums.ConfigType.NONE:
+		add_scoring_modifier(modifier, {})
+		_leg_phase = ""
 		hud.next_leg_button.visible = true
+	elif modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
+		_pending_modifier = modifier
+		_leg_phase = "wedge_picker"
+		_picker_selected_wedge = -1
+		dartboard.set_picker_mode(true)
+		hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		hud.show_picker_prompt("Hover over a wedge and click to select")
+	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
+		_pending_modifier = modifier
+		_leg_phase = "wedge_picker"
+		_picker_selected_wedge = -1
+		dartboard.set_picker_mode(true)
+		hud.show_picker_header("Swap two wedges")
+		hud.show_picker_prompt("Click to select the first wedge")
 
 
 ## Apply temporary throw modifier bonuses to throw_mechanic.
@@ -654,16 +702,194 @@ func _on_throw_state_changed(new_state: int) -> void:
 			hud.show_instruction("Releasing...")
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if _leg_phase != "wedge_picker":
+		return
+
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var wedge_idx: int = dartboard.get_wedge_at_position(get_global_mouse_position())
+		if wedge_idx < 0:
+			return
+		get_viewport().set_input_as_handled()
+
+		if _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
+			_complete_pick_wedge(wedge_idx)
+		elif _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
+			_handle_pick_two_wedges_click(wedge_idx)
+
+	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		get_viewport().set_input_as_handled()
+		_cancel_picker()
+
+
+func _complete_pick_wedge(wedge_idx: int) -> void:
+	add_scoring_modifier(_pending_modifier, {"wedge_index": wedge_idx})
+	_finish_picker()
+
+
+func _handle_pick_two_wedges_click(wedge_idx: int) -> void:
+	if _picker_selected_wedge < 0:
+		_picker_selected_wedge = wedge_idx
+		var selected: Array[int] = [wedge_idx]
+		dartboard.set_picker_selected(selected)
+		var value: int = scoring_modifier_manager.get_effective_value(wedge_idx)
+		hud.show_picker_header("Now pick a wedge to swap with %d" % value)
+		hud.show_picker_prompt("Click another wedge to swap, or click the selected wedge to deselect")
+	elif wedge_idx == _picker_selected_wedge:
+		_picker_selected_wedge = -1
+		var empty: Array[int] = []
+		dartboard.set_picker_selected(empty)
+		hud.show_picker_header("Swap two wedges")
+		hud.show_picker_prompt("Click to select the first wedge")
+	else:
+		add_scoring_modifier(_pending_modifier, {
+			"wedge_index_1": _picker_selected_wedge,
+			"wedge_index_2": wedge_idx,
+		})
+		_finish_picker()
+
+
+func _cancel_picker() -> void:
+	dartboard.set_picker_mode(false)
+	hud.hide_picker()
+	_pending_modifier = null
+	_picker_selected_wedge = -1
+	_leg_phase = "modifier_pick"
+	hud.show_modifier_choices(_current_modifiers)
+
+
+func _finish_picker() -> void:
+	dartboard.set_picker_mode(false)
+	hud.hide_picker()
+	_pending_modifier = null
+	_picker_selected_wedge = -1
+	_leg_phase = ""
+	hud.next_leg_button.visible = true
+
+
+func _update_picker_prompt(wedge_idx: int) -> void:
+	if wedge_idx < 0:
+		if _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
+			hud.show_picker_prompt("Hover over a wedge and click to select")
+		elif _picker_selected_wedge < 0:
+			hud.show_picker_prompt("Click to select the first wedge")
+		else:
+			hud.show_picker_prompt("Click another wedge to swap")
+		return
+
+	if _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
+		var current_val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
+		var new_val: int = current_val + _pending_modifier.bonus_value
+		hud.show_picker_prompt("Make %d into %d? Click to confirm, Escape to cancel" % [current_val, new_val])
+	elif _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
+		if _picker_selected_wedge < 0:
+			var val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
+			hud.show_picker_prompt("Select %d? Click to pick first wedge" % val)
+		elif wedge_idx != _picker_selected_wedge:
+			var val1: int = scoring_modifier_manager.get_effective_value(_picker_selected_wedge)
+			var val2: int = scoring_modifier_manager.get_effective_value(wedge_idx)
+			hud.show_picker_prompt("Swap %d and %d? Click to confirm, Escape to cancel" % [val1, val2])
+
+
 func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> void:
 	var score: int = result["total_score"]
 	if score == 0:
 		return
 
+	var modifications: Array = result.get("modifications", [])
+	var multiplier_mods: Array[Dictionary] = []
+	for mod: Dictionary in modifications:
+		if mod["field"] == "multiplier":
+			multiplier_mods.append(mod)
+
+	if multiplier_mods.is_empty():
+		_spawn_simple_floating_score(hit_position, result)
+	else:
+		_spawn_trigger_animation(hit_position, result, multiplier_mods)
+
+
+func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary) -> void:
+	var label: Label = _create_score_label(result["total_score"], hit_position, result)
+	add_child(label)
+
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(label, "position", label.position + Vector2(25.0, -55.0), 1.0).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_property(label, "modulate:a", 0.0, 1.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.set_parallel(false)
+	tween.tween_callback(label.queue_free)
+
+
+func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary]) -> void:
+	var face_value: int = result["face_value"]
+	var base_score: int = face_value * int(multiplier_mods[0]["old_value"])
+	var main_label: Label = _create_score_label(base_score, hit_position, result, 30)
+	main_label.pivot_offset = main_label.size / 2.0
+	add_child(main_label)
+
+	# Suppress hover tooltip while the animation plays
+	hud.hide_hover_tooltip()
+	_trigger_anim_active = true
+
+	var tween: Tween = create_tween()
+	tween.tween_interval(0.3)
+
+	var trigger_labels: Array[Label] = []
+	var num_triggers: int = multiplier_mods.size()
+	var running_total: int = base_score
+
+	for i: int in range(num_triggers):
+		var angle: float = PI * (0.3 + 0.4 * float(i) / float(maxi(num_triggers - 1, 1)))
+		var offset: Vector2 = Vector2(cos(angle), -sin(angle)) * 50.0
+		var trigger_label: Label = Label.new()
+		trigger_label.text = "+%d" % face_value
+		trigger_label.position = hit_position + offset + Vector2(-10.0, -10.0)
+		trigger_label.z_index = 101
+		trigger_label.add_theme_font_size_override("font_size", 20)
+		trigger_label.add_theme_constant_override("outline_size", 3)
+		var rarity_color: Color = multiplier_mods[i].get("source_rarity_color", Color(0.8, 0.8, 0.8))
+		trigger_label.add_theme_color_override("font_color", rarity_color)
+		trigger_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+		trigger_label.modulate.a = 0.0
+		add_child(trigger_label)
+		trigger_labels.append(trigger_label)
+
+	for i: int in range(num_triggers):
+		running_total += face_value
+		var final_total: int = running_total
+		var scale_bump: float = 1.0 + 0.1 * float(i + 1)
+		var trigger_lbl: Label = trigger_labels[i]
+
+		tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
+		tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tween.tween_callback(_on_trigger_impact.bind(trigger_lbl, main_label, final_total, scale_bump))
+		var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
+		tween.tween_property(main_label, "position", main_label.position + shake_offset, 0.04)
+		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
+		if i < num_triggers - 1:
+			tween.tween_interval(0.1)
+
+	tween.tween_interval(0.15)
+	tween.tween_callback(func() -> void: _trigger_anim_active = false)
+	tween.set_parallel(true)
+	tween.tween_property(main_label, "position", main_label.position + Vector2(25.0, -55.0), 0.8).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_property(main_label, "modulate:a", 0.0, 0.8).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.set_parallel(false)
+	tween.tween_callback(main_label.queue_free)
+
+
+func _on_trigger_impact(trigger_lbl: Label, main_label: Label, total: int, scale: float) -> void:
+	trigger_lbl.queue_free()
+	main_label.text = str(total)
+	main_label.scale = Vector2(scale, scale)
+
+
+func _create_score_label(score: int, hit_position: Vector2, result: Dictionary, font_size: int = 26) -> Label:
 	var label: Label = Label.new()
 	label.text = str(score)
 	label.position = hit_position + Vector2(-10.0, -10.0)
 	label.z_index = 100
-	label.add_theme_font_size_override("font_size", 22)
+	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_constant_override("outline_size", 3)
 
 	var segment_color: int = result.get("segment_color", -1)
@@ -684,11 +910,4 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> void:
 			label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
 			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
 
-	add_child(label)
-
-	var tween: Tween = create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(label, "position", label.position + Vector2(25.0, -55.0), 1.0).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	tween.tween_property(label, "modulate:a", 0.0, 1.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-	tween.set_parallel(false)
-	tween.tween_callback(label.queue_free)
+	return label

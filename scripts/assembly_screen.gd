@@ -471,6 +471,14 @@ func _on_dart_color_changed(_color: Color) -> void:
 	_dart_preview.queue_redraw()
 
 
+func _sync_color_pickers() -> void:
+	if dart_build and _outer_color_picker and _inner_color_picker:
+		_outer_color_picker.color = dart_build.dart_outer_color
+		_inner_color_picker.color = dart_build.dart_inner_color
+		if _dart_preview:
+			_dart_preview.queue_redraw()
+
+
 func _draw_dart_preview() -> void:
 	var center: Vector2 = Vector2(30.0, 30.0)
 	var outer_color: Color = _outer_color_picker.color if _outer_color_picker else Color(0.9, 0.85, 0.0)
@@ -542,6 +550,7 @@ func _on_arrow_pressed(slot_name: String, direction: int) -> void:
 			_flight_idx = wrapi(_flight_idx + direction, 0, _flights.size())
 			if dart_build:
 				dart_build.equip_flight(_flights[_flight_idx])
+				_sync_color_pickers()
 	_refresh_all()
 
 

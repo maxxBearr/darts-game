@@ -1,67 +1,100 @@
 class_name StreakBonusModifier
 extends ScoringModifier
-## Awards bonus points when the player lands a streak of consecutive hits
-## on segments of the same color. Checks the hit history based on streak_scope
-## to count how many consecutive same-color hits precede this one.
-## Example: "3 consecutive same-color hits: +15 bonus points"
+## Awards cumulative +1x multiplier per consecutive qualifying hit on the same wedge.
+## First qualifying hit scores normally. Second consecutive gets +1x. Third gets +2x. Etc.
+## Leniency tier determines how strict the ring matching is.
 
-## How many consecutive same-color hits (including the current one) are required.
-@export var required_streak: int = 3
+## How strict the ring matching is for maintaining the streak.
+@export var leniency: ScoringEnums.StreakLeniency = ScoringEnums.StreakLeniency.WHOLE_WEDGE
 
-## Flat bonus points added to total_score when the streak triggers.
-@export var bonus_points: int = 15
+var _streak_wedge_index: int = -1
+var _streak_ring: String = ""
+var _streak_count: int = 0
 
 
 func _init() -> void:
-	modifier_name = "Color Streak"
+	modifier_name = "Wedge Streak"
 	timing = ScoringEnums.ModifierTiming.PER_DART
-	streak_scope = ScoringEnums.StreakScope.WITHIN_LEG
 	config_type = ScoringEnums.ConfigType.NONE
 
 
-## Checks the appropriate history (based on streak_scope) for consecutive same-color hits.
-## If the current dart extends the streak to required_streak, adds bonus_points.
-func apply(result: Dictionary, context: Dictionary) -> Dictionary:
-	# Select the right history array based on streak_scope
-	var history: Array = []
-	match streak_scope:
-		ScoringEnums.StreakScope.WITHIN_TURN:
-			history = context["history_turn"]
-		ScoringEnums.StreakScope.WITHIN_LEG:
-			history = context["history_leg"]
-		ScoringEnums.StreakScope.WITHIN_RUN:
-			history = context["history_run"]
+func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
+	var wedge_index: int = result.get("wedge_index", -1)
+	var ring_name: String = result.get("ring_name", "")
 
-	# Need at least (required_streak - 1) previous hits to check
-	if history.size() < required_streak - 1:
+	if wedge_index < 0 or result.get("is_bull", false):
+		_reset_streak()
 		return result
 
-	# Check if the last (required_streak - 1) hits share the same color as current
-	var current_color: int = result.get("segment_color", -1)
-	if current_color == -1:
+	var ring_zone: String = _ring_name_to_zone(ring_name)
+	if ring_zone.is_empty():
+		_reset_streak()
 		return result
 
-	var streak_valid: bool = true
-	for i: int in range(1, required_streak):
-		var past_idx: int = history.size() - i
-		if past_idx < 0:
-			streak_valid = false
-			break
-		var past_color: int = history[past_idx].get("segment_color", -2)
-		if past_color != current_color:
-			streak_valid = false
-			break
+	if _is_qualifying_hit(wedge_index, ring_zone):
+		_streak_count += 1
+		_streak_wedge_index = wedge_index
+		_streak_ring = ring_zone
+	else:
+		_streak_wedge_index = wedge_index
+		_streak_ring = ring_zone
+		_streak_count = 1
 
-	if streak_valid:
-		var old_total: int = result["total_score"]
-		result["total_score"] += bonus_points
-		_track_modification(result, "total_score", old_total, result["total_score"])
-		# Tag the result so HUD can show streak feedback
+	var bonus: int = _streak_count - 1
+	if bonus > 0:
+		for i: int in range(bonus):
+			var old_mult: int = result["multiplier"]
+			result["multiplier"] += 1
+			result["total_score"] = result["face_value"] * result["multiplier"]
+			_track_modification(result, "multiplier", old_mult, result["multiplier"])
 		result["streak_triggered"] = true
 		result["streak_name"] = modifier_name
-		result["streak_bonus"] = bonus_points
+		result["streak_count"] = _streak_count
 
 	return result
+
+
+func _is_qualifying_hit(wedge_index: int, ring_zone: String) -> bool:
+	if _streak_wedge_index < 0:
+		return true
+	if wedge_index != _streak_wedge_index:
+		return false
+
+	match leniency:
+		ScoringEnums.StreakLeniency.WHOLE_WEDGE:
+			return true
+		ScoringEnums.StreakLeniency.SAME_RING:
+			return ring_zone == _streak_ring
+		ScoringEnums.StreakLeniency.ADJACENT_SECTIONS:
+			if ring_zone == _streak_ring:
+				return true
+			var adjacent: Array = ScoringEnums.RING_ADJACENCY.get(_streak_ring, [])
+			return ring_zone in adjacent
+
+	return false
+
+
+func _ring_name_to_zone(ring_name: String) -> String:
+	match ring_name:
+		"Inner Single":
+			return "inner_single"
+		"Triple":
+			return "triple"
+		"Outer Single":
+			return "outer_single"
+		"Double":
+			return "double"
+	return ""
+
+
+func _reset_streak() -> void:
+	_streak_wedge_index = -1
+	_streak_ring = ""
+	_streak_count = 0
+
+
+func reset_streak_state() -> void:
+	_reset_streak()
 
 
 static func get_pool_weight() -> int:
@@ -84,17 +117,22 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> StreakBonusModifier:
 
 	match rarity_tier:
 		ScoringEnums.Rarity.COMMON:
-			mod.required_streak = 2
-			mod.bonus_points = randi_range(5, 8)
+			mod.leniency = ScoringEnums.StreakLeniency.SAME_RING
 		ScoringEnums.Rarity.UNCOMMON:
-			mod.required_streak = 2
-			mod.bonus_points = randi_range(10, 15)
+			mod.leniency = ScoringEnums.StreakLeniency.ADJACENT_SECTIONS
 		ScoringEnums.Rarity.RARE:
-			mod.required_streak = 3
-			mod.bonus_points = randi_range(20, 30)
+			mod.leniency = ScoringEnums.StreakLeniency.WHOLE_WEDGE
 
 	var scope_name: String = "turn" if mod.streak_scope == ScoringEnums.StreakScope.WITHIN_TURN else "leg"
-	mod.modifier_name = "%d-Streak +%d" % [mod.required_streak, mod.bonus_points]
-	mod.description = "+%d pts for %d consecutive same-color hits (per %s)" % [mod.bonus_points, mod.required_streak, scope_name]
+
+	const LENIENCY_NAMES: Dictionary = {
+		ScoringEnums.StreakLeniency.SAME_RING: "Same Ring",
+		ScoringEnums.StreakLeniency.ADJACENT_SECTIONS: "Adjacent",
+		ScoringEnums.StreakLeniency.WHOLE_WEDGE: "Whole Wedge",
+	}
+
+	var leniency_name: String = LENIENCY_NAMES[mod.leniency]
+	mod.modifier_name = "Wedge Streak (%s)" % leniency_name
+	mod.description = "+1x per consecutive hit on the same wedge (per %s)" % scope_name
 
 	return mod

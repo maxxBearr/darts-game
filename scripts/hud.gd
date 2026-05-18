@@ -6,6 +6,7 @@ signal next_turn_pressed
 signal next_leg_pressed
 signal new_run_pressed
 signal upgrade_selected(index: int)
+signal modifier_selected(index: int)
 
 @onready var score_label: Label = $ScoreLabel
 @onready var instruction_label: Label = $InstructionLabel
@@ -64,6 +65,14 @@ var _stat_bars: Dictionary = {}
 var _stat_value_labels: Dictionary = {}
 var _modifier_status_title: Label
 var _modifier_rows: Array[Dictionary] = []
+
+## Whether upgrade buttons are in modifier selection mode.
+var _modifier_mode: bool = false
+
+## Picker header label (created on demand).
+var _picker_header: Label
+## Picker prompt label (created on demand).
+var _picker_prompt: Label
 
 
 func _ready() -> void:
@@ -260,21 +269,25 @@ func _build_stat_bars() -> void:
 		var name_lbl: Label = Label.new()
 		name_lbl.text = STAT_DISPLAY_NAMES[key] + ":"
 		name_lbl.custom_minimum_size = Vector2(90.0, BAR_HEIGHT + 2.0)
+		name_lbl.size_flags_horizontal = 0
 		name_lbl.add_theme_font_size_override("font_size", 12)
 		row.add_child(name_lbl)
 
 		var bar_bg: ColorRect = ColorRect.new()
 		bar_bg.color = Color(0.15, 0.15, 0.2)
 		bar_bg.custom_minimum_size = Vector2(BAR_MAX_WIDTH, BAR_HEIGHT)
+		bar_bg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(bar_bg)
 
 		var bar_fill: ColorRect = ColorRect.new()
 		bar_fill.color = Color(0.3, 0.7, 0.4)
+		bar_fill.position = Vector2.ZERO
 		bar_fill.size = Vector2(0.0, BAR_HEIGHT)
 		bar_bg.add_child(bar_fill)
 
 		var val_lbl: Label = Label.new()
 		val_lbl.custom_minimum_size = Vector2(30.0, BAR_HEIGHT + 2.0)
+		val_lbl.size_flags_horizontal = 0
 		val_lbl.add_theme_font_size_override("font_size", 12)
 		row.add_child(val_lbl)
 
@@ -294,9 +307,10 @@ func update_stats(stats: Dictionary, base_stats: Dictionary) -> void:
 
 		var bar_fill: ColorRect = _stat_bars[key]
 		var val_label: Label = _stat_value_labels[key]
+		var bar_width: float = bar_fill.get_parent().size.x if bar_fill.get_parent().size.x > 0.0 else BAR_MAX_WIDTH
 
 		var fill_fraction: float = clampf(current / STAT_MAX_VALUE, 0.0, 1.0)
-		bar_fill.size = Vector2(BAR_MAX_WIDTH * fill_fraction, BAR_HEIGHT)
+		bar_fill.size = Vector2(bar_width * fill_fraction, BAR_HEIGHT)
 
 		if current > base:
 			bar_fill.color = Color(0.3, 0.75, 0.4)
@@ -493,4 +507,68 @@ func _on_modifier_unhover() -> void:
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.
 func _select_upgrade(index: int) -> void:
 	upgrade_container.visible = false
-	upgrade_selected.emit(index)
+	if _modifier_mode:
+		_modifier_mode = false
+		modifier_selected.emit(index)
+	else:
+		upgrade_selected.emit(index)
+
+
+## Show 3 modifier cards for the player to pick from.
+func show_modifier_choices(modifiers: Array) -> void:
+	_modifier_mode = true
+	score_label.text = "Choose a scoring modifier!"
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
+	for i: int in range(3):
+		var modifier: Resource = modifiers[i]
+		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+		buttons[i].text = button_text
+		var color: Color = modifier.rarity_color
+		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
+		buttons[i].tooltip_text = modifier.description
+	upgrade_container.visible = true
+	next_leg_button.visible = false
+
+
+## Show the wedge picker header text.
+func show_picker_header(text: String) -> void:
+	if _picker_header == null:
+		_picker_header = Label.new()
+		_picker_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_picker_header.add_theme_font_size_override("font_size", 24)
+		_picker_header.modulate = Color(1.0, 0.9, 0.5)
+		_picker_header.anchors_preset = Control.PRESET_CENTER_TOP
+		_picker_header.anchor_top = 0.03
+		_picker_header.anchor_bottom = 0.03
+		_picker_header.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_picker_header.offset_left = -300.0
+		_picker_header.offset_right = 300.0
+		add_child(_picker_header)
+	_picker_header.text = text
+	_picker_header.visible = true
+
+
+## Show a picker confirmation prompt below the header.
+func show_picker_prompt(text: String) -> void:
+	if _picker_prompt == null:
+		_picker_prompt = Label.new()
+		_picker_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_picker_prompt.add_theme_font_size_override("font_size", 16)
+		_picker_prompt.modulate = Color(0.85, 0.85, 0.85)
+		_picker_prompt.anchors_preset = Control.PRESET_CENTER_TOP
+		_picker_prompt.anchor_top = 0.08
+		_picker_prompt.anchor_bottom = 0.08
+		_picker_prompt.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_picker_prompt.offset_left = -400.0
+		_picker_prompt.offset_right = 400.0
+		add_child(_picker_prompt)
+	_picker_prompt.text = text
+	_picker_prompt.visible = true
+
+
+## Hide picker UI elements.
+func hide_picker() -> void:
+	if _picker_header != null:
+		_picker_header.visible = false
+	if _picker_prompt != null:
+		_picker_prompt.visible = false
