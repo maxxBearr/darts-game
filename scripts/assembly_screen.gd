@@ -8,6 +8,7 @@ signal run_confirmed
 
 var dart_build: DartBuild
 var registry: DartComponentRegistry
+var throw_mechanic: Node2D
 var base_stats: Dictionary = {}
 
 # Available parts for each slot (populated from registry)
@@ -44,14 +45,60 @@ var _balance_needle_x: float = 0.0
 var _balance_label: Label
 var _zone_label: Label
 var _begin_button: Button
-var _color_panel: VBoxContainer
-var _color_toggle_button: Button
-var _outer_color_picker: ColorPickerButton
-var _inner_color_picker: ColorPickerButton
-var _dart_preview: Control
+var _throw_color_panel: VBoxContainer
+var _throw_color_toggle: Button
+var _throw_color_pickers: Dictionary = {}
 var _zone_preview: Control
 var _v_bounce_t: float = 0.0
 var _h_bounce_t: float = 0.0
+
+# ── Layout exports ───────────────────────────────────────────────────────────
+
+@export_group("Title")
+@export var title_position: Vector2 = Vector2(0.0, 20.0)
+@export var title_font_size: int = 32
+
+@export_group("Dart Preview")
+@export var dart_preview_position: Vector2 = Vector2(440.0, 70.0)
+@export var dart_preview_size: Vector2 = Vector2(400.0, 100.0)
+@export var component_preview_height: float = 80.0
+
+@export_group("Slot Selectors")
+@export var barrel_slot_position: Vector2 = Vector2(100.0, 200.0)
+@export var shaft_slot_position: Vector2 = Vector2(490.0, 200.0)
+@export var flight_slot_position: Vector2 = Vector2(880.0, 200.0)
+@export var slot_selector_size: Vector2 = Vector2(260.0, 200.0)
+@export var slot_title_font_size: int = 18
+@export var slot_name_font_size: int = 16
+
+@export_group("Stat Bars")
+@export var stats_position: Vector2 = Vector2(40.0, 370.0)
+@export var stats_size: Vector2 = Vector2(300.0, 200.0)
+@export var stat_bar_width: float = 180.0
+@export var stat_bar_height: float = 14.0
+
+@export_group("Zone Preview")
+@export var zone_preview_position: Vector2 = Vector2(40.0, 510.0)
+@export var zone_preview_size: Vector2 = Vector2(300.0, 210.0)
+@export var zone_preview_board_radius: float = 80.0
+@export var zone_preview_label_offset: float = 0.0
+
+@export_group("Balance")
+@export var balance_position: Vector2 = Vector2(400.0, 500.0)
+@export var balance_size: Vector2 = Vector2(480.0, 90.0)
+@export var balance_bar_width: float = 460.0
+@export var balance_bar_height: float = 30.0
+
+@export_group("Throw Colors")
+@export var color_ui_position: Vector2 = Vector2(920.0, 420.0)
+@export var color_ui_size: Vector2 = Vector2(320.0, 300.0)
+
+@export_group("Begin Button")
+@export var begin_button_position: Vector2 = Vector2(540.0, 610.0)
+@export var begin_button_size: Vector2 = Vector2(200.0, 50.0)
+@export var begin_button_font_size: int = 22
+
+# ── Constants ────────────────────────────────────────────────────────────────
 
 const STAT_KEYS: Array[String] = [
 	"horizontal_range", "vertical_range",
@@ -83,15 +130,18 @@ const STAT_DESCRIPTIONS: Dictionary = {
 	"vertical_accuracy": "Tightens vertical dart landing variance. Higher = dart lands closer to where you clicked.",
 }
 
-const BAR_MAX_WIDTH: float = 180.0
-const BAR_HEIGHT: float = 14.0
 const STAT_MAX_VALUE: float = 100.0
 
-## Zone preview — all sizes derived from a mini board radius so ratios match in-game.
-## In-game board_radius is 300px; PREVIEW_RATIO scales everything proportionally.
-const PREVIEW_BOARD_RADIUS: float = 80.0
-const PREVIEW_RATIO: float = PREVIEW_BOARD_RADIUS / 300.0
+const THROW_COLOR_ENTRIES: Array = [
+	["aim_line_color", "Aim Zone"],
+	["resolve_preview_color", "Accuracy Zone"],
+	["vertical_glow_color", "V Meter Glow"],
+	["horizontal_glow_color", "H Meter Glow"],
+	["marker_color", "Marker"],
+	["marker_outline_color", "Marker Outline"],
+]
 
+# ── Process ──────────────────────────────────────────────────────────────────
 
 func _process(delta: float) -> void:
 	if not visible or dart_build == null:
@@ -119,18 +169,18 @@ func _ready() -> void:
 	_title_label = Label.new()
 	_title_label.text = "Assemble Your Dart"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title_label.position = Vector2(0.0, 20.0)
+	_title_label.position = title_position
 	_title_label.size = Vector2(1280.0, 40.0)
-	_title_label.add_theme_font_size_override("font_size", 32)
+	_title_label.add_theme_font_size_override("font_size", title_font_size)
 	add_child(_title_label)
 
 	# Dart preview area (center-top)
 	_build_dart_preview()
 
 	# Part selectors (center row)
-	_build_slot_selector("barrel", 100.0, 200.0)
-	_build_slot_selector("shaft", 490.0, 200.0)
-	_build_slot_selector("flight", 880.0, 200.0)
+	_build_slot_selector("barrel", barrel_slot_position)
+	_build_slot_selector("shaft", shaft_slot_position)
+	_build_slot_selector("flight", flight_slot_position)
 
 	# Stat bars (left column)
 	_build_stat_bars()
@@ -141,107 +191,107 @@ func _ready() -> void:
 	# Balance bar (center-bottom)
 	_build_balance_bar()
 
-	# Dart color customizer (bottom-right)
-	_build_dart_color_ui()
+	# Throw color customizer (bottom-right)
+	_build_throw_color_ui()
 
 	# Begin Run button
 	_begin_button = Button.new()
 	_begin_button.text = "Begin Run"
-	_begin_button.position = Vector2(540.0, 610.0)
-	_begin_button.size = Vector2(200.0, 50.0)
-	_begin_button.add_theme_font_size_override("font_size", 22)
+	_begin_button.position = begin_button_position
+	_begin_button.size = begin_button_size
+	_begin_button.add_theme_font_size_override("font_size", begin_button_font_size)
 	_begin_button.pressed.connect(_on_begin_run)
 	add_child(_begin_button)
 
 
 func _build_dart_preview() -> void:
 	var preview_container: HBoxContainer = HBoxContainer.new()
-	preview_container.position = Vector2(440.0, 70.0)
-	preview_container.size = Vector2(400.0, 100.0)
+	preview_container.position = dart_preview_position
+	preview_container.size = dart_preview_size
 	preview_container.add_theme_constant_override("separation", -3)
 	preview_container.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(preview_container)
 
 	# Barrel slot
 	var barrel_holder: Control = Control.new()
-	barrel_holder.custom_minimum_size = Vector2(140.0, 80.0)
+	barrel_holder.custom_minimum_size = Vector2(140.0, component_preview_height)
 	preview_container.add_child(barrel_holder)
 
 	_barrel_preview = ColorRect.new()
 	_barrel_preview.color = SLOT_COLORS["barrel"]
-	_barrel_preview.size = Vector2(140.0, 80.0)
+	_barrel_preview.size = Vector2(140.0, component_preview_height)
 	barrel_holder.add_child(_barrel_preview)
 
 	_barrel_tex = TextureRect.new()
 	_barrel_tex.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
 	_barrel_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_barrel_tex.size = Vector2(140.0, 80.0)
+	_barrel_tex.size = Vector2(140.0, component_preview_height)
 	barrel_holder.add_child(_barrel_tex)
 
 	var barrel_slot_label: Label = Label.new()
 	barrel_slot_label.text = "Barrel"
 	barrel_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	barrel_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	barrel_slot_label.size = Vector2(140.0, 80.0)
+	barrel_slot_label.size = Vector2(140.0, component_preview_height)
 	barrel_slot_label.add_theme_font_size_override("font_size", 12)
 	barrel_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
 	barrel_holder.add_child(barrel_slot_label)
 
 	# Shaft slot
 	var shaft_holder: Control = Control.new()
-	shaft_holder.custom_minimum_size = Vector2(100.0, 80.0)
+	shaft_holder.custom_minimum_size = Vector2(100.0, component_preview_height)
 	preview_container.add_child(shaft_holder)
 
 	_shaft_preview = ColorRect.new()
 	_shaft_preview.color = SLOT_COLORS["shaft"]
-	_shaft_preview.size = Vector2(100.0, 80.0)
+	_shaft_preview.size = Vector2(100.0, component_preview_height)
 	shaft_holder.add_child(_shaft_preview)
 
 	_shaft_tex = TextureRect.new()
 	_shaft_tex.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
 	_shaft_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_shaft_tex.size = Vector2(100.0, 80.0)
+	_shaft_tex.size = Vector2(100.0, component_preview_height)
 	shaft_holder.add_child(_shaft_tex)
 
 	var shaft_slot_label: Label = Label.new()
 	shaft_slot_label.text = "Shaft"
 	shaft_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shaft_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	shaft_slot_label.size = Vector2(100.0, 80.0)
+	shaft_slot_label.size = Vector2(100.0, component_preview_height)
 	shaft_slot_label.add_theme_font_size_override("font_size", 12)
 	shaft_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
 	shaft_holder.add_child(shaft_slot_label)
 
 	# Flight slot
 	var flight_holder: Control = Control.new()
-	flight_holder.custom_minimum_size = Vector2(120.0, 80.0)
+	flight_holder.custom_minimum_size = Vector2(120.0, component_preview_height)
 	preview_container.add_child(flight_holder)
 
 	_flight_preview = ColorRect.new()
 	_flight_preview.color = SLOT_COLORS["flight"]
-	_flight_preview.size = Vector2(120.0, 80.0)
+	_flight_preview.size = Vector2(120.0, component_preview_height)
 	flight_holder.add_child(_flight_preview)
 
 	_flight_tex = TextureRect.new()
 	_flight_tex.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
 	_flight_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_flight_tex.size = Vector2(120.0, 80.0)
+	_flight_tex.size = Vector2(120.0, component_preview_height)
 	flight_holder.add_child(_flight_tex)
 
 	var flight_slot_label: Label = Label.new()
 	flight_slot_label.text = "Flight"
 	flight_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	flight_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	flight_slot_label.size = Vector2(120.0, 80.0)
+	flight_slot_label.size = Vector2(120.0, component_preview_height)
 	flight_slot_label.add_theme_font_size_override("font_size", 12)
 	flight_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
 	flight_holder.add_child(flight_slot_label)
 
 
-func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
+func _build_slot_selector(slot_name: String, pos: Vector2) -> void:
 	var container: VBoxContainer = VBoxContainer.new()
-	container.position = Vector2(x, y)
-	container.size = Vector2(260.0, 200.0)
+	container.position = pos
+	container.size = slot_selector_size
 	container.add_theme_constant_override("separation", 4)
 	add_child(container)
 
@@ -249,7 +299,7 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 	var title: Label = Label.new()
 	title.text = slot_name.capitalize()
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_font_size_override("font_size", slot_title_font_size)
 	title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.6))
 	container.add_child(title)
 
@@ -268,7 +318,7 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 	var name_label: Label = Label.new()
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_label.custom_minimum_size = Vector2(160.0, 30.0)
-	name_label.add_theme_font_size_override("font_size", 16)
+	name_label.add_theme_font_size_override("font_size", slot_name_font_size)
 	arrow_row.add_child(name_label)
 
 	var right_btn: Button = Button.new()
@@ -282,14 +332,14 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 	stats_label.bbcode_enabled = true
 	stats_label.fit_content = true
 	stats_label.scroll_active = false
-	stats_label.custom_minimum_size = Vector2(260.0, 0.0)
+	stats_label.custom_minimum_size = Vector2(slot_selector_size.x, 0.0)
 	stats_label.add_theme_font_size_override("normal_font_size", 13)
 	container.add_child(stats_label)
 
 	# Perk label (shown below stats when component has a throw modifier)
 	var perk_label: Label = Label.new()
 	perk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	perk_label.custom_minimum_size = Vector2(260.0, 0.0)
+	perk_label.custom_minimum_size = Vector2(slot_selector_size.x, 0.0)
 	perk_label.add_theme_font_size_override("font_size", 12)
 	perk_label.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
 	perk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -314,8 +364,8 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 
 func _build_stat_bars() -> void:
 	var stats_container: VBoxContainer = VBoxContainer.new()
-	stats_container.position = Vector2(40.0, 370.0)
-	stats_container.size = Vector2(300.0, 200.0)
+	stats_container.position = stats_position
+	stats_container.size = stats_size
 	stats_container.add_theme_constant_override("separation", 4)
 	stats_container.theme = _create_tooltip_theme()
 	add_child(stats_container)
@@ -335,25 +385,25 @@ func _build_stat_bars() -> void:
 
 		var name_lbl: Label = Label.new()
 		name_lbl.text = STAT_DISPLAY_NAMES[key] + ":"
-		name_lbl.custom_minimum_size = Vector2(100.0, BAR_HEIGHT + 4.0)
+		name_lbl.custom_minimum_size = Vector2(100.0, stat_bar_height + 4.0)
 		name_lbl.add_theme_font_size_override("font_size", 13)
 		row.add_child(name_lbl)
 
 		# Bar background
 		var bar_bg: ColorRect = ColorRect.new()
 		bar_bg.color = Color(0.15, 0.15, 0.2)
-		bar_bg.custom_minimum_size = Vector2(BAR_MAX_WIDTH, BAR_HEIGHT)
+		bar_bg.custom_minimum_size = Vector2(stat_bar_width, stat_bar_height)
 		row.add_child(bar_bg)
 
 		# Bar fill (child of bg so it overlays)
 		var bar_fill: ColorRect = ColorRect.new()
 		bar_fill.color = Color(0.3, 0.7, 0.4)
-		bar_fill.size = Vector2(0.0, BAR_HEIGHT)
+		bar_fill.size = Vector2(0.0, stat_bar_height)
 		bar_bg.add_child(bar_fill)
 
 		# Value label
 		var val_lbl: Label = Label.new()
-		val_lbl.custom_minimum_size = Vector2(40.0, BAR_HEIGHT + 4.0)
+		val_lbl.custom_minimum_size = Vector2(40.0, stat_bar_height + 4.0)
 		val_lbl.add_theme_font_size_override("font_size", 13)
 		row.add_child(val_lbl)
 
@@ -363,8 +413,8 @@ func _build_stat_bars() -> void:
 
 func _build_balance_bar() -> void:
 	var balance_container: VBoxContainer = VBoxContainer.new()
-	balance_container.position = Vector2(400.0, 500.0)
-	balance_container.size = Vector2(480.0, 90.0)
+	balance_container.position = balance_position
+	balance_container.size = balance_size
 	balance_container.add_theme_constant_override("separation", 4)
 	add_child(balance_container)
 
@@ -376,7 +426,7 @@ func _build_balance_bar() -> void:
 	balance_container.add_child(balance_title)
 
 	_balance_bar = Control.new()
-	_balance_bar.custom_minimum_size = Vector2(460.0, 30.0)
+	_balance_bar.custom_minimum_size = Vector2(balance_bar_width, balance_bar_height)
 	_balance_bar.draw.connect(_draw_balance_bar)
 	balance_container.add_child(_balance_bar)
 
@@ -424,90 +474,58 @@ func _draw_balance_bar() -> void:
 	_balance_bar.draw_rect(Rect2(0.0, 0.0, w, h), Color(0.5, 0.5, 0.5, 0.6), false, 1.0)
 
 
-func _build_dart_color_ui() -> void:
+func _build_throw_color_ui() -> void:
 	var container: VBoxContainer = VBoxContainer.new()
-	container.position = Vector2(920.0, 480.0)
-	container.size = Vector2(300.0, 160.0)
+	container.position = color_ui_position
+	container.size = color_ui_size
 	container.add_theme_constant_override("separation", 6)
 	add_child(container)
 
-	_color_toggle_button = Button.new()
-	_color_toggle_button.text = "Customize Dart Colors"
-	_color_toggle_button.add_theme_font_size_override("font_size", 14)
-	_color_toggle_button.pressed.connect(_on_color_toggle)
-	container.add_child(_color_toggle_button)
+	_throw_color_toggle = Button.new()
+	_throw_color_toggle.text = "Customize Throw Colors"
+	_throw_color_toggle.add_theme_font_size_override("font_size", 14)
+	_throw_color_toggle.pressed.connect(func() -> void: _throw_color_panel.visible = not _throw_color_panel.visible)
+	container.add_child(_throw_color_toggle)
 
-	_color_panel = VBoxContainer.new()
-	_color_panel.add_theme_constant_override("separation", 6)
-	_color_panel.visible = false
-	container.add_child(_color_panel)
+	_throw_color_panel = VBoxContainer.new()
+	_throw_color_panel.add_theme_constant_override("separation", 4)
+	_throw_color_panel.visible = false
+	container.add_child(_throw_color_panel)
 
-	# Dart preview circle
-	_dart_preview = Control.new()
-	_dart_preview.custom_minimum_size = Vector2(60.0, 60.0)
-	_dart_preview.draw.connect(_draw_dart_preview)
-	_color_panel.add_child(_dart_preview)
+	for entry: Array in THROW_COLOR_ENTRIES:
+		var prop: String = entry[0]
+		var display_name: String = entry[1]
 
-	# Outer color row
-	var outer_row: HBoxContainer = HBoxContainer.new()
-	outer_row.add_theme_constant_override("separation", 8)
-	_color_panel.add_child(outer_row)
+		var row: HBoxContainer = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		_throw_color_panel.add_child(row)
 
-	var outer_label: Label = Label.new()
-	outer_label.text = "Outer:"
-	outer_label.add_theme_font_size_override("font_size", 13)
-	outer_label.custom_minimum_size = Vector2(50.0, 0.0)
-	outer_row.add_child(outer_label)
+		var lbl: Label = Label.new()
+		lbl.text = display_name + ":"
+		lbl.add_theme_font_size_override("font_size", 13)
+		lbl.custom_minimum_size = Vector2(110.0, 0.0)
+		row.add_child(lbl)
 
-	_outer_color_picker = ColorPickerButton.new()
-	_outer_color_picker.custom_minimum_size = Vector2(80.0, 30.0)
-	_outer_color_picker.color = Color(0.9, 0.85, 0.0)
-	_outer_color_picker.color_changed.connect(_on_dart_color_changed)
-	outer_row.add_child(_outer_color_picker)
+		var picker: ColorPickerButton = ColorPickerButton.new()
+		picker.custom_minimum_size = Vector2(80.0, 28.0)
+		picker.edit_alpha = true
+		picker.color = throw_mechanic.get(prop) if throw_mechanic else Color.WHITE
+		picker.color_changed.connect(_on_throw_color_changed.bind(prop))
+		row.add_child(picker)
 
-	# Inner color row
-	var inner_row: HBoxContainer = HBoxContainer.new()
-	inner_row.add_theme_constant_override("separation", 8)
-	_color_panel.add_child(inner_row)
-
-	var inner_label: Label = Label.new()
-	inner_label.text = "Inner:"
-	inner_label.add_theme_font_size_override("font_size", 13)
-	inner_label.custom_minimum_size = Vector2(50.0, 0.0)
-	inner_row.add_child(inner_label)
-
-	_inner_color_picker = ColorPickerButton.new()
-	_inner_color_picker.custom_minimum_size = Vector2(80.0, 30.0)
-	_inner_color_picker.color = Color(0.2, 0.2, 0.2)
-	_inner_color_picker.color_changed.connect(_on_dart_color_changed)
-	inner_row.add_child(_inner_color_picker)
+		_throw_color_pickers[prop] = picker
 
 
-func _on_color_toggle() -> void:
-	_color_panel.visible = not _color_panel.visible
+func _on_throw_color_changed(color: Color, property: String) -> void:
+	if throw_mechanic:
+		throw_mechanic.set(property, color)
 
 
-func _on_dart_color_changed(_color: Color) -> void:
-	if dart_build:
-		dart_build.dart_outer_color = _outer_color_picker.color
-		dart_build.dart_inner_color = _inner_color_picker.color
-	_dart_preview.queue_redraw()
-
-
-func _sync_color_pickers() -> void:
-	if dart_build and _outer_color_picker and _inner_color_picker:
-		_outer_color_picker.color = dart_build.dart_outer_color
-		_inner_color_picker.color = dart_build.dart_inner_color
-		if _dart_preview:
-			_dart_preview.queue_redraw()
-
-
-func _draw_dart_preview() -> void:
-	var center: Vector2 = Vector2(30.0, 30.0)
-	var outer_color: Color = _outer_color_picker.color if _outer_color_picker else Color(0.9, 0.85, 0.0)
-	var inner_color: Color = _inner_color_picker.color if _inner_color_picker else Color(0.2, 0.2, 0.2)
-	_dart_preview.draw_circle(center, 16.0, outer_color)
-	_dart_preview.draw_circle(center, 6.0, inner_color)
+func _sync_throw_color_pickers() -> void:
+	if throw_mechanic == null:
+		return
+	for prop: String in _throw_color_pickers:
+		_throw_color_pickers[prop].color = throw_mechanic.get(prop)
 
 
 ## Show the assembly screen with the given base stats for bar display.
@@ -532,14 +550,7 @@ func show_assembly(p_base_stats: Dictionary) -> void:
 		if _flights.size() > 0:
 			dart_build.equip_flight(_flights[_flight_idx])
 
-		# Sync color pickers with stored dart colors
-		if _outer_color_picker:
-			_outer_color_picker.color = dart_build.dart_outer_color
-		if _inner_color_picker:
-			_inner_color_picker.color = dart_build.dart_inner_color
-		if _dart_preview:
-			_dart_preview.queue_redraw()
-
+	_sync_throw_color_pickers()
 	_refresh_all()
 	visible = true
 
@@ -573,7 +584,6 @@ func _on_arrow_pressed(slot_name: String, direction: int) -> void:
 			_flight_idx = wrapi(_flight_idx + direction, 0, _flights.size())
 			if dart_build:
 				dart_build.equip_flight(_flights[_flight_idx])
-				_sync_color_pickers()
 	_refresh_all()
 
 
@@ -660,7 +670,7 @@ func _refresh_stat_bars() -> void:
 		var val_label: Label = _stat_value_labels[key]
 
 		var fill_fraction: float = clampf(total / STAT_MAX_VALUE, 0.0, 1.0)
-		bar_fill.size = Vector2(BAR_MAX_WIDTH * fill_fraction, BAR_HEIGHT)
+		bar_fill.size = Vector2(stat_bar_width * fill_fraction, stat_bar_height)
 
 		# Color based on bonus direction
 		if bonuses[key] > 0.0:
@@ -747,28 +757,29 @@ func _create_tooltip_theme() -> Theme:
 	return t
 
 
-func _build_zone_preview() -> void:
-	var container: VBoxContainer = VBoxContainer.new()
-	container.position = Vector2(40.0, 510.0)
-	container.size = Vector2(300.0, 210.0)
-	container.add_theme_constant_override("separation", 2)
-	add_child(container)
+# ── Zone Preview ─────────────────────────────────────────────────────────────
 
+func _build_zone_preview() -> void:
 	var preview_title: Label = Label.new()
 	preview_title.text = "— Zone Preview —"
+	preview_title.position = zone_preview_position + Vector2(0.0, zone_preview_label_offset)
+	preview_title.size = Vector2(zone_preview_size.x, 20.0)
 	preview_title.add_theme_font_size_override("font_size", 14)
 	preview_title.modulate = Color(0.8, 0.8, 0.6)
-	container.add_child(preview_title)
+	add_child(preview_title)
 
 	_zone_preview = Control.new()
-	_zone_preview.custom_minimum_size = Vector2(280.0, 210.0)
+	_zone_preview.position = zone_preview_position + Vector2(0.0, 22.0)
+	_zone_preview.size = Vector2(zone_preview_size.x - 20.0, zone_preview_size.y - 22.0)
 	_zone_preview.draw.connect(_draw_zone_preview)
-	container.add_child(_zone_preview)
+	add_child(_zone_preview)
 
 
 func _draw_zone_preview() -> void:
 	if dart_build == null or _zone_preview == null:
 		return
+
+	var preview_ratio: float = zone_preview_board_radius / 300.0
 
 	var bonuses: Dictionary = dart_build.get_total_stat_bonuses()
 	var h_range: float = base_stats.get("horizontal_range", 20.0) + bonuses.get("horizontal_range", 0.0)
@@ -776,32 +787,36 @@ func _draw_zone_preview() -> void:
 	var h_acc: float = base_stats.get("horizontal_accuracy", 25.0) + bonuses.get("horizontal_accuracy", 0.0)
 	var v_acc: float = base_stats.get("vertical_accuracy", 25.0) + bonuses.get("vertical_accuracy", 0.0)
 
-	## Map stats to pixel sizes — using in-game max/min values scaled by PREVIEW_RATIO
+	## Map stats to pixel sizes — using in-game max/min values scaled by preview_ratio
 	var h_range_n: float = clampf((h_range - 1.0) / 99.0, 0.0, 1.0)
 	var v_range_n: float = clampf((v_range - 1.0) / 99.0, 0.0, 1.0)
 	var h_acc_n: float = clampf((h_acc - 1.0) / 99.0, 0.0, 1.0)
 	var v_acc_n: float = clampf((v_acc - 1.0) / 99.0, 0.0, 1.0)
 
-	var aim_half_w: float = lerpf(270.0, 8.0, h_range_n) * PREVIEW_RATIO
-	var aim_half_h: float = lerpf(270.0, 5.0, v_range_n) * PREVIEW_RATIO
-	var acc_half_w: float = lerpf(80.0, 5.0, h_acc_n) * PREVIEW_RATIO
-	var acc_half_h: float = lerpf(90.0, 5.0, v_acc_n) * PREVIEW_RATIO
+	var aim_half_w: float = lerpf(270.0, 8.0, h_range_n) * preview_ratio
+	var aim_half_h: float = lerpf(270.0, 5.0, v_range_n) * preview_ratio
+	var acc_half_w: float = lerpf(80.0, 5.0, h_acc_n) * preview_ratio
+	var acc_half_h: float = lerpf(90.0, 5.0, v_acc_n) * preview_ratio
 
 	var center: Vector2 = Vector2(_zone_preview.size.x / 2.0, _zone_preview.size.y / 2.0)
 
 	## Mini dartboard (background reference)
 	_draw_preview_dartboard(center)
 
+	## Read colors from throw_mechanic (with fallback defaults)
+	var aim_base: Color = throw_mechanic.aim_line_color if throw_mechanic else Color(0.2, 0.5, 1.0, 0.3)
+	var acc_base: Color = throw_mechanic.resolve_preview_color if throw_mechanic else Color(1.0, 0.9, 0.2, 0.25)
+	var v_glow: Color = throw_mechanic.vertical_glow_color if throw_mechanic else Color(1.0, 0.3, 0.3, 0.15)
+	var h_glow: Color = throw_mechanic.horizontal_glow_color if throw_mechanic else Color(0.3, 0.5, 1.0, 0.15)
+
 	## Aim ellipse (outer)
-	var aim_color: Color = Color(0.2, 0.5, 1.0, 0.25)
-	var aim_outline_color: Color = Color(0.2, 0.5, 1.0, 0.6)
-	_draw_preview_ellipse_filled(center, aim_half_w, aim_half_h, aim_color)
+	var aim_outline_color: Color = Color(aim_base.r, aim_base.g, aim_base.b, minf(aim_base.a + 0.3, 1.0))
+	_draw_preview_ellipse_filled(center, aim_half_w, aim_half_h, aim_base)
 	_draw_preview_ellipse_outline(center, aim_half_w, aim_half_h, aim_outline_color)
 
 	## Accuracy ellipse (inner)
-	var acc_color: Color = Color(1.0, 0.9, 0.2, 0.3)
-	var acc_outline_color: Color = Color(1.0, 0.9, 0.2, 0.7)
-	_draw_preview_ellipse_filled(center, acc_half_w, acc_half_h, acc_color)
+	var acc_outline_color: Color = Color(acc_base.r, acc_base.g, acc_base.b, minf(acc_base.a + 0.3, 1.0))
+	_draw_preview_ellipse_filled(center, acc_half_w, acc_half_h, acc_base)
 	_draw_preview_ellipse_outline(center, acc_half_w, acc_half_h, acc_outline_color)
 
 	## V speed line — horizontal line bouncing up and down, clipped to aim ellipse
@@ -809,7 +824,7 @@ func _draw_zone_preview() -> void:
 	var v_line_y: float = center.y + v_offset
 	var v_dy: float = v_offset / aim_half_h if aim_half_h > 0.0 else 0.0
 	var v_x_extent: float = aim_half_w * sqrt(maxf(1.0 - v_dy * v_dy, 0.0))
-	var v_line_color: Color = Color(1.0, 0.3, 0.3, 0.7)
+	var v_line_color: Color = Color(v_glow.r, v_glow.g, v_glow.b, 0.7)
 	_zone_preview.draw_line(Vector2(center.x - v_x_extent, v_line_y), Vector2(center.x + v_x_extent, v_line_y), v_line_color, 1.5)
 
 	## H speed line — vertical line bouncing left and right, clipped to aim ellipse
@@ -817,7 +832,7 @@ func _draw_zone_preview() -> void:
 	var h_line_x: float = center.x + h_offset
 	var h_dx: float = h_offset / aim_half_w if aim_half_w > 0.0 else 0.0
 	var h_y_extent: float = aim_half_h * sqrt(maxf(1.0 - h_dx * h_dx, 0.0))
-	var h_line_color: Color = Color(0.3, 0.5, 1.0, 0.7)
+	var h_line_color: Color = Color(h_glow.r, h_glow.g, h_glow.b, 0.7)
 	_zone_preview.draw_line(Vector2(h_line_x, center.y - h_y_extent), Vector2(h_line_x, center.y + h_y_extent), h_line_color, 1.5)
 
 	## Crosshair at center
@@ -833,7 +848,7 @@ func _draw_zone_preview() -> void:
 
 
 func _draw_preview_dartboard(center: Vector2) -> void:
-	var r: float = PREVIEW_BOARD_RADIUS
+	var r: float = zone_preview_board_radius
 
 	# Surround
 	_zone_preview.draw_circle(center, r * 1.15, Color(0.12, 0.12, 0.12))

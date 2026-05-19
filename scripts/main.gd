@@ -165,6 +165,7 @@ func _ready() -> void:
 	# Connect assembly screen
 	assembly_screen.dart_build = dart_build
 	assembly_screen.registry = dart_component_registry
+	assembly_screen.throw_mechanic = throw_mechanic
 	assembly_screen.run_confirmed.connect(_on_run_confirmed)
 
 	# Center the dartboard on screen

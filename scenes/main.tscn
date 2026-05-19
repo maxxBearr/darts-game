@@ -330,6 +330,10 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("10_assembly")
+stats_position = Vector2(40, 350)
+zone_preview_label_offset = 12.59
+color_ui_position = Vector2(920, 500)
+color_ui_size = Vector2(200, 180)
 
 [node name="X01Game" type="Node" parent="." unique_id=617431942]
 script = ExtResource("5_x01")
