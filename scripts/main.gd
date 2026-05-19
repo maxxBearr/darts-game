@@ -267,7 +267,7 @@ func _start_new_throw() -> void:
 	var darts_remaining: int = 3 - x01_game.darts_this_turn
 	var is_last_turn: bool = x01_game.current_turn == x01_game.max_turns
 	hud.update_darts(darts_remaining, is_last_turn)
-	hud.show_instruction("Click or Space to lock aim position")
+	hud.show_instruction("Move to aim, click to place zone")
 	throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
 
 
@@ -722,15 +722,12 @@ func _on_throw_state_changed(new_state: int) -> void:
 	match new_state:
 		throw_mechanic.ThrowState.AIMING:
 			_enable_hover()
-		throw_mechanic.ThrowState.POSITIONING:
-			_disable_hover()
-			hud.show_instruction("W/S or Up/Down to move window, Enter/Space to lock")
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
 			_disable_hover()
-			hud.show_instruction("Click or Space to lock vertical position")
+			hud.show_instruction("Click or Space to lock vertical")
 		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
 			_disable_hover()
-			hud.show_instruction("Click or Space to lock horizontal position")
+			hud.show_instruction("Click or Space to lock horizontal")
 		throw_mechanic.ThrowState.RESOLVING:
 			_disable_hover()
 			hud.show_instruction("Releasing...")

@@ -1,30 +1,36 @@
 extends Node2D
-## Four-stage throw mechanic: aim line (horizontal), vertical window positioning,
-## vertical release, then horizontal release. Emits throw_completed with the final
-## pixel position when all stages are done.
+## Three-stage ellipse-based throw mechanic: place aim ellipse, vertical release,
+## then horizontal release. Emits throw_completed with the final pixel position
+## when all stages are done.
 
 signal throw_completed(hit_position: Vector2)
 signal state_changed(new_state: ThrowState)
 
-enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE }
+enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE }
 
-## Controls horizontal range of the aim line. Higher = tighter range.
-## 1 = worst (line half-width equals max_aim_half_width).
-## 100 = best (line half-width equals min_aim_half_width).
+## Controls horizontal range of the aim ellipse. Higher = tighter range.
+## 1 = worst (half-width equals max_aim_half_width).
+## 100 = best (half-width equals min_aim_half_width).
 ## Typical gameplay range: 30 to 80.
-@export var horizontal_range: float = 20.0
+@export var horizontal_range: float = 5.0
 
-## Maximum aim line half-width in pixels (at horizontal_range = 1). The worst possible spread.
-@export var max_aim_half_width: float = 200.0
+## Maximum aim ellipse half-width in pixels (at horizontal_range = 1). The worst possible horizontal spread.
+@export var max_aim_half_width: float = 300.0
 
-## Minimum aim line half-width in pixels (at horizontal_range = 100). The tightest possible spread.
+## Minimum aim ellipse half-width in pixels (at horizontal_range = 100). The tightest possible horizontal spread.
 @export var min_aim_half_width: float = 5.0
 
-## Controls vertical range of the positioning window. Higher = tighter range.
-## 1 = almost no shrinkage (window stays near full height).
-## 100 = shrinks to nearly zero height (extremely tight).
+## Controls vertical range of the aim ellipse. Higher = tighter range.
+## 1 = worst (half-height equals max_aim_half_height).
+## 100 = best (half-height equals min_aim_half_height).
 ## Typical gameplay range: 30 to 70.
-@export var vertical_range: float = 20.0
+@export var vertical_range: float = 5.0
+
+## Maximum aim ellipse half-height in pixels (at vertical_range = 1). The worst possible vertical spread.
+@export var max_aim_half_height: float = 300.0
+
+## Minimum aim ellipse half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
+@export var min_aim_half_height: float = 5.0
 
 ## Controls vertical marker bounce speed. Higher = slower = easier to time.
 ## Range ~1.0 (hard) to 5.0 (easy).
@@ -61,26 +67,23 @@ enum ThrowState { IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEAS
 ## Positive = dart lands lower, Negative = dart lands higher.
 var accuracy_skew_v: float = 0.0
 
-## Semi-transparent color of the aim line band.
+## Semi-transparent color of the aim ellipse fill.
 @export var aim_line_color: Color = Color(0.2, 0.5, 1.0, 0.3)
 
-## Color of the vertical window segment during positioning.
-@export var window_color: Color = Color(0.2, 0.8, 0.4, 0.3)
-
-## Color of the vertical window border/outline.
-@export var window_border_color: Color = Color(0.2, 0.8, 0.4, 0.7)
-
-## Speed at which the player can move the window up/down (pixels per second).
+## Speed at which WASD moves the aim ellipse during AIMING (pixels per second).
 @export var window_move_speed: float = 300.0
-
-## Duration of the shrink tween in seconds.
-@export var shrink_tween_duration: float = 0.4
 
 ## Color of the marker circle (shared by vertical and horizontal markers).
 @export var marker_color: Color = Color(1.0, 0.3, 0.3, 0.9)
 
 ## Size (radius) of the marker circle in pixels (shared by both markers).
 @export var marker_size: float = 8.0
+
+## Color of the marker outline ring for visibility against busy backgrounds.
+@export var marker_outline_color: Color = Color(1.0, 1.0, 1.0, 0.9)
+
+## Thickness of the marker outline ring in pixels. Set to 0 to disable.
+@export var marker_outline_thickness: float = 2.0
 
 ## Color of the vertical release glow zone.
 @export var vertical_glow_color: Color = Color(1.0, 0.3, 0.3, 0.15)
@@ -97,15 +100,13 @@ var accuracy_skew_v: float = 0.0
 ## Controls how tightly the Gaussian distribution clusters toward the aim point.
 ## Lower values = tighter clustering near center (more skill-rewarding).
 ## Higher values = wider spread (more RNG).
-## At 0.4, roughly 95% of throws land in the inner 80% of the variance box.
+## At 0.4, roughly 95% of throws land in the inner 80% of the accuracy ellipse.
 @export_range(0.2, 0.6, 0.01) var gaussian_spread: float = 0.4
 
 # Internal state
 var _state: ThrowState = ThrowState.IDLE
 var _board_center: Vector2 = Vector2.ZERO
 var _board_radius: float = 300.0
-var _aim_x: float = 0.0
-var _locked_aim_x: float = 0.0
 var _release_y: float = 0.0
 var _bounce_t: float = 0.0
 
@@ -116,20 +117,26 @@ var _locked_release_y: float = 0.0
 var _horizontal_x: float = 0.0
 var _horizontal_bounce_t: float = 0.0
 
-# Full line bounds (recorded when entering POSITIONING)
-var _full_line_top: float = 0.0
-var _full_line_bottom: float = 0.0
-var _full_line_height: float = 0.0
-
-# Vertical window state
-var _window_top: float = 0.0
-var _window_bottom: float = 0.0
-var _window_height: float = 0.0
-var _window_center_y: float = 0.0
-var _is_shrink_complete: bool = false
-
 # Animated skew — tweens from 0.0 to accuracy_skew_v during resolve preview
 var _current_skew_offset: float = 0.0
+
+## Center of the placed aim ellipse (locked when player confirms placement).
+var _placed_center: Vector2 = Vector2.ZERO
+
+## Horizontal semi-axis of the aim ellipse (computed from horizontal_range at placement time).
+var _aim_half_width: float = 0.0
+
+## Vertical semi-axis of the aim ellipse (computed from vertical_range at placement time).
+var _aim_half_height: float = 0.0
+
+## Whether mouse is currently controlling aim position (vs WASD).
+var _mouse_controls_aim: bool = true
+
+## Current aim position during AIMING state (before placement is locked).
+var _aim_center: Vector2 = Vector2.ZERO
+
+# Track last mouse position to detect mouse movement
+var _last_mouse_pos: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
@@ -140,11 +147,12 @@ func _ready() -> void:
 func start_throw(board_center: Vector2, board_radius: float) -> void:
 	_board_center = board_center
 	_board_radius = board_radius
-	_aim_x = _board_center.x
+	_aim_center = _board_center
+	_mouse_controls_aim = true
+	_last_mouse_pos = get_global_mouse_position()
 	_state = ThrowState.AIMING
 	_bounce_t = 0.0
 	_horizontal_bounce_t = 0.0
-	_is_shrink_complete = false
 	set_process(true)
 	state_changed.emit(ThrowState.AIMING)
 	queue_redraw()
@@ -155,19 +163,25 @@ func get_throw_state() -> ThrowState:
 	return _state
 
 
-## Compute the actual aim line half-width in pixels from the horizontal_range stat (1–100).
+## Compute the aim ellipse half-width in pixels from the horizontal_range stat (1-100).
 func _get_aim_half_width() -> float:
 	var normalized: float = clampf((horizontal_range - 1.0) / 99.0, 0.0, 1.0)
 	return lerpf(max_aim_half_width, min_aim_half_width, normalized)
 
 
-## Compute the vertical accuracy half-height in pixels (1–100 stat).
+## Compute the aim ellipse half-height in pixels from the vertical_range stat (1-100).
+func _get_aim_half_height() -> float:
+	var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
+	return lerpf(max_aim_half_height, min_aim_half_height, normalized)
+
+
+## Compute the vertical accuracy half-height in pixels (1-100 stat).
 func _get_vertical_accuracy_half() -> float:
 	var normalized: float = clampf((vertical_accuracy - 1.0) / 99.0, 0.0, 1.0)
 	return lerpf(max_vertical_accuracy_half, min_vertical_accuracy_half, normalized)
 
 
-## Compute the horizontal accuracy half-width in pixels (1–100 stat).
+## Compute the horizontal accuracy half-width in pixels (1-100 stat).
 func _get_horizontal_accuracy_half() -> float:
 	var normalized: float = clampf((horizontal_accuracy - 1.0) / 99.0, 0.0, 1.0)
 	return lerpf(max_horizontal_accuracy_half, min_horizontal_accuracy_half, normalized)
@@ -183,45 +197,57 @@ func _get_horizontal_bounce_speed() -> float:
 	return (6.0 - clampf(horizontal_speed, 1.0, 5.0)) * 2.5
 
 
+## Clamp aim center so it stays within the board circle (ellipse may overhang).
+func _clamp_aim_to_board() -> void:
+	_aim_center.x = clampf(_aim_center.x,
+		_board_center.x - _board_radius,
+		_board_center.x + _board_radius)
+	_aim_center.y = clampf(_aim_center.y,
+		_board_center.y - _board_radius,
+		_board_center.y + _board_radius)
+
+
 func _process(delta: float) -> void:
 	match _state:
 		ThrowState.AIMING:
-			# Aim line follows horizontal mouse position
-			_aim_x = get_global_mouse_position().x
-			queue_redraw()
+			# Check for mouse movement — if mouse moved, reclaim mouse control
+			var current_mouse: Vector2 = get_global_mouse_position()
+			if current_mouse.distance_to(_last_mouse_pos) > 1.0:
+				_mouse_controls_aim = true
+			_last_mouse_pos = current_mouse
 
-		ThrowState.POSITIONING:
-			# Handle keyboard input for moving the window up/down (W/S or Up/Down)
-			if _is_shrink_complete:
+			if _mouse_controls_aim:
+				# Ellipse center tracks mouse position
+				_aim_center = current_mouse
+			else:
+				# WASD / arrow key movement
+				var move_dir: Vector2 = Vector2.ZERO
+				if Input.is_action_pressed("ui_left") or Input.is_key_pressed(KEY_A):
+					move_dir.x -= 1.0
+				if Input.is_action_pressed("ui_right") or Input.is_key_pressed(KEY_D):
+					move_dir.x += 1.0
 				if Input.is_action_pressed("ui_up") or Input.is_key_pressed(KEY_W):
-					_window_center_y -= window_move_speed * delta
+					move_dir.y -= 1.0
 				if Input.is_action_pressed("ui_down") or Input.is_key_pressed(KEY_S):
-					_window_center_y += window_move_speed * delta
+					move_dir.y += 1.0
+				if move_dir != Vector2.ZERO:
+					_aim_center += move_dir.normalized() * window_move_speed * delta
 
-				# Clamp so window stays within original full line bounds
-				var half_height: float = _window_height / 2.0
-				_window_center_y = clampf(_window_center_y,
-					_full_line_top + half_height,
-					_full_line_bottom - half_height)
-
-				# Update window edges from center
-				_window_top = _window_center_y - half_height
-				_window_bottom = _window_center_y + half_height
+			_clamp_aim_to_board()
 			queue_redraw()
 
 		ThrowState.VERTICAL_RELEASE:
-			# Marker bounces vertically within the locked window
+			# Marker bounces vertically across the full height of the placed ellipse
 			var bounce_speed: float = _get_vertical_bounce_speed()
 			_bounce_t += delta * bounce_speed
-			_release_y = _window_center_y + sin(_bounce_t) * (_window_height / 2.0)
+			_release_y = _placed_center.y + sin(_bounce_t) * _aim_half_height
 			queue_redraw()
 
 		ThrowState.HORIZONTAL_RELEASE:
-			# Marker bounces horizontally across the aim band width
+			# Marker bounces horizontally across the full width of the placed ellipse
 			var bounce_speed: float = _get_horizontal_bounce_speed()
 			_horizontal_bounce_t += delta * bounce_speed
-			var aim_half_w: float = _get_aim_half_width()
-			_horizontal_x = _locked_aim_x + sin(_horizontal_bounce_t) * aim_half_w
+			_horizontal_x = _placed_center.x + sin(_horizontal_bounce_t) * _aim_half_width
 			queue_redraw()
 
 		ThrowState.RESOLVING:
@@ -232,26 +258,25 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Detect WASD/arrow presses to switch away from mouse control
+	if _state == ThrowState.AIMING and event is InputEventKey:
+		var key: InputEventKey = event as InputEventKey
+		if key.pressed:
+			if key.keycode in [KEY_W, KEY_A, KEY_S, KEY_D]:
+				_mouse_controls_aim = false
+
+	# Handle mouse click for all applicable states
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			match _state:
 				ThrowState.AIMING:
-					_locked_aim_x = _aim_x
-					_state = ThrowState.POSITIONING
+					_place_aim_ellipse()
 					get_viewport().set_input_as_handled()
-					_enter_positioning()
 				ThrowState.VERTICAL_RELEASE:
-					# Lock vertical position, transition to horizontal release
-					_locked_release_y = _release_y
-					_state = ThrowState.HORIZONTAL_RELEASE
-					_horizontal_bounce_t = 0.0
-					_horizontal_x = _locked_aim_x
+					_lock_vertical()
 					get_viewport().set_input_as_handled()
-					state_changed.emit(ThrowState.HORIZONTAL_RELEASE)
-					queue_redraw()
 				ThrowState.HORIZONTAL_RELEASE:
-					# Freeze horizontal and enter resolve preview
 					get_viewport().set_input_as_handled()
 					_enter_resolving()
 
@@ -261,72 +286,36 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key.pressed and (key.keycode == KEY_ENTER or key.keycode == KEY_SPACE):
 			match _state:
 				ThrowState.AIMING:
-					_locked_aim_x = _aim_x
-					_state = ThrowState.POSITIONING
+					_place_aim_ellipse()
 					get_viewport().set_input_as_handled()
-					_enter_positioning()
-				ThrowState.POSITIONING:
-					if _is_shrink_complete:
-						# Lock window and transition to VERTICAL_RELEASE
-						_state = ThrowState.VERTICAL_RELEASE
-						_bounce_t = 0.0
-						_release_y = _window_center_y
-						get_viewport().set_input_as_handled()
-						state_changed.emit(ThrowState.VERTICAL_RELEASE)
-						queue_redraw()
 				ThrowState.VERTICAL_RELEASE:
-					# Lock vertical position, transition to horizontal release
-					_locked_release_y = _release_y
-					_state = ThrowState.HORIZONTAL_RELEASE
-					_horizontal_bounce_t = 0.0
-					_horizontal_x = _locked_aim_x
+					_lock_vertical()
 					get_viewport().set_input_as_handled()
-					state_changed.emit(ThrowState.HORIZONTAL_RELEASE)
-					queue_redraw()
 				ThrowState.HORIZONTAL_RELEASE:
-					# Freeze horizontal and enter resolve preview
 					get_viewport().set_input_as_handled()
 					_enter_resolving()
 
 
-## Set up the POSITIONING state: record bounds, calculate target height, start shrink tween.
-func _enter_positioning() -> void:
-	# Record the full line bounds
-	_full_line_top = _board_center.y - _board_radius
-	_full_line_bottom = _board_center.y + _board_radius
-	_full_line_height = _full_line_bottom - _full_line_top
-
-	# Calculate target window height based on vertical_range (1–100 → normalized fraction)
-	var vertical_fraction: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
-	_window_height = _full_line_height * (1.0 - vertical_fraction)
-	_window_height = maxf(_window_height, 20.0)
-
-	# Start with full line bounds (pre-tween)
-	_window_top = _full_line_top
-	_window_bottom = _full_line_bottom
-	_window_center_y = _board_center.y
-	_is_shrink_complete = false
-
-	# Start the shrink tween: animate window edges inward to target height
-	var target_top: float = _board_center.y - _window_height / 2.0
-	var target_bottom: float = _board_center.y + _window_height / 2.0
-
-	var tween: Tween = create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(self, "_window_top", target_top, shrink_tween_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	tween.tween_property(self, "_window_bottom", target_bottom, shrink_tween_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	tween.set_parallel(false)
-	tween.tween_callback(_on_shrink_complete)
-
-	# Emit state change signal
-	state_changed.emit(ThrowState.POSITIONING)
+## Lock the aim ellipse in place and transition to VERTICAL_RELEASE.
+func _place_aim_ellipse() -> void:
+	_placed_center = _aim_center
+	_aim_half_width = _get_aim_half_width()
+	_aim_half_height = _get_aim_half_height()
+	_bounce_t = 0.0
+	_release_y = _placed_center.y
+	_state = ThrowState.VERTICAL_RELEASE
+	state_changed.emit(ThrowState.VERTICAL_RELEASE)
+	queue_redraw()
 
 
-## Called when the shrink tween finishes.
-func _on_shrink_complete() -> void:
-	_is_shrink_complete = true
-	_window_top = _window_center_y - _window_height / 2.0
-	_window_bottom = _window_center_y + _window_height / 2.0
+## Lock the vertical position and transition to HORIZONTAL_RELEASE.
+func _lock_vertical() -> void:
+	_locked_release_y = _release_y
+	_state = ThrowState.HORIZONTAL_RELEASE
+	_horizontal_bounce_t = 0.0
+	_horizontal_x = _placed_center.x
+	state_changed.emit(ThrowState.HORIZONTAL_RELEASE)
+	queue_redraw()
 
 
 ## Transition to RESOLVING: freeze the marker, show landing zone preview, start timer.
@@ -352,210 +341,223 @@ func _on_resolve_timer_finished() -> void:
 	_resolve_throw()
 
 
-## Resolve the final dart position using Gaussian-weighted variance zones.
-## Darts are most likely to land near the aimed position, with probability
-## falling off toward the edges of the variance box.
+## Resolve the final dart position using Gaussian sampling with ellipse rejection.
 func _resolve_throw() -> void:
-	# Horizontal: Gaussian-weighted within horizontal consistency zone
 	var h_half: float = _get_horizontal_accuracy_half()
-	var horizontal_offset: float = clampf(
-		randfn(0.0, h_half * gaussian_spread),
-		-h_half,
-		h_half
-	)
-	var final_x: float = _horizontal_x + horizontal_offset
-
-	# Vertical: Gaussian-weighted within vertical consistency zone
 	var v_half: float = _get_vertical_accuracy_half()
-	var vertical_offset: float = clampf(
-		randfn(0.0, v_half * gaussian_spread),
-		-v_half,
-		v_half
-	)
-	var final_y: float = _locked_release_y + vertical_offset + accuracy_skew_v
+	var center_x: float = _horizontal_x
+	var center_y: float = _locked_release_y + accuracy_skew_v
 
-	var hit_position: Vector2 = Vector2(final_x, final_y)
+	# Gaussian sample with ellipse rejection
+	var offset_x: float = 0.0
+	var offset_y: float = 0.0
+	for i: int in range(20):
+		offset_x = randfn(0.0, h_half * gaussian_spread)
+		offset_y = randfn(0.0, v_half * gaussian_spread)
+		# Check if point is inside the accuracy ellipse
+		var ellipse_check: float = (offset_x * offset_x) / (h_half * h_half) + (offset_y * offset_y) / (v_half * v_half)
+		if ellipse_check <= 1.0:
+			break
+
+	var hit_position: Vector2 = Vector2(center_x + offset_x, center_y + offset_y)
 	queue_redraw()
 	throw_completed.emit(hit_position)
 
 
+# ── Drawing ──────────────────────────────────────────────────────────────────
+
 func _draw() -> void:
 	match _state:
 		ThrowState.AIMING:
-			# Draw the semi-transparent aim band
-			var top: float = _board_center.y - _board_radius
-			var bottom: float = _board_center.y + _board_radius
-			var half_w: float = _get_aim_half_width()
-			var rect: Rect2 = Rect2(
-				Vector2(_aim_x - half_w, top) - global_position,
-				Vector2(half_w * 2.0, bottom - top)
-			)
-			draw_rect(rect, aim_line_color)
-			# Draw center line
-			var center_top: Vector2 = Vector2(_aim_x, top) - global_position
-			var center_bottom: Vector2 = Vector2(_aim_x, bottom) - global_position
-			draw_line(center_top, center_bottom, Color(0.2, 0.5, 1.0, 0.7), 2.0)
-
-		ThrowState.POSITIONING:
-			_draw_positioning()
-
+			_draw_aiming()
 		ThrowState.VERTICAL_RELEASE:
 			_draw_vertical_release()
-
 		ThrowState.HORIZONTAL_RELEASE:
 			_draw_horizontal_release()
-
 		ThrowState.RESOLVING:
 			_draw_resolving()
 
 
-## Draw the POSITIONING state: dimmed aim band + highlighted vertical window.
-func _draw_positioning() -> void:
-	var top: float = _board_center.y - _board_radius
-	var bottom: float = _board_center.y + _board_radius
+## Draw a filled ellipse centered at `center` (local coords) with given semi-axes and color.
+func _draw_filled_ellipse(center: Vector2, half_w: float, half_h: float, color: Color, segments: int = 64) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	for i: int in range(segments):
+		var angle: float = TAU * float(i) / float(segments)
+		points.append(center + Vector2(cos(angle) * half_w, sin(angle) * half_h))
+	draw_colored_polygon(points, color)
+
+
+## Draw an ellipse outline centered at `center` (local coords).
+func _draw_ellipse_outline(center: Vector2, half_w: float, half_h: float, color: Color, width: float = 2.0, segments: int = 64) -> void:
+	for i: int in range(segments):
+		var angle_a: float = TAU * float(i) / float(segments)
+		var angle_b: float = TAU * float(i + 1) / float(segments)
+		var point_a: Vector2 = center + Vector2(cos(angle_a) * half_w, sin(angle_a) * half_h)
+		var point_b: Vector2 = center + Vector2(cos(angle_b) * half_w, sin(angle_b) * half_h)
+		draw_line(point_a, point_b, color, width)
+
+
+## Draw a horizontal band (y_min to y_max) clipped to the aim ellipse.
+func _draw_h_band_clipped(center: Vector2, half_w: float, half_h: float, y_min: float, y_max: float, color: Color, segments: int = 32) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	# Clamp band to ellipse vertical extent
+	y_min = maxf(y_min, center.y - half_h)
+	y_max = minf(y_max, center.y + half_h)
+	if y_min >= y_max:
+		return
+	# Right edge: top to bottom
+	for i: int in range(segments + 1):
+		var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
+		var dy: float = (y - center.y) / half_h
+		var x_extent: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
+		points.append(Vector2(center.x + x_extent, y))
+	# Left edge: bottom to top
+	for i: int in range(segments, -1, -1):
+		var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
+		var dy: float = (y - center.y) / half_h
+		var x_extent: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
+		points.append(Vector2(center.x - x_extent, y))
+	draw_colored_polygon(points, color)
+
+
+## Draw a vertical band (x_min to x_max) clipped to the aim ellipse.
+func _draw_v_band_clipped(center: Vector2, half_w: float, half_h: float, x_min: float, x_max: float, color: Color, segments: int = 32) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	# Clamp band to ellipse horizontal extent
+	x_min = maxf(x_min, center.x - half_w)
+	x_max = minf(x_max, center.x + half_w)
+	if x_min >= x_max:
+		return
+	# Bottom edge: left to right
+	for i: int in range(segments + 1):
+		var x: float = x_min + (x_max - x_min) * float(i) / float(segments)
+		var dx: float = (x - center.x) / half_w
+		var y_extent: float = half_h * sqrt(maxf(1.0 - dx * dx, 0.0))
+		points.append(Vector2(x, center.y + y_extent))
+	# Top edge: right to left
+	for i: int in range(segments, -1, -1):
+		var x: float = x_min + (x_max - x_min) * float(i) / float(segments)
+		var dx: float = (x - center.x) / half_w
+		var y_extent: float = half_h * sqrt(maxf(1.0 - dx * dx, 0.0))
+		points.append(Vector2(x, center.y - y_extent))
+	draw_colored_polygon(points, color)
+
+
+## Draw the intersection of a horizontal band and vertical band clipped to the ellipse.
+func _draw_band_intersection(center: Vector2, half_w: float, half_h: float, y_min: float, y_max: float, x_min: float, x_max: float, color: Color, segments: int = 32) -> void:
+	# Clamp bands to ellipse extents
+	y_min = maxf(y_min, center.y - half_h)
+	y_max = minf(y_max, center.y + half_h)
+	x_min = maxf(x_min, center.x - half_w)
+	x_max = minf(x_max, center.x + half_w)
+	if y_min >= y_max or x_min >= x_max:
+		return
+	# Build polygon: for each y, the x range is intersection of [x_min, x_max] with ellipse width at y
+	var points: PackedVector2Array = PackedVector2Array()
+	# Right edge: top to bottom
+	for i: int in range(segments + 1):
+		var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
+		var dy: float = (y - center.y) / half_h
+		var ellipse_x: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
+		var right: float = minf(x_max, center.x + ellipse_x)
+		points.append(Vector2(right, y))
+	# Left edge: bottom to top
+	for i: int in range(segments, -1, -1):
+		var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
+		var dy: float = (y - center.y) / half_h
+		var ellipse_x: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
+		var left: float = maxf(x_min, center.x - ellipse_x)
+		points.append(Vector2(left, y))
+	if points.size() >= 3:
+		draw_colored_polygon(points, color)
+
+
+## Draw a small crosshair at the given position (local coords).
+func _draw_crosshair(pos: Vector2, color: Color, size: float = 6.0, width: float = 1.5) -> void:
+	draw_line(pos + Vector2(-size, 0), pos + Vector2(size, 0), color, width)
+	draw_line(pos + Vector2(0, -size), pos + Vector2(0, size), color, width)
+
+
+## Draw the bouncing marker dot with optional outline ring for visibility.
+func _draw_marker(pos: Vector2) -> void:
+	if marker_outline_thickness > 0.0:
+		draw_arc(pos, marker_size + marker_outline_thickness * 0.5, 0.0, TAU, 64, marker_outline_color, marker_outline_thickness)
+	draw_circle(pos, marker_size, marker_color)
+
+
+## Draw the AIMING state: filled ellipse following cursor with crosshair.
+func _draw_aiming() -> void:
 	var half_w: float = _get_aim_half_width()
-	var band_left: float = _locked_aim_x - half_w
-	var band_width: float = half_w * 2.0
+	var half_h: float = _get_aim_half_height()
+	var center: Vector2 = _aim_center - global_position
 
-	# Draw the full dimmed aim band (background)
-	var full_rect: Rect2 = Rect2(
-		Vector2(band_left, top) - global_position,
-		Vector2(band_width, bottom - top)
-	)
-	draw_rect(full_rect, Color(aim_line_color, 0.15))
-
-	# Draw the vertical window (highlighted active zone)
-	var window_rect: Rect2 = Rect2(
-		Vector2(band_left, _window_top) - global_position,
-		Vector2(band_width, _window_bottom - _window_top)
-	)
-	draw_rect(window_rect, window_color)
-	draw_rect(window_rect, window_border_color, false, 2.0)
+	# Filled semi-transparent ellipse
+	_draw_filled_ellipse(center, half_w, half_h, aim_line_color)
+	# Ellipse outline (slightly more opaque)
+	_draw_ellipse_outline(center, half_w, half_h, Color(aim_line_color, minf(aim_line_color.a + 0.3, 1.0)))
+	# Crosshair at center
+	_draw_crosshair(center, Color(0.2, 0.5, 1.0, 0.7))
 
 
-## Draw the VERTICAL_RELEASE state: dimmed band + window + bouncing marker with glow strip.
+## Draw the VERTICAL_RELEASE state: dimmed ellipse + vertical accuracy band + bouncing marker.
 func _draw_vertical_release() -> void:
-	var top: float = _board_center.y - _board_radius
-	var bottom: float = _board_center.y + _board_radius
-	var half_w: float = _get_aim_half_width()
-	var band_left: float = _locked_aim_x - half_w
-	var band_width: float = half_w * 2.0
+	var center: Vector2 = _placed_center - global_position
 
-	# Dimmed aim band background
-	var full_rect: Rect2 = Rect2(
-		Vector2(band_left, top) - global_position,
-		Vector2(band_width, bottom - top)
-	)
-	draw_rect(full_rect, Color(aim_line_color, 0.15))
+	# Dimmed placed ellipse outline
+	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
 
-	# Locked window outline
-	var window_rect: Rect2 = Rect2(
-		Vector2(band_left, _window_top) - global_position,
-		Vector2(band_width, _window_bottom - _window_top)
-	)
-	draw_rect(window_rect, window_color)
-	draw_rect(window_rect, window_border_color, false, 2.0)
-
-	# Vertical consistency glow strip around the marker, clipped to window bounds
+	# Vertical accuracy glow band clipped to ellipse
 	var v_half: float = _get_vertical_accuracy_half()
-	var glow_top: float = maxf(_release_y - v_half, _window_top)
-	var glow_bottom: float = minf(_release_y + v_half, _window_bottom)
-	var glow_rect: Rect2 = Rect2(
-		Vector2(band_left, glow_top) - global_position,
-		Vector2(band_width, glow_bottom - glow_top)
-	)
-	draw_rect(glow_rect, vertical_glow_color)
+	var glow_y_min: float = _release_y - global_position.y - v_half
+	var glow_y_max: float = _release_y - global_position.y + v_half
+	_draw_h_band_clipped(center, _aim_half_width, _aim_half_height, glow_y_min, glow_y_max, vertical_glow_color)
 
 	# Bouncing marker dot
-	var marker_pos: Vector2 = Vector2(_locked_aim_x, _release_y) - global_position
-	draw_circle(marker_pos, marker_size, marker_color)
+	var marker_pos: Vector2 = Vector2(_placed_center.x, _release_y) - global_position
+	_draw_marker(marker_pos)
 
 
-## Draw the HORIZONTAL_RELEASE state: locked vertical strip + bouncing horizontal marker.
+## Draw the HORIZONTAL_RELEASE state: dimmed ellipse + locked V band + H band + intersection + marker.
 func _draw_horizontal_release() -> void:
-	var top: float = _board_center.y - _board_radius
-	var bottom: float = _board_center.y + _board_radius
-	var half_w: float = _get_aim_half_width()
-	var band_left: float = _locked_aim_x - half_w
-	var band_width: float = half_w * 2.0
+	var center: Vector2 = _placed_center - global_position
 
-	# Dimmed aim band background
-	var full_rect: Rect2 = Rect2(
-		Vector2(band_left, top) - global_position,
-		Vector2(band_width, bottom - top)
-	)
-	draw_rect(full_rect, Color(aim_line_color, 0.15))
+	# Dimmed placed ellipse outline
+	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
 
-	# Locked window outline (dimmed)
-	var window_rect: Rect2 = Rect2(
-		Vector2(band_left, _window_top) - global_position,
-		Vector2(band_width, _window_bottom - _window_top)
-	)
-	draw_rect(window_rect, Color(window_color, 0.15))
-	draw_rect(window_rect, Color(window_border_color, 0.3), false, 1.5)
-
-	# Static vertical consistency strip at locked release position (no skew yet)
+	# Locked vertical accuracy band (dimmed, from V release)
 	var v_half: float = _get_vertical_accuracy_half()
-	var strip_top: float = maxf(_locked_release_y - v_half, _window_top)
-	var strip_bottom: float = minf(_locked_release_y + v_half, _window_bottom)
-	var strip_rect: Rect2 = Rect2(
-		Vector2(band_left, strip_top) - global_position,
-		Vector2(band_width, strip_bottom - strip_top)
-	)
-	draw_rect(strip_rect, vertical_glow_color)
+	var v_y_min: float = _locked_release_y - global_position.y - v_half
+	var v_y_max: float = _locked_release_y - global_position.y + v_half
+	_draw_h_band_clipped(center, _aim_half_width, _aim_half_height, v_y_min, v_y_max, Color(vertical_glow_color, vertical_glow_color.a * 0.5))
 
-	# Horizontal consistency glow: vertical band at _horizontal_x, clipped to aim band
+	# Horizontal accuracy glow band clipped to ellipse
 	var h_half: float = _get_horizontal_accuracy_half()
-	var glow_left: float = maxf(_horizontal_x - h_half, band_left)
-	var glow_right: float = minf(_horizontal_x + h_half, band_left + band_width)
-	var glow_rect: Rect2 = Rect2(
-		Vector2(glow_left, strip_top) - global_position,
-		Vector2(glow_right - glow_left, strip_bottom - strip_top)
-	)
-	draw_rect(glow_rect, horizontal_glow_color)
+	var h_x_min: float = _horizontal_x - global_position.x - h_half
+	var h_x_max: float = _horizontal_x - global_position.x + h_half
+	_draw_v_band_clipped(center, _aim_half_width, _aim_half_height, h_x_min, h_x_max, horizontal_glow_color)
 
-	# Bouncing marker dot at the intersection
+	# Intersection region highlighted
+	_draw_band_intersection(center, _aim_half_width, _aim_half_height, v_y_min, v_y_max, h_x_min, h_x_max, resolve_preview_color)
+
+	# Bouncing marker dot at intersection with locked Y
 	var marker_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y) - global_position
-	draw_circle(marker_pos, marker_size, marker_color)
+	_draw_marker(marker_pos)
 
 
-## Draw the RESOLVING state: final variance box + frozen marker.
+## Draw the RESOLVING state: dimmed ellipse + accuracy ellipse + frozen marker.
 func _draw_resolving() -> void:
-	var top: float = _board_center.y - _board_radius
-	var bottom: float = _board_center.y + _board_radius
-	var half_w: float = _get_aim_half_width()
-	var band_left: float = _locked_aim_x - half_w
-	var band_width: float = half_w * 2.0
+	var center: Vector2 = _placed_center - global_position
 
-	# Dimmed aim band background
-	var full_rect: Rect2 = Rect2(
-		Vector2(band_left, top) - global_position,
-		Vector2(band_width, bottom - top)
-	)
-	draw_rect(full_rect, Color(aim_line_color, 0.15))
+	# Dimmed placed ellipse outline
+	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
 
-	# Locked window outline (dimmed)
-	var window_rect: Rect2 = Rect2(
-		Vector2(band_left, _window_top) - global_position,
-		Vector2(band_width, _window_bottom - _window_top)
-	)
-	draw_rect(window_rect, Color(window_color, 0.15))
-	draw_rect(window_rect, Color(window_border_color, 0.3), false, 1.5)
-
-	# Final variance box — drifts by _current_skew_offset (animated during resolve)
+	# Accuracy ellipse at the locked point with skew offset
 	var h_half: float = _get_horizontal_accuracy_half()
 	var v_half: float = _get_vertical_accuracy_half()
-	var skewed_center_y: float = _locked_release_y + _current_skew_offset
-	var box_left: float = maxf(_horizontal_x - h_half, band_left)
-	var box_right: float = minf(_horizontal_x + h_half, band_left + band_width)
-	var box_top: float = maxf(skewed_center_y - v_half, _window_top)
-	var box_bottom: float = minf(skewed_center_y + v_half, _window_bottom)
-	var preview_rect: Rect2 = Rect2(
-		Vector2(box_left, box_top) - global_position,
-		Vector2(box_right - box_left, box_bottom - box_top)
-	)
-	draw_rect(preview_rect, resolve_preview_color)
+	var skewed_center: Vector2 = Vector2(_horizontal_x, _locked_release_y + _current_skew_offset) - global_position
 
-	# Frozen marker dot — drifts with the skew
-	var marker_pos: Vector2 = Vector2(_horizontal_x, skewed_center_y) - global_position
-	draw_circle(marker_pos, marker_size, marker_color)
+	_draw_filled_ellipse(skewed_center, h_half, v_half, resolve_preview_color)
+	_draw_ellipse_outline(skewed_center, h_half, v_half, Color(resolve_preview_color, minf(resolve_preview_color.a + 0.3, 1.0)), 1.5)
+
+	# Frozen marker dot at accuracy ellipse center
+	_draw_marker(skewed_center)

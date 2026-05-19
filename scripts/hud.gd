@@ -49,8 +49,8 @@ const STAT_DISPLAY_NAMES: Dictionary = {
 }
 
 const STAT_DESCRIPTIONS: Dictionary = {
-	"horizontal_range": "Narrows the horizontal aiming band. Also reduces the distance the horizontal marker travels, making it easier to time.",
-	"vertical_range": "Shrinks the vertical positioning window. Also reduces the distance the vertical marker travels, making it easier to time.",
+	"horizontal_range": "Shrinks the aim ellipse horizontally. Also reduces the distance the horizontal marker travels, making it easier to time.",
+	"vertical_range": "Shrinks the aim ellipse vertically. Also reduces the distance the vertical marker travels, making it easier to time.",
 	"horizontal_speed": "Slows the horizontal release marker. Higher = easier to time your click.",
 	"vertical_speed": "Slows the vertical release marker. Higher = easier to time your click.",
 	"horizontal_accuracy": "Tightens horizontal dart landing variance. Higher = dart lands closer to where you clicked.",

@@ -49,6 +49,7 @@ var _color_toggle_button: Button
 var _outer_color_picker: ColorPickerButton
 var _inner_color_picker: ColorPickerButton
 var _dart_preview: Control
+var _zone_preview: Control
 
 const STAT_KEYS: Array[String] = [
 	"horizontal_range", "vertical_range",
@@ -72,8 +73,8 @@ const SLOT_COLORS: Dictionary = {
 }
 
 const STAT_DESCRIPTIONS: Dictionary = {
-	"horizontal_range": "Narrows the horizontal aiming band. Also reduces the distance the horizontal marker travels, making it easier to time.",
-	"vertical_range": "Shrinks the vertical positioning window. Also reduces the distance the vertical marker travels, making it easier to time.",
+	"horizontal_range": "Shrinks the aim ellipse horizontally. Also reduces the distance the horizontal marker travels, making it easier to time.",
+	"vertical_range": "Shrinks the aim ellipse vertically. Also reduces the distance the vertical marker travels, making it easier to time.",
 	"horizontal_speed": "Slows the horizontal release marker. Higher = easier to time your click.",
 	"vertical_speed": "Slows the vertical release marker. Higher = easier to time your click.",
 	"horizontal_accuracy": "Tightens horizontal dart landing variance. Higher = dart lands closer to where you clicked.",
@@ -83,6 +84,17 @@ const STAT_DESCRIPTIONS: Dictionary = {
 const BAR_MAX_WIDTH: float = 180.0
 const BAR_HEIGHT: float = 14.0
 const STAT_MAX_VALUE: float = 100.0
+
+## Zone preview scaling — mirrors throw_mechanic default export values
+const PREVIEW_MAX_AIM_HALF_W: float = 200.0
+const PREVIEW_MIN_AIM_HALF_W: float = 5.0
+const PREVIEW_MAX_AIM_HALF_H: float = 200.0
+const PREVIEW_MIN_AIM_HALF_H: float = 5.0
+const PREVIEW_MAX_ACC_HALF_W: float = 80.0
+const PREVIEW_MIN_ACC_HALF_W: float = 5.0
+const PREVIEW_MAX_ACC_HALF_H: float = 90.0
+const PREVIEW_MIN_ACC_HALF_H: float = 5.0
+const PREVIEW_SCALE: float = 0.45
 
 
 func _ready() -> void:
@@ -114,6 +126,9 @@ func _ready() -> void:
 
 	# Stat bars (left column)
 	_build_stat_bars()
+
+	# Zone preview (below stat bars)
+	_build_zone_preview()
 
 	# Balance bar (center-bottom)
 	_build_balance_bar()
@@ -291,7 +306,7 @@ func _build_slot_selector(slot_name: String, x: float, y: float) -> void:
 
 func _build_stat_bars() -> void:
 	var stats_container: VBoxContainer = VBoxContainer.new()
-	stats_container.position = Vector2(40.0, 430.0)
+	stats_container.position = Vector2(40.0, 370.0)
 	stats_container.size = Vector2(300.0, 200.0)
 	stats_container.add_theme_constant_override("separation", 4)
 	stats_container.theme = _create_tooltip_theme()
@@ -560,6 +575,8 @@ func _refresh_all() -> void:
 	_refresh_slot("flight")
 	_refresh_stat_bars()
 	_refresh_balance()
+	if _zone_preview:
+		_zone_preview.queue_redraw()
 
 
 func _refresh_slot(slot_name: String) -> void:
@@ -720,6 +737,89 @@ func _create_tooltip_theme() -> Theme:
 	t.set_font_size("font_size", "TooltipLabel", 13)
 	t.set_color("font_color", "TooltipLabel", Color(0.9, 0.9, 0.9))
 	return t
+
+
+func _build_zone_preview() -> void:
+	var container: VBoxContainer = VBoxContainer.new()
+	container.position = Vector2(40.0, 520.0)
+	container.size = Vector2(300.0, 140.0)
+	container.add_theme_constant_override("separation", 2)
+	add_child(container)
+
+	var preview_title: Label = Label.new()
+	preview_title.text = "— Zone Preview —"
+	preview_title.add_theme_font_size_override("font_size", 14)
+	preview_title.modulate = Color(0.8, 0.8, 0.6)
+	container.add_child(preview_title)
+
+	_zone_preview = Control.new()
+	_zone_preview.custom_minimum_size = Vector2(280.0, 130.0)
+	_zone_preview.draw.connect(_draw_zone_preview)
+	container.add_child(_zone_preview)
+
+
+func _draw_zone_preview() -> void:
+	if dart_build == null or _zone_preview == null:
+		return
+
+	var bonuses: Dictionary = dart_build.get_total_stat_bonuses()
+	var h_range: float = base_stats.get("horizontal_range", 20.0) + bonuses.get("horizontal_range", 0.0)
+	var v_range: float = base_stats.get("vertical_range", 20.0) + bonuses.get("vertical_range", 0.0)
+	var h_acc: float = base_stats.get("horizontal_accuracy", 25.0) + bonuses.get("horizontal_accuracy", 0.0)
+	var v_acc: float = base_stats.get("vertical_accuracy", 25.0) + bonuses.get("vertical_accuracy", 0.0)
+
+	## Map stats to pixel sizes using throw_mechanic formulas
+	var h_range_n: float = clampf((h_range - 1.0) / 99.0, 0.0, 1.0)
+	var v_range_n: float = clampf((v_range - 1.0) / 99.0, 0.0, 1.0)
+	var h_acc_n: float = clampf((h_acc - 1.0) / 99.0, 0.0, 1.0)
+	var v_acc_n: float = clampf((v_acc - 1.0) / 99.0, 0.0, 1.0)
+
+	var aim_half_w: float = lerpf(PREVIEW_MAX_AIM_HALF_W, PREVIEW_MIN_AIM_HALF_W, h_range_n) * PREVIEW_SCALE
+	var aim_half_h: float = lerpf(PREVIEW_MAX_AIM_HALF_H, PREVIEW_MIN_AIM_HALF_H, v_range_n) * PREVIEW_SCALE
+	var acc_half_w: float = lerpf(PREVIEW_MAX_ACC_HALF_W, PREVIEW_MIN_ACC_HALF_W, h_acc_n) * PREVIEW_SCALE
+	var acc_half_h: float = lerpf(PREVIEW_MAX_ACC_HALF_H, PREVIEW_MIN_ACC_HALF_H, v_acc_n) * PREVIEW_SCALE
+
+	var center: Vector2 = Vector2(_zone_preview.size.x / 2.0, _zone_preview.size.y / 2.0)
+
+	## Aim ellipse (outer)
+	var aim_color: Color = Color(0.2, 0.5, 1.0, 0.25)
+	var aim_outline_color: Color = Color(0.2, 0.5, 1.0, 0.6)
+	_draw_preview_ellipse_filled(center, aim_half_w, aim_half_h, aim_color)
+	_draw_preview_ellipse_outline(center, aim_half_w, aim_half_h, aim_outline_color)
+
+	## Accuracy ellipse (inner)
+	var acc_color: Color = Color(1.0, 0.9, 0.2, 0.3)
+	var acc_outline_color: Color = Color(1.0, 0.9, 0.2, 0.7)
+	_draw_preview_ellipse_filled(center, acc_half_w, acc_half_h, acc_color)
+	_draw_preview_ellipse_outline(center, acc_half_w, acc_half_h, acc_outline_color)
+
+	## Crosshair at center
+	var cross_color: Color = Color(1.0, 1.0, 1.0, 0.4)
+	_zone_preview.draw_line(center + Vector2(-5.0, 0.0), center + Vector2(5.0, 0.0), cross_color, 1.0)
+	_zone_preview.draw_line(center + Vector2(0.0, -5.0), center + Vector2(0.0, 5.0), cross_color, 1.0)
+
+	## Labels
+	var aim_label_pos: Vector2 = center + Vector2(aim_half_w + 4.0, -8.0)
+	var acc_label_pos: Vector2 = center + Vector2(acc_half_w + 4.0, 4.0)
+	_zone_preview.draw_string(ThemeDB.fallback_font, aim_label_pos, "aim", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, aim_outline_color)
+	_zone_preview.draw_string(ThemeDB.fallback_font, acc_label_pos, "accuracy", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, acc_outline_color)
+
+
+func _draw_preview_ellipse_filled(center: Vector2, half_w: float, half_h: float, color: Color, segments: int = 48) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	for i: int in range(segments):
+		var angle: float = TAU * float(i) / float(segments)
+		points.append(center + Vector2(cos(angle) * half_w, sin(angle) * half_h))
+	_zone_preview.draw_colored_polygon(points, color)
+
+
+func _draw_preview_ellipse_outline(center: Vector2, half_w: float, half_h: float, color: Color, segments: int = 48) -> void:
+	for i: int in range(segments):
+		var angle_a: float = TAU * float(i) / float(segments)
+		var angle_b: float = TAU * float(i + 1) / float(segments)
+		var point_a: Vector2 = center + Vector2(cos(angle_a) * half_w, sin(angle_a) * half_h)
+		var point_b: Vector2 = center + Vector2(cos(angle_b) * half_w, sin(angle_b) * half_h)
+		_zone_preview.draw_line(point_a, point_b, color, 1.5)
 
 
 func _on_begin_run() -> void:

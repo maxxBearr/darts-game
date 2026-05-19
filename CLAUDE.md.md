@@ -1,803 +1,340 @@
-# Hover/Inspect Mode + Enum Refactor + Modifier Panel — Spec for Claude Code
-
----
+# Throw Mechanic Refactor: Ellipse-Based Aiming
 
 ## Overview
 
-This spec adds three things:
+Replace the current rectangular four-stage throw mechanic (aim band → window positioning → vertical meter → horizontal meter) with a three-stage ellipse-based system (place ellipse zone → vertical meter → horizontal meter). All mouse clicks and Space/Enter serve as input for every stage. WASD provides alternative movement during aiming.
 
-1. **Enum refactor** — Extract all shared enums (`SegmentColor`, `ModifierTiming`, `StreakScope`, `ConfigType`) into a standalone `scoring_enums.gd` file with a `class_name`. All files that reference these enums switch from raw ints to proper enum types.
+The core stat model (six stats, 1–100 ranges, component bonuses, upgrades, throw modifiers, balance/skew system) is **unchanged**. Only the throw mechanic's interpretation of those stats changes.
 
-2. **Board hover feedback** — When the mouse is free (during AIMING phase and between darts/turns/legs), hovering over the dartboard highlights the segment under the cursor and shows a tooltip with the effective score for that segment. Uses the enriched scoring data including effective wedge values and segment colors.
+---
 
-3. **Modifier panel (relic bar)** — A horizontal row of placeholder squares along the bottom of the screen showing all active scoring modifiers. Each square is tinted by rarity color. Hovering over a square shows a tooltip with the modifier's name and description. Visible at all times, populated as modifiers are added.
+## Coding Conventions
 
-**GDScript conventions:**
 - Static typing on ALL variables
 - Frequent commenting for readability
-- `##` doc comments on all `@export` vars
-- `@export` vars wherever applicable for developer/inspector control
+- `##` doc comments on all `@export` vars describing what they do and what values mean
+- `@export` vars liberally for developer control
 
 ---
 
-## Part 1: Enum Refactor
+## State Machine
 
-### New File: `res://scripts/scoring_enums.gd`
+Remove the `POSITIONING` state entirely. New enum:
 
-```gdscript
-class_name ScoringEnums
-## Shared enums used by the scoring modifier system.
-## Centralized here so both Resource scripts (ScoringModifier and subclasses)
-## and Node scripts (ScoringModifierManager, dartboard) can reference them
-## with full type safety instead of raw ints.
-
-## The four segment colors on a standard dartboard.
-## Even-index wedges: BLACK (singles), RED (doubles/triples).
-## Odd-index wedges: WHITE (singles), GREEN (doubles/triples).
-## Bulls: GREEN (single bull), RED (double bull).
-enum SegmentColor {
-	RED,
-	GREEN,
-	BLACK,
-	WHITE,
-}
-
-## When a modifier fires in the scoring pipeline.
-enum ModifierTiming {
-	ON_ACQUIRE,  ## Fires once when the modifier is added (e.g., wedge value changes)
-	PER_DART,    ## Fires every dart through the scoring pipeline
-}
-
-## How long streak history persists before resetting.
-enum StreakScope {
-	NONE,         ## Not a streak-based modifier
-	WITHIN_TURN,  ## History resets every 3-dart turn
-	WITHIN_LEG,   ## History resets when a new leg starts
-	WITHIN_RUN,   ## History persists the entire run
-}
-
-## Whether the player needs to configure the modifier after acquiring it.
-enum ConfigType {
-	NONE,            ## Activates immediately, no player input needed
-	PICK_WEDGE,      ## Player picks one wedge on the board to target
-	PICK_TWO_WEDGES, ## Player picks two wedges (for swaps, etc.)
-}
+```
+enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE }
 ```
 
-### Changes to `scoring_modifier_manager.gd`
+### Flow
 
-**Remove** the four enum blocks (`SegmentColor`, `ModifierTiming`, `StreakScope`, `ConfigType`) from the top of the file. They now live in `ScoringEnums`.
-
-**Replace all references** throughout the file:
-- `SegmentColor.RED` → `ScoringEnums.SegmentColor.RED` (and same for GREEN, BLACK, WHITE)
-- `ModifierTiming.ON_ACQUIRE` → `ScoringEnums.ModifierTiming.ON_ACQUIRE`
-- `ModifierTiming.PER_DART` → `ScoringEnums.ModifierTiming.PER_DART`
-- Any other enum references follow the same pattern
-
-Specifically in `_init_default_board_state()`:
-```gdscript
-effective_wedge_colors.append({
-	"single": ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE,
-	"multi": ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN,
-})
+```
+IDLE → AIMING → VERTICAL_RELEASE → HORIZONTAL_RELEASE → RESOLVING → DONE
 ```
 
-In `process_score()`:
-```gdscript
-if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
-```
-
-In `add_modifier()`:
-```gdscript
-if modifier.timing == ScoringEnums.ModifierTiming.ON_ACQUIRE:
-```
-
-In `get_effective_color()` return type:
-```gdscript
-func get_effective_color(wedge_index: int, is_multi: bool) -> ScoringEnums.SegmentColor:
-```
-
-In `get_bull_color()` return type:
-```gdscript
-func get_bull_color(is_double_bull: bool) -> ScoringEnums.SegmentColor:
-	return ScoringEnums.SegmentColor.RED if is_double_bull else ScoringEnums.SegmentColor.GREEN
-```
-
-### Changes to `scoring_modifier.gd`
-
-Replace the raw int exports with proper enum types:
-
-```gdscript
-## When this modifier fires in the scoring pipeline.
-@export var timing: ScoringEnums.ModifierTiming = ScoringEnums.ModifierTiming.PER_DART
-
-## Streak scope — how long hit history persists for this modifier.
-## Only relevant for PER_DART modifiers that read hit history.
-@export var streak_scope: ScoringEnums.StreakScope = ScoringEnums.StreakScope.NONE
-
-## Config type — whether the player must make a selection after acquiring.
-@export var config_type: ScoringEnums.ConfigType = ScoringEnums.ConfigType.NONE
-```
-
-Remove the old comments that said "Maps to ScoringModifierManager.X enum values" — they're now the real enum types.
-
-### Changes to `wedge_value_modifier.gd`
-
-In `_init()`:
-```gdscript
-func _init() -> void:
-	modifier_name = "Wedge Boost"
-	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
-	config_type = ScoringEnums.ConfigType.PICK_WEDGE
-```
-
-### Changes to `color_bonus_modifier.gd`
-
-Replace the raw int `target_color` export with the enum type:
-
-```gdscript
-## Which SegmentColor triggers the bonus.
-@export var target_color: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.RED
-```
-
-In `_init()`:
-```gdscript
-func _init() -> void:
-	modifier_name = "Color Bonus"
-	timing = ScoringEnums.ModifierTiming.PER_DART
-	config_type = ScoringEnums.ConfigType.NONE
-```
-
-In `apply()`, the comparison works the same since GDScript enum values compare with `==`:
-```gdscript
-func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
-	if result.get("segment_color", -1) == target_color:
-		result["multiplier"] += bonus_multiplier
-		result["total_score"] = result["face_value"] * result["multiplier"]
-	return result
-```
-
-### Changes to `streak_bonus_modifier.gd`
-
-In `_init()`:
-```gdscript
-func _init() -> void:
-	modifier_name = "Color Streak"
-	timing = ScoringEnums.ModifierTiming.PER_DART
-	streak_scope = ScoringEnums.StreakScope.WITHIN_LEG
-	config_type = ScoringEnums.ConfigType.NONE
-```
-
-In `apply()`, update the match statement to use enum values:
-```gdscript
-match streak_scope:
-	ScoringEnums.StreakScope.WITHIN_TURN:
-		history = context["history_turn"]
-	ScoringEnums.StreakScope.WITHIN_LEG:
-		history = context["history_leg"]
-	ScoringEnums.StreakScope.WITHIN_RUN:
-		history = context["history_run"]
-```
-
-### Changes to `dartboard.gd`
-
-In `calculate_score()`, use `ScoringEnums.SegmentColor` enum values instead of raw ints for the bullseye segment colors:
-
-```gdscript
-# For Double Bull:
-segment_color = ScoringEnums.SegmentColor.RED
-
-# For Single Bull:
-segment_color = ScoringEnums.SegmentColor.GREEN
-```
-
-In `_lookup_segment_color()`, change the return type and fallback values:
-
-```gdscript
-## Look up the segment color for a wedge index and ring type.
-## is_multi = true for double/triple rings, false for single rings.
-## Uses effective_wedge_colors if populated, otherwise derives from wedge index.
-func _lookup_segment_color(wedge_idx: int, is_multi: bool) -> ScoringEnums.SegmentColor:
-	if effective_wedge_colors.size() == 20:
-		var color_entry: Dictionary = effective_wedge_colors[wedge_idx]
-		return color_entry["multi"] if is_multi else color_entry["single"]
-	# Fallback: standard board colors based on wedge index parity
-	var is_even: bool = wedge_idx % 2 == 0
-	if is_multi:
-		return ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
-	else:
-		return ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
-```
-
-Also update the `segment_color` variable declaration in `calculate_score()`. Since it starts as a "no value" sentinel before the ring is determined, and `ScoringEnums.SegmentColor` doesn't have a NONE value, keep it as an `int` initialized to `-1` and only assign enum values in each branch. The dictionary stores whatever value is assigned. This is fine — the `-1` sentinel only appears for "Off Board" hits where segment_color is meaningless.
+1. **AIMING** — Ellipse zone follows mouse cursor. WASD also moves the zone. Click / Space / Enter places it.
+2. **VERTICAL_RELEASE** — Marker bounces vertically across the full height of the placed ellipse. Click / Space / Enter locks Y.
+3. **HORIZONTAL_RELEASE** — Marker bounces horizontally across the full width of the placed ellipse at locked Y. Click / Space / Enter locks X.
+4. **RESOLVING** — Accuracy ellipse appears at the locked point, skew animates, dart lands via Gaussian with ellipse rejection.
+5. **DONE** — Processing complete, signal emitted.
 
 ---
 
-## Part 2: Board Hover Feedback
+## AIMING Stage Details
 
-### How Hover Works
+### Zone Shape
+- The aim zone is an **ellipse** (not a capsule/rectangle).
+- Width (horizontal diameter) is derived from `horizontal_range` using the existing `_get_aim_half_width()` mapping (1–100 stat → `max_aim_half_width` down to `min_aim_half_width`). This value becomes the ellipse's horizontal semi-axis.
+- Height (vertical diameter) is derived from `vertical_range` using the same style of mapping. Introduce `_get_aim_half_height()` that maps `vertical_range` (1–100) from `max_aim_half_height` down to `min_aim_half_height`. Use similar default pixel values as the horizontal counterpart (e.g., `max_aim_half_height: 200.0`, `min_aim_half_height: 5.0` — expose as `@export` vars for tuning).
+- When H range and V range are equal, the ellipse is a perfect circle.
 
-Hover feedback is **passively active** whenever the mouse is free and the game is in a state where the player can look around. No Esc press needed — hovering naturally shows info.
+### Input
+- **Mouse**: Ellipse center tracks `get_global_mouse_position()`, clamped so the ellipse stays within board bounds (center ± semi-axis ≤ board edge).
+- **WASD / Arrow Keys**: Move the ellipse center at `window_move_speed` pixels/second (reuse existing export var). If WASD is pressed, the zone moves from its current position via WASD. On any mouse movement, mouse reclaims positioning (zone snaps to mouse). Track this with a simple `_mouse_controls_aim: bool` flag — set `true` on mouse motion, set `false` on WASD press.
+- **Click / Space / Enter**: Lock the ellipse center position. Transition to `VERTICAL_RELEASE`.
 
-**Hover is ACTIVE during:**
-- `ThrowState.AIMING` — the mouse is already moving freely to position the aim line. Hovering over segments shows what they'd score. The aim line and the hover highlight coexist visually.
-- Any "awaiting" state between darts, turns, or legs (when `_awaiting_next_dart`, `_awaiting_next_turn`, or `_awaiting_next_leg` is true in main.gd, or during upgrade selection).
+### Drawing
+- Draw a filled semi-transparent ellipse using `draw_arc()` (full 360° arc with enough points for smoothness, ~64 segments) or a polygon approximation, filled with `aim_line_color`.
+- Draw the ellipse outline with a slightly more opaque version of the same color.
+- Draw a small crosshair at the ellipse center.
 
-**Hover is INACTIVE during:**
-- `ThrowState.POSITIONING` — player is using keyboard, mouse position is irrelevant.
-- `ThrowState.VERTICAL_RELEASE` — player is timing the vertical marker.
-- `ThrowState.HORIZONTAL_RELEASE` — player is timing the horizontal marker.
-- `ThrowState.RESOLVING` — dart is landing.
-- `ThrowState.DONE` / `ThrowState.IDLE` — transient states.
+### Variables to Store on Placement
+- `_placed_center: Vector2` — the locked ellipse center position
+- `_aim_half_width: float` — horizontal semi-axis (computed from `horizontal_range` at time of placement)
+- `_aim_half_height: float` — vertical semi-axis (computed from `vertical_range` at time of placement)
 
-### Changes to `dartboard.gd`
+---
 
-Add new exported variables:
+## VERTICAL_RELEASE Stage Details
 
-```gdscript
-## Color overlaid on the hovered board segment for highlighting.
-## Uses an outline/border approach to avoid competing with the aim band.
-@export var hover_highlight_color: Color = Color(1.0, 1.0, 1.0, 0.15)
+### Meter Behavior
+- The marker bounces vertically across the **full height** of the placed ellipse: from `_placed_center.y - _aim_half_height` to `_placed_center.y + _aim_half_height`.
+- Bounce speed from `vertical_speed` using existing `_get_vertical_bounce_speed()`.
+- Marker is drawn as a circle at `(_placed_center.x, _release_y)`.
 
-## Border color for the hovered segment outline.
-@export var hover_border_color: Color = Color(1.0, 1.0, 1.0, 0.5)
+### Accuracy Glow Preview
+- Show a **horizontal band** within the ellipse representing the vertical accuracy zone.
+- Band height = `_get_vertical_accuracy_half() * 2`, centered on the current marker Y position.
+- The band should be **clipped to the ellipse boundary** — at any given Y, the band's horizontal extent is the ellipse width at that Y: `half_width_at_y = _aim_half_width * sqrt(1 - ((y - center_y) / _aim_half_height)²)`.
+- Draw this clipped band with `vertical_glow_color`.
 
-## Border thickness for the hovered segment outline in pixels.
-@export var hover_border_thickness: float = 2.0
+### Drawing
+- Dimmed ellipse outline (the placed zone, faded).
+- Vertical accuracy glow band (clipped to ellipse).
+- Bouncing marker dot.
 
-## Whether hover highlighting is currently enabled.
-## Controlled by main.gd based on game state.
-var hover_enabled: bool = false
-```
+### Input
+- **Click / Space / Enter**: Lock `_locked_release_y = _release_y`. Transition to `HORIZONTAL_RELEASE`.
 
-Add hover tracking state:
+---
 
-```gdscript
-# Hover state — tracks which segment the mouse is currently over
-var _hover_wedge_idx: int = -1
-var _hover_ring_name: String = ""
-var _hover_active: bool = false
+## HORIZONTAL_RELEASE Stage Details
 
-# Cached hover score result for tooltip display
-var _hover_result: Dictionary = {}
-```
+### Meter Behavior
+- The marker bounces horizontally across the **full width** of the placed ellipse: from `_placed_center.x - _aim_half_width` to `_placed_center.x + _aim_half_width`.
+- Bounce speed from `horizontal_speed` using existing `_get_horizontal_bounce_speed()`.
+- Marker is drawn at `(_horizontal_x, _locked_release_y)`.
 
-Add a method for main.gd to call every frame during hover-active states:
+### Accuracy Glow Preview
+- Show a **vertical band** within the ellipse representing the horizontal accuracy zone.
+- Band width = `_get_horizontal_accuracy_half() * 2`, centered on the current marker X position.
+- Clip to ellipse boundary at any given X: `half_height_at_x = _aim_half_height * sqrt(1 - ((x - center_x) / _aim_half_width)²)`.
+- The intersection of the vertical accuracy band and the previously locked horizontal accuracy band forms the visible accuracy region — draw this overlap region with the combined glow.
+- Also show the locked vertical glow band (dimmed) from the previous stage.
 
-```gdscript
-## Update hover state based on the current global mouse position.
-## Call this from main.gd during hover-active game states.
-## Returns the score dictionary for the hovered segment (for tooltip display),
-## or an empty dictionary if the mouse is off the board.
-func update_hover(global_mouse_pos: Vector2) -> Dictionary:
-	if not hover_enabled:
-		_clear_hover()
-		return {}
+### Drawing
+- Dimmed ellipse outline.
+- Locked vertical accuracy band (dimmed, from V release).
+- Horizontal accuracy glow band (clipped to ellipse).
+- Intersection region highlighted with `resolve_preview_color` or a combined glow.
+- Bouncing marker dot at intersection with locked Y.
 
-	var relative: Vector2 = global_mouse_pos - global_position
-	var distance: float = relative.length()
-	var normalized_distance: float = distance / board_radius
+### Input
+- **Click / Space / Enter**: Lock `_horizontal_x`. Transition to `RESOLVING`.
 
-	# Determine which ring the mouse is in
-	var new_ring_name: String = ""
-	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
-		new_ring_name = "double_bull"
-	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
-		new_ring_name = "single_bull"
-	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
-		new_ring_name = "inner_single"
-	elif normalized_distance <= RING_TRIPLE_OUTER:
-		new_ring_name = "triple"
-	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
-		new_ring_name = "outer_single"
-	elif normalized_distance <= RING_DOUBLE_OUTER:
-		new_ring_name = "double"
-	else:
-		# Off board — clear hover
-		_clear_hover()
-		return {}
+---
 
-	# Determine wedge index (not needed for bullseyes)
-	var new_wedge_idx: int = -1
-	if new_ring_name != "double_bull" and new_ring_name != "single_bull":
-		new_wedge_idx = _get_wedge_index(relative)
+## RESOLVING Stage Details
 
-	# Only redraw if the hovered segment actually changed
-	if new_ring_name != _hover_ring_name or new_wedge_idx != _hover_wedge_idx:
-		_hover_ring_name = new_ring_name
-		_hover_wedge_idx = new_wedge_idx
-		_hover_active = true
-		# Calculate score for this segment using effective values
-		_hover_result = calculate_score(global_mouse_pos)
-		queue_redraw()
+### Accuracy Ellipse
+- The final accuracy/variance zone is an **ellipse** centered on `(_horizontal_x, _locked_release_y)`.
+- Horizontal semi-axis = `_get_horizontal_accuracy_half()`.
+- Vertical semi-axis = `_get_vertical_accuracy_half()`.
+- When H accuracy and V accuracy stats are equal, this is a circle.
 
-	return _hover_result
+### Skew Animation
+- If `accuracy_skew_v != 0`, tween `_current_skew_offset` from 0 to `accuracy_skew_v` over `resolve_preview_duration`. The accuracy ellipse center shifts vertically by this offset during the animation.
+- Same behavior as current system, just applied to ellipse center instead of rectangle center.
 
+### Drawing
+- Dimmed placed ellipse outline.
+- Accuracy ellipse drawn with `resolve_preview_color`, centered at `(_horizontal_x, _locked_release_y + _current_skew_offset)`.
+- Frozen marker dot at the accuracy ellipse center.
 
-## Clear hover state — call when hover should be disabled.
-func clear_hover() -> void:
-	_clear_hover()
-
-
-## Internal clear hover and trigger redraw if needed.
-func _clear_hover() -> void:
-	if _hover_active:
-		_hover_ring_name = ""
-		_hover_wedge_idx = -1
-		_hover_active = false
-		_hover_result = {}
-		queue_redraw()
-```
-
-Add hover drawing to `_draw()`. Add this block **after** the wire drawing and **before** the number drawing, so the hover highlight appears above the segments but below the numbers and any flash overlay:
+### Dart Resolution — Gaussian with Ellipse Rejection
+Replace the current independent X/Y clamped Gaussian with ellipse-rejection sampling:
 
 ```gdscript
-	# Draw hover highlight on the segment under the mouse (if active)
-	if _hover_active and _hover_ring_name != "":
-		_draw_hover_segment()
+func _resolve_throw() -> void:
+    var h_half: float = _get_horizontal_accuracy_half()
+    var v_half: float = _get_vertical_accuracy_half()
+    var center_x: float = _horizontal_x
+    var center_y: float = _locked_release_y + accuracy_skew_v
+
+    # Gaussian sample with ellipse rejection
+    var offset_x: float = 0.0
+    var offset_y: float = 0.0
+    for i: int in range(20):  # Safety cap to avoid infinite loop
+        offset_x = randfn(0.0, h_half * gaussian_spread)
+        offset_y = randfn(0.0, v_half * gaussian_spread)
+        # Check if point is inside the accuracy ellipse
+        var ellipse_check: float = (offset_x * offset_x) / (h_half * h_half) + (offset_y * offset_y) / (v_half * v_half)
+        if ellipse_check <= 1.0:
+            break
+
+    var hit_position: Vector2 = Vector2(center_x + offset_x, center_y + offset_y)
+    queue_redraw()
+    throw_completed.emit(hit_position)
 ```
 
-Add the hover segment drawing method:
+Note: With `gaussian_spread` at 0.4 and center-weighted rolls, the rejection loop almost never iterates more than once. The `for` loop with a cap of 20 is a safety net — if it somehow exhausts all attempts, it uses the last rolled values, which is fine.
+
+---
+
+## Removed Concepts
+
+- **`POSITIONING` state**: Entirely removed. No more W/S window sliding.
+- **Aim band / aim line**: No more vertical rectangular band. Replaced by ellipse.
+- **Window shrink tween**: No longer needed since there's no window to shrink.
+- **`_full_line_top/bottom/height`**: Remove these variables.
+- **`_window_top/bottom/height/center_y`**: Remove these variables.
+- **`_is_shrink_complete`**: Remove.
+- **`shrink_tween_duration`**: Remove this export var.
+- **`window_color` / `window_border_color`**: Remove these export vars (or repurpose for the dimmed ellipse outline).
+- **`window_move_speed`**: Keep — repurpose for WASD movement speed during AIMING.
+
+---
+
+## New Variables
 
 ```gdscript
-## Draw a subtle highlight on the currently hovered segment.
-## Uses a filled overlay + border outline so it's visible but doesn't
-## compete with the aim band overlay.
-func _draw_hover_segment() -> void:
-	match _hover_ring_name:
-		"double_bull":
-			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, hover_highlight_color)
-			# Draw border circle
-			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(points, hover_border_color, hover_border_thickness)
-		"single_bull":
-			# Draw the single bull ring area
-			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, hover_highlight_color)
-			# Redraw double bull on top to "cut out" the center
-			# (The actual double bull will be drawn over this in the main _draw anyway,
-			# but for the hover layer alone we need to handle the donut shape)
-			var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-			draw_polyline(outer_points, hover_border_color, hover_border_thickness)
-			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(inner_points, hover_border_color, hover_border_thickness)
-		"inner_single":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER)
-		"triple":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER)
-		"outer_single":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER)
-		"double":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER)
+## Center of the placed aim ellipse (locked when player confirms placement).
+var _placed_center: Vector2 = Vector2.ZERO
 
+## Horizontal semi-axis of the aim ellipse (computed from horizontal_range at placement time).
+var _aim_half_width: float = 0.0
 
-## Draw a border outline around a wedge segment (used for hover highlighting).
-func _draw_segment_border(start_deg: float, end_deg: float, outer_norm: float, inner_norm: float) -> void:
-	var points: PackedVector2Array = PackedVector2Array()
-	var outer_r: float = board_radius * outer_norm
-	var inner_r: float = board_radius * inner_norm
+## Vertical semi-axis of the aim ellipse (computed from vertical_range at placement time).
+var _aim_half_height: float = 0.0
 
-	# Outer arc from start to end
-	for i: int in range(arc_points + 1):
-		var t: float = float(i) / float(arc_points)
-		var angle_rad: float = deg_to_rad(lerpf(start_deg, end_deg, t))
-		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
-		points.append(direction * outer_r)
+## Whether mouse is currently controlling aim position (vs WASD).
+var _mouse_controls_aim: bool = true
 
-	# Inner arc from end back to start
-	for i: int in range(arc_points + 1):
-		var t: float = float(i) / float(arc_points)
-		var angle_rad: float = deg_to_rad(lerpf(end_deg, start_deg, t))
-		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
-		points.append(direction * inner_r)
-
-	# Close the polygon outline
-	points.append(points[0])
-	draw_polyline(points, hover_border_color, hover_border_thickness)
-
-
-## Generate circle points for a border at a given normalized radius.
-func _make_circle_points(normalized_radius: float) -> PackedVector2Array:
-	var r: float = board_radius * normalized_radius
-	var points: PackedVector2Array = PackedVector2Array()
-	var num_points: int = 64
-	for i: int in range(num_points + 1):
-		var angle: float = TAU * float(i) / float(num_points)
-		points.append(Vector2(cos(angle), sin(angle)) * r)
-	return points
+## Current aim position during AIMING state (before placement is locked).
+var _aim_center: Vector2 = Vector2.ZERO
 ```
 
-### Changes to `hud.gd` — Hover Tooltip
-
-Add a new label for displaying hover score info. This label sits near the board and updates when the player hovers over segments.
-
-Add to the scene tree under HUD:
-
-```
-HUD (CanvasLayer)
-├── ... (existing children) ...
-└── HoverTooltip (Label)
-```
-
-**HoverTooltip properties (set in scene or code):**
-- Position: centered horizontally, placed above the board (e.g., y = 30 from top)
-- Horizontal alignment: center
-- Auto-size or fixed width to accommodate text like "Triple 20 — 60 pts"
-- Font size: slightly smaller than the main score label (e.g., 16)
-- Starts hidden
-
-Add to hud.gd:
+## New Export Vars
 
 ```gdscript
-@onready var hover_tooltip: Label = $HoverTooltip
+## Maximum aim ellipse half-height in pixels (at vertical_range = 1). The worst possible vertical spread.
+@export var max_aim_half_height: float = 200.0
+
+## Minimum aim ellipse half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
+@export var min_aim_half_height: float = 5.0
 ```
 
-In `_ready()`, hide it initially:
+## New Helper Function
 
 ```gdscript
-hover_tooltip.visible = false
-```
-
-Add methods:
-
-```gdscript
-## Show hover tooltip with score info for the segment under the mouse.
-## result is the dictionary from dartboard.calculate_score() for the hovered segment.
-## effective_wedge_values is used to detect if the value has been modified.
-func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int]) -> void:
-	if result.is_empty():
-		hover_tooltip.visible = false
-		return
-
-	var ring_name: String = result["ring_name"]
-	var face_value: int = result["face_value"]
-	var total_score: int = result["total_score"]
-	var wedge_index: int = result.get("wedge_index", -1)
-	var is_bull: bool = result.get("is_bull", false)
-
-	var tooltip_text: String = ""
-
-	if ring_name == "Off Board":
-		hover_tooltip.visible = false
-		return
-	elif is_bull:
-		tooltip_text = "%s — %d pts" % [ring_name, total_score]
-	else:
-		# Check if this wedge has been modified
-		var original_value: int = original_wedge_order[wedge_index] if wedge_index >= 0 and wedge_index < original_wedge_order.size() else face_value
-		if face_value != original_value:
-			# Show modified indicator: "Triple 10 (was 7) — 30 pts"
-			tooltip_text = "%s %d (was %d) — %d pts" % [ring_name, face_value, original_value, total_score]
-		else:
-			tooltip_text = "%s %d — %d pts" % [ring_name, face_value, total_score]
-
-	hover_tooltip.text = tooltip_text
-	hover_tooltip.visible = true
-
-
-## Hide the hover tooltip.
-func hide_hover_tooltip() -> void:
-	hover_tooltip.visible = false
+## Compute the aim ellipse half-height in pixels from the vertical_range stat (1–100).
+func _get_aim_half_height() -> float:
+    var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
+    return lerpf(max_aim_half_height, min_aim_half_height, normalized)
 ```
 
 ---
 
-## Part 3: Modifier Panel (Relic Bar)
+## Drawing Utilities
 
-A horizontal row of squares at the bottom of the screen showing all active scoring modifiers. Think Slay the Spire's relic bar — small icons in a row, with tooltip on hover.
-
-### Scene Tree Addition
-
-Add to the HUD scene:
-
-```
-HUD (CanvasLayer)
-├── ... (existing children) ...
-├── HoverTooltip (Label)
-└── ModifierPanel (HBoxContainer)
-```
-
-**ModifierPanel properties:**
-- Anchored to the bottom-center of the screen
-- `alignment` = CENTER
-- Custom separation between items (e.g., 4px)
-- Starts visible but empty (no children until modifiers are added)
-
-### Changes to `hud.gd` — Modifier Panel
-
-Add reference:
+### Drawing a Filled Ellipse
+Godot's `draw_arc` doesn't fill. Use `draw_colored_polygon` with points generated from the ellipse equation:
 
 ```gdscript
-@onready var modifier_panel: HBoxContainer = $ModifierPanel
+## Draw a filled ellipse centered at `center` (local coords) with given semi-axes and color.
+func _draw_filled_ellipse(center: Vector2, half_w: float, half_h: float, color: Color, segments: int = 64) -> void:
+    var points: PackedVector2Array = PackedVector2Array()
+    for i: int in range(segments):
+        var angle: float = TAU * float(i) / float(segments)
+        points.append(center + Vector2(cos(angle) * half_w, sin(angle) * half_h))
+    draw_colored_polygon(points, color)
 ```
 
-Add a tooltip label for modifier hover (reuse the hover_tooltip or create a separate one — separate is cleaner since board hover and modifier hover might be active at different times and show different things). Create a second tooltip:
+### Drawing an Ellipse Outline
+```gdscript
+## Draw an ellipse outline centered at `center` (local coords).
+func _draw_ellipse_outline(center: Vector2, half_w: float, half_h: float, color: Color, width: float = 2.0, segments: int = 64) -> void:
+    for i: int in range(segments):
+        var angle_a: float = TAU * float(i) / float(segments)
+        var angle_b: float = TAU * float(i + 1) / float(segments)
+        var point_a: Vector2 = center + Vector2(cos(angle_a) * half_w, sin(angle_a) * half_h)
+        var point_b: Vector2 = center + Vector2(cos(angle_b) * half_w, sin(angle_b) * half_h)
+        draw_line(point_a, point_b, color, width)
+```
+
+### Drawing a Band Clipped to Ellipse
+For the accuracy glow bands, generate a polygon that represents the intersection of a horizontal/vertical strip with the ellipse:
 
 ```gdscript
-@onready var modifier_tooltip: Label = $ModifierTooltip
+## Draw a horizontal band (y_min to y_max) clipped to the aim ellipse.
+## center, half_w, half_h are the ellipse parameters in local coords.
+func _draw_h_band_clipped(center: Vector2, half_w: float, half_h: float, y_min: float, y_max: float, color: Color, segments: int = 32) -> void:
+    var points: PackedVector2Array = PackedVector2Array()
+    # Clamp band to ellipse vertical extent
+    y_min = maxf(y_min, center.y - half_h)
+    y_max = minf(y_max, center.y + half_h)
+    if y_min >= y_max:
+        return
+    # Right edge: top to bottom
+    for i: int in range(segments + 1):
+        var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
+        var dy: float = (y - center.y) / half_h
+        var x_extent: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
+        points.append(Vector2(center.x + x_extent, y))
+    # Left edge: bottom to top
+    for i: int in range(segments, -1, -1):
+        var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
+        var dy: float = (y - center.y) / half_h
+        var x_extent: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
+        points.append(Vector2(center.x - x_extent, y))
+    draw_colored_polygon(points, color)
 ```
 
-Add to scene tree:
-```
-HUD (CanvasLayer)
-├── ... (existing children) ...
-├── HoverTooltip (Label)       ← board hover tooltip
-├── ModifierTooltip (Label)    ← modifier panel tooltip
-└── ModifierPanel (HBoxContainer)
-```
-
-**ModifierTooltip properties:**
-- Anchored above the modifier panel (bottom of screen, but above the panel)
-- Horizontal alignment: center
-- Starts hidden
-
-In `_ready()`:
-
-```gdscript
-modifier_tooltip.visible = false
-```
-
-Add methods for managing the modifier panel:
-
-```gdscript
-## Size of each modifier square in the relic bar (pixels).
-@export var modifier_square_size: int = 40
-
-## Add a modifier square to the panel. Called when a scoring modifier is acquired.
-## modifier is the ScoringModifier resource for tooltip data.
-func add_modifier_to_panel(modifier: Resource) -> void:
-	var square: ColorRect = ColorRect.new()
-	square.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
-	# Tint by rarity color
-	square.color = modifier.rarity_color
-	# Store modifier reference for tooltip lookup
-	square.set_meta("modifier", modifier)
-	# Connect mouse signals for hover tooltip
-	square.mouse_entered.connect(_on_modifier_hover.bind(square))
-	square.mouse_exited.connect(_on_modifier_unhover)
-	# Make sure it accepts mouse events
-	square.mouse_filter = Control.MOUSE_FILTER_STOP
-	modifier_panel.add_child(square)
-
-
-## Clear all modifier squares from the panel. Called on new run.
-func clear_modifier_panel() -> void:
-	for child: Node in modifier_panel.get_children():
-		child.queue_free()
-	modifier_tooltip.visible = false
-
-
-## Called when the mouse enters a modifier square.
-func _on_modifier_hover(square: ColorRect) -> void:
-	var modifier: Resource = square.get_meta("modifier")
-	if modifier:
-		modifier_tooltip.text = "%s\n%s" % [modifier.modifier_name, modifier.description]
-		modifier_tooltip.visible = true
-
-
-## Called when the mouse exits a modifier square.
-func _on_modifier_unhover() -> void:
-	modifier_tooltip.visible = false
-```
+A similar `_draw_v_band_clipped` function handles vertical bands (swap x/y logic).
 
 ---
 
-## Part 4: Integration in `main.gd`
+## Files Affected
 
-### Hover State Management
+### `throw_mechanic.gd` — **Major rewrite**
+- Remove `POSITIONING` from enum and all associated logic.
+- Remove window-related variables, export vars, and draw functions.
+- Replace `_draw_positioning()` entirely.
+- Rewrite `_process()` AIMING to track mouse + handle WASD.
+- Rewrite `_unhandled_input()` to remove POSITIONING input handling; all states now use Click/Space/Enter uniformly.
+- Rewrite all `_draw_*` functions to use ellipses instead of rectangles.
+- Rewrite `_resolve_throw()` to use ellipse rejection sampling.
+- Add new variables, export vars, and helper functions listed above.
+- Add drawing utility functions for filled ellipses, outlines, and clipped bands.
 
-Main.gd controls when hover is active by setting `dartboard.hover_enabled` and calling `dartboard.update_hover()` at the right times.
+### `main.gd` — **Minor updates**
+- Remove the `ThrowState.POSITIONING` match arm in `_on_throw_state_changed()`.
+- Update HUD instruction text: AIMING instruction should say "Move mouse to aim, click to place" (no more W/S window instructions).
+- The POSITIONING instruction is removed entirely.
 
-Add a `_process()` method to main.gd (it doesn't currently have one — all updates come through signals). This handles hover updates every frame during hover-active states:
+### `hud.gd` — **Minor updates**
+- Update any instruction strings that reference the old positioning phase.
+- Stats panel labels remain the same (H Range, V Range, etc.) — no changes needed since stat names are unchanged.
 
-```gdscript
-## Track whether hover feedback is currently active (set based on game state).
-var _hover_active: bool = false
+### `dart_build.gd` — **No changes**
+All stat names, bonus application, and balance system remain identical.
 
+### `dart_component.gd` — **No changes**
+Component stat bonuses remain the same six stats.
 
-func _process(_delta: float) -> void:
-	if not _hover_active:
-		return
-
-	# Feed the current mouse position to the dartboard for hover detection
-	var mouse_pos: Vector2 = get_global_mouse_position()
-	var hover_result: Dictionary = dartboard.update_hover(mouse_pos)
-
-	# Update the hover tooltip on the HUD
-	if hover_result.is_empty():
-		hud.hide_hover_tooltip()
-	else:
-		hud.show_hover_tooltip(hover_result, dartboard.WEDGE_ORDER)
-```
-
-Add helper methods to enable/disable hover:
-
-```gdscript
-## Enable hover feedback on the board and tooltip display.
-func _enable_hover() -> void:
-	_hover_active = true
-	dartboard.hover_enabled = true
-
-
-## Disable hover feedback and clear any active highlight/tooltip.
-func _disable_hover() -> void:
-	_hover_active = false
-	dartboard.hover_enabled = false
-	dartboard.clear_hover()
-	hud.hide_hover_tooltip()
-```
-
-### Where to Enable/Disable Hover
-
-**Enable hover in these places:**
-
-1. In `_on_throw_state_changed()`, when entering AIMING:
-```gdscript
-func _on_throw_state_changed(new_state: int) -> void:
-	match new_state:
-		throw_mechanic.ThrowState.AIMING:
-			# Hover is active during aiming — mouse is free
-			_enable_hover()
-		throw_mechanic.ThrowState.POSITIONING:
-			# Hover off — player is using keyboard for window positioning
-			_disable_hover()
-			hud.show_instruction("W/S or Up/Down to move window, Enter/Space to lock")
-		throw_mechanic.ThrowState.VERTICAL_RELEASE:
-			_disable_hover()
-			hud.show_instruction("Click or Space to lock vertical position")
-		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
-			_disable_hover()
-			hud.show_instruction("Click or Space to lock horizontal position")
-		throw_mechanic.ThrowState.RESOLVING:
-			_disable_hover()
-			hud.show_instruction("Releasing...")
-```
-
-Note: the AIMING case is new — the existing `_on_throw_state_changed` didn't have a case for AIMING because it only handled instruction text. Now it also enables hover. This is fine because `state_changed` is emitted for all state transitions.
-
-**IMPORTANT:** Check that `throw_mechanic.gd` actually emits `state_changed` when entering AIMING. Looking at `start_throw()` (line 127-136 of throw_mechanic.gd), it sets `_state = ThrowState.AIMING` but does NOT emit `state_changed`. Add the emit:
-
-In `throw_mechanic.gd`, in `start_throw()`, after setting the state:
-```gdscript
-func start_throw(board_center: Vector2, board_radius: float) -> void:
-	_board_center = board_center
-	_board_radius = board_radius
-	_aim_x = _board_center.x
-	_state = ThrowState.AIMING
-	_bounce_t = 0.0
-	_horizontal_bounce_t = 0.0
-	_is_shrink_complete = false
-	set_process(true)
-	state_changed.emit(ThrowState.AIMING)  # ← ADD THIS LINE
-	queue_redraw()
-```
-
-2. In the "awaiting" states — after a throw completes and the player is waiting to press a button. In `_on_throw_completed()`, enable hover at the end of the function (after all the branching logic), since regardless of which branch was taken (next dart, next turn, bust, leg won, game over), the player is now in a waiting state:
-
-Add at the very end of `_on_throw_completed()`:
-```gdscript
-	# Enable hover feedback while player decides what to do next
-	_enable_hover()
-```
-
-3. During upgrade selection — hover should stay active so the player can check the board while deciding on upgrades. Hover is already enabled from the `_on_throw_completed()` call above, and nothing disables it during upgrade display, so this works automatically.
-
-**Disable hover in these places:**
-
-1. At the start of `_start_new_throw()`, before the throw mechanic takes over. Actually, hover gets re-enabled immediately when AIMING starts (via `_on_throw_state_changed`), so we don't need to explicitly disable it here. But it's cleaner to disable → re-enable so there's no frame where hover state is stale. Add to the start of `_start_new_throw()`:
-
-```gdscript
-func _start_new_throw() -> void:
-	_disable_hover()
-	hud.hide_score()
-	# ... rest of existing code ...
-```
-
-2. In `_on_new_run()` — clear hover state as part of the full reset. Already implicitly handled if `_start_new_throw()` is called (which it is), but explicitly call `_disable_hover()` for clarity.
-
-### Modifier Panel Integration
-
-When a modifier is added to the scoring modifier manager, also add it to the HUD's modifier panel.
-
-In `main.gd`, wherever a modifier is added (currently this is only via debug modifiers or future shop code), call the HUD after adding:
-
-Add a helper method:
-```gdscript
-## Add a scoring modifier to the game. Handles both the manager and HUD panel.
-func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
-	scoring_modifier_manager.add_modifier(modifier, config)
-	hud.add_modifier_to_panel(modifier)
-	_sync_board_state()
-```
-
-In `_on_new_run()`, clear the modifier panel:
-```gdscript
-func _on_new_run() -> void:
-	_run_over = false
-	_turn_score = 0
-	hud.update_turn_score(0)
-	scoring_modifier_manager.reset_for_run()
-	hud.clear_modifier_panel()  # ← ADD THIS
-	_sync_board_state()
-	_clear_darts()
-	_restore_base_stats()
-	x01_game.start_run()
-	_update_all_hud()
-	_start_new_throw()
-```
-
-For debug modifier testing in `_ready()`, after the modifier manager has already added its debug modifiers in its own `_ready()`, sync the panel. Add after `_sync_board_state()`:
-
-```gdscript
-	# Sync debug modifiers to the HUD panel (modifier manager already added them in its _ready)
-	for modifier: Resource in scoring_modifier_manager.active_modifiers:
-		hud.add_modifier_to_panel(modifier)
-```
+### All modifier files — **No changes**
+Throw modifiers and scoring modifiers are unaffected.
 
 ---
 
-## Scene Tree Changes Summary
+## HUD Instruction Text Updates
 
-### Additions to the HUD scene:
-
-```
-HUD (CanvasLayer)
-├── ... (all existing children unchanged) ...
-├── HoverTooltip (Label)
-│       - Position: top-center area, above the board
-│       - Horizontal alignment: CENTER
-│       - Anchors: top-center (anchor_left=0.3, anchor_right=0.7, anchor_top=0.02)
-│       - Font size: 16
-│       - Visible: false (hidden by default)
-├── ModifierTooltip (Label)
-│       - Position: bottom area, just above ModifierPanel
-│       - Horizontal alignment: CENTER
-│       - Anchors: bottom-center (anchor_left=0.2, anchor_right=0.8, anchor_bottom=0.92)
-│       - Font size: 14
-│       - Visible: false (hidden by default)
-└── ModifierPanel (HBoxContainer)
-        - Anchors: bottom-center (anchor_left=0.3, anchor_right=0.7, anchor_top=0.95, anchor_bottom=1.0)
-        - alignment: CENTER
-        - Custom theme constant "separation": 4
-        - Starts empty (children added dynamically)
-```
-
-### New file:
-```
-res://scripts/scoring_enums.gd
-```
-
-### Modified files:
-```
-res://scripts/scoring_modifier_manager.gd  (enum references updated)
-res://scripts/scoring_modifier.gd          (exports use enum types)
-res://scripts/modifiers/wedge_value_modifier.gd  (enum references)
-res://scripts/modifiers/color_bonus_modifier.gd  (enum references + target_color type)
-res://scripts/modifiers/streak_bonus_modifier.gd (enum references)
-res://scripts/dartboard.gd                 (hover system + enum references)
-res://scripts/hud.gd                       (hover tooltip + modifier panel)
-res://scripts/main.gd                      (hover management + modifier panel integration)
-res://scripts/throw_mechanic.gd            (emit state_changed for AIMING)
-```
+| State | Old Text | New Text |
+|---|---|---|
+| AIMING | "Click or Space to lock aim position" | "Move to aim, click to place zone" |
+| POSITIONING | "W/S or Up/Down to move window, Enter/Space to lock" | *(removed)* |
+| VERTICAL_RELEASE | "Click or Space to lock vertical position" | "Click or Space to lock vertical" |
+| HORIZONTAL_RELEASE | "Click or Space to lock horizontal position" | "Click or Space to lock horizontal" |
+| RESOLVING | "Releasing..." | "Releasing..." |
 
 ---
 
-## What This Does NOT Change
+## Testing Checklist
 
-- Stat upgrades remain in main.gd, unchanged
-- X01 game logic unchanged
-- Throw mechanic logic unchanged (only addition is emitting state_changed for AIMING)
-- No shop/acquisition flow — modifiers are still added via debug_modifiers export or code
-- No Esc-to-pause during throws (noted as future feature)
-- Modifier panel uses placeholder colored squares — icons/art are future work
+- [ ] Ellipse renders correctly with equal H/V range (should be a circle)
+- [ ] Ellipse renders correctly with different H/V range (should be visibly elliptical)
+- [ ] Mouse placement works — ellipse follows cursor, click locks it
+- [ ] WASD placement works — arrow keys / WASD move the zone, mouse reclaims on mouse move
+- [ ] Space and Enter work as click alternatives in all three input stages
+- [ ] Vertical meter bounces across full ellipse height
+- [ ] Horizontal meter bounces across full ellipse width at locked Y
+- [ ] Accuracy glow bands clip correctly to ellipse boundary
+- [ ] Accuracy ellipse appears during RESOLVING with correct size
+- [ ] Balance skew shifts the accuracy ellipse vertically during resolve
+- [ ] Dart lands within the accuracy ellipse (never outside it)
+- [ ] Equal H/V accuracy produces a circular accuracy zone
+- [ ] Throw modifiers still apply correctly (temp bonuses affect the right stats)
+- [ ] Dart component bonuses affect zone size and accuracy zone as expected
+- [ ] Upgrades affect zone size and accuracy zone correctly
+- [ ] Game flow (next dart, next turn, next leg, new run) still works
+- [ ] Hover tooltip still works during AIMING (hover should be active)
+- [ ] Hover disabled during meter stages
