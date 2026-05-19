@@ -12,13 +12,13 @@ enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING,
 ## 1 = worst (half-width equals max_aim_half_width).
 ## 100 = best (half-width equals min_aim_half_width).
 ## Typical gameplay range: 30 to 80.
-@export var horizontal_range: float = 5.0
+@export var horizontal_range: float = 8.0
 
 ## Maximum aim ellipse half-width in pixels (at horizontal_range = 1). The worst possible horizontal spread.
-@export var max_aim_half_width: float = 300.0
+@export var max_aim_half_width: float = 270.0
 
 ## Minimum aim ellipse half-width in pixels (at horizontal_range = 100). The tightest possible horizontal spread.
-@export var min_aim_half_width: float = 5.0
+@export var min_aim_half_width: float = 8.0
 
 ## Controls vertical range of the aim ellipse. Higher = tighter range.
 ## 1 = worst (half-height equals max_aim_half_height).
@@ -27,7 +27,7 @@ enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING,
 @export var vertical_range: float = 5.0
 
 ## Maximum aim ellipse half-height in pixels (at vertical_range = 1). The worst possible vertical spread.
-@export var max_aim_half_height: float = 300.0
+@export var max_aim_half_height: float = 270.0
 
 ## Minimum aim ellipse half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
 @export var min_aim_half_height: float = 5.0
@@ -54,7 +54,7 @@ enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING,
 @export var horizontal_accuracy: float = 25.0
 
 ## Maximum horizontal variance half-width in pixels (at horizontal_accuracy = 1).
-@export var max_horizontal_accuracy_half: float = 80.0
+@export var max_horizontal_accuracy_half: float = 90.0
 
 ## Minimum horizontal variance half-width in pixels (at horizontal_accuracy = 100).
 @export var min_horizontal_accuracy_half: float = 5.0

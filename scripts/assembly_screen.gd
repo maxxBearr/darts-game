@@ -50,6 +50,8 @@ var _outer_color_picker: ColorPickerButton
 var _inner_color_picker: ColorPickerButton
 var _dart_preview: Control
 var _zone_preview: Control
+var _v_bounce_t: float = 0.0
+var _h_bounce_t: float = 0.0
 
 const STAT_KEYS: Array[String] = [
 	"horizontal_range", "vertical_range",
@@ -85,16 +87,22 @@ const BAR_MAX_WIDTH: float = 180.0
 const BAR_HEIGHT: float = 14.0
 const STAT_MAX_VALUE: float = 100.0
 
-## Zone preview scaling — mirrors throw_mechanic default export values
-const PREVIEW_MAX_AIM_HALF_W: float = 200.0
-const PREVIEW_MIN_AIM_HALF_W: float = 5.0
-const PREVIEW_MAX_AIM_HALF_H: float = 200.0
-const PREVIEW_MIN_AIM_HALF_H: float = 5.0
-const PREVIEW_MAX_ACC_HALF_W: float = 80.0
-const PREVIEW_MIN_ACC_HALF_W: float = 5.0
-const PREVIEW_MAX_ACC_HALF_H: float = 90.0
-const PREVIEW_MIN_ACC_HALF_H: float = 5.0
-const PREVIEW_SCALE: float = 0.45
+## Zone preview — all sizes derived from a mini board radius so ratios match in-game.
+## In-game board_radius is 300px; PREVIEW_RATIO scales everything proportionally.
+const PREVIEW_BOARD_RADIUS: float = 80.0
+const PREVIEW_RATIO: float = PREVIEW_BOARD_RADIUS / 300.0
+
+
+func _process(delta: float) -> void:
+	if not visible or dart_build == null:
+		return
+	var bonuses: Dictionary = dart_build.get_total_stat_bonuses()
+	var v_speed: float = clampf(base_stats.get("vertical_speed", 1.5) + bonuses.get("vertical_speed", 0.0), 1.0, 5.0)
+	var h_speed: float = clampf(base_stats.get("horizontal_speed", 1.5) + bonuses.get("horizontal_speed", 0.0), 1.0, 5.0)
+	_v_bounce_t += delta * (6.0 - v_speed) * 2.5
+	_h_bounce_t += delta * (6.0 - h_speed) * 2.5
+	if _zone_preview:
+		_zone_preview.queue_redraw()
 
 
 func _ready() -> void:
@@ -741,8 +749,8 @@ func _create_tooltip_theme() -> Theme:
 
 func _build_zone_preview() -> void:
 	var container: VBoxContainer = VBoxContainer.new()
-	container.position = Vector2(40.0, 520.0)
-	container.size = Vector2(300.0, 140.0)
+	container.position = Vector2(40.0, 510.0)
+	container.size = Vector2(300.0, 210.0)
 	container.add_theme_constant_override("separation", 2)
 	add_child(container)
 
@@ -753,7 +761,7 @@ func _build_zone_preview() -> void:
 	container.add_child(preview_title)
 
 	_zone_preview = Control.new()
-	_zone_preview.custom_minimum_size = Vector2(280.0, 130.0)
+	_zone_preview.custom_minimum_size = Vector2(280.0, 210.0)
 	_zone_preview.draw.connect(_draw_zone_preview)
 	container.add_child(_zone_preview)
 
@@ -768,18 +776,21 @@ func _draw_zone_preview() -> void:
 	var h_acc: float = base_stats.get("horizontal_accuracy", 25.0) + bonuses.get("horizontal_accuracy", 0.0)
 	var v_acc: float = base_stats.get("vertical_accuracy", 25.0) + bonuses.get("vertical_accuracy", 0.0)
 
-	## Map stats to pixel sizes using throw_mechanic formulas
+	## Map stats to pixel sizes — using in-game max/min values scaled by PREVIEW_RATIO
 	var h_range_n: float = clampf((h_range - 1.0) / 99.0, 0.0, 1.0)
 	var v_range_n: float = clampf((v_range - 1.0) / 99.0, 0.0, 1.0)
 	var h_acc_n: float = clampf((h_acc - 1.0) / 99.0, 0.0, 1.0)
 	var v_acc_n: float = clampf((v_acc - 1.0) / 99.0, 0.0, 1.0)
 
-	var aim_half_w: float = lerpf(PREVIEW_MAX_AIM_HALF_W, PREVIEW_MIN_AIM_HALF_W, h_range_n) * PREVIEW_SCALE
-	var aim_half_h: float = lerpf(PREVIEW_MAX_AIM_HALF_H, PREVIEW_MIN_AIM_HALF_H, v_range_n) * PREVIEW_SCALE
-	var acc_half_w: float = lerpf(PREVIEW_MAX_ACC_HALF_W, PREVIEW_MIN_ACC_HALF_W, h_acc_n) * PREVIEW_SCALE
-	var acc_half_h: float = lerpf(PREVIEW_MAX_ACC_HALF_H, PREVIEW_MIN_ACC_HALF_H, v_acc_n) * PREVIEW_SCALE
+	var aim_half_w: float = lerpf(270.0, 8.0, h_range_n) * PREVIEW_RATIO
+	var aim_half_h: float = lerpf(270.0, 5.0, v_range_n) * PREVIEW_RATIO
+	var acc_half_w: float = lerpf(80.0, 5.0, h_acc_n) * PREVIEW_RATIO
+	var acc_half_h: float = lerpf(90.0, 5.0, v_acc_n) * PREVIEW_RATIO
 
 	var center: Vector2 = Vector2(_zone_preview.size.x / 2.0, _zone_preview.size.y / 2.0)
+
+	## Mini dartboard (background reference)
+	_draw_preview_dartboard(center)
 
 	## Aim ellipse (outer)
 	var aim_color: Color = Color(0.2, 0.5, 1.0, 0.25)
@@ -793,6 +804,22 @@ func _draw_zone_preview() -> void:
 	_draw_preview_ellipse_filled(center, acc_half_w, acc_half_h, acc_color)
 	_draw_preview_ellipse_outline(center, acc_half_w, acc_half_h, acc_outline_color)
 
+	## V speed line — horizontal line bouncing up and down, clipped to aim ellipse
+	var v_offset: float = sin(_v_bounce_t) * aim_half_h
+	var v_line_y: float = center.y + v_offset
+	var v_dy: float = v_offset / aim_half_h if aim_half_h > 0.0 else 0.0
+	var v_x_extent: float = aim_half_w * sqrt(maxf(1.0 - v_dy * v_dy, 0.0))
+	var v_line_color: Color = Color(1.0, 0.3, 0.3, 0.7)
+	_zone_preview.draw_line(Vector2(center.x - v_x_extent, v_line_y), Vector2(center.x + v_x_extent, v_line_y), v_line_color, 1.5)
+
+	## H speed line — vertical line bouncing left and right, clipped to aim ellipse
+	var h_offset: float = sin(_h_bounce_t) * aim_half_w
+	var h_line_x: float = center.x + h_offset
+	var h_dx: float = h_offset / aim_half_w if aim_half_w > 0.0 else 0.0
+	var h_y_extent: float = aim_half_h * sqrt(maxf(1.0 - h_dx * h_dx, 0.0))
+	var h_line_color: Color = Color(0.3, 0.5, 1.0, 0.7)
+	_zone_preview.draw_line(Vector2(h_line_x, center.y - h_y_extent), Vector2(h_line_x, center.y + h_y_extent), h_line_color, 1.5)
+
 	## Crosshair at center
 	var cross_color: Color = Color(1.0, 1.0, 1.0, 0.4)
 	_zone_preview.draw_line(center + Vector2(-5.0, 0.0), center + Vector2(5.0, 0.0), cross_color, 1.0)
@@ -803,6 +830,71 @@ func _draw_zone_preview() -> void:
 	var acc_label_pos: Vector2 = center + Vector2(acc_half_w + 4.0, 4.0)
 	_zone_preview.draw_string(ThemeDB.fallback_font, aim_label_pos, "aim", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, aim_outline_color)
 	_zone_preview.draw_string(ThemeDB.fallback_font, acc_label_pos, "accuracy", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, acc_outline_color)
+
+
+func _draw_preview_dartboard(center: Vector2) -> void:
+	var r: float = PREVIEW_BOARD_RADIUS
+
+	# Surround
+	_zone_preview.draw_circle(center, r * 1.15, Color(0.12, 0.12, 0.12))
+
+	# Wedge colors (muted so overlays stay readable)
+	var single_a: Color = Color(0.06, 0.06, 0.06)
+	var multi_a: Color = Color(0.35, 0.05, 0.05)
+	var single_b: Color = Color(0.4, 0.38, 0.32)
+	var multi_b: Color = Color(0.0, 0.22, 0.06)
+
+	for wedge_idx: int in range(20):
+		var start_deg: float = wedge_idx * 18.0 - 9.0
+		var end_deg: float = start_deg + 18.0
+		var is_even: bool = wedge_idx % 2 == 0
+		var sc: Color = single_a if is_even else single_b
+		var mc: Color = multi_a if is_even else multi_b
+
+		_draw_board_segment(center, start_deg, end_deg, r * 0.83, r * 0.76, mc)
+		_draw_board_segment(center, start_deg, end_deg, r * 0.76, r * 0.53, sc)
+		_draw_board_segment(center, start_deg, end_deg, r * 0.53, r * 0.48, mc)
+		_draw_board_segment(center, start_deg, end_deg, r * 0.48, r * 0.08, sc)
+
+	# Bull
+	_zone_preview.draw_circle(center, r * 0.08, Color(0.0, 0.22, 0.06))
+	_zone_preview.draw_circle(center, r * 0.032, Color(0.35, 0.05, 0.05))
+
+	# Wire rings
+	var wire: Color = Color(0.4, 0.4, 0.4, 0.4)
+	for ring_r: float in [0.032, 0.08, 0.48, 0.53, 0.76, 0.83]:
+		_draw_board_ring(center, r * ring_r, wire)
+
+	# Wedge boundary wires
+	for wedge_idx: int in range(20):
+		var angle_rad: float = deg_to_rad(wedge_idx * 18.0 - 9.0)
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		_zone_preview.draw_line(center + direction * r * 0.08, center + direction * r * 0.83, wire, 1.0)
+
+
+func _draw_board_segment(center: Vector2, start_deg: float, end_deg: float, outer_r: float, inner_r: float, color: Color) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	var arc_pts: int = 6
+	for i: int in range(arc_pts + 1):
+		var t: float = float(i) / float(arc_pts)
+		var angle_rad: float = deg_to_rad(lerpf(start_deg, end_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(center + direction * outer_r)
+	for i: int in range(arc_pts + 1):
+		var t: float = float(i) / float(arc_pts)
+		var angle_rad: float = deg_to_rad(lerpf(end_deg, start_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(center + direction * inner_r)
+	_zone_preview.draw_colored_polygon(points, color)
+
+
+func _draw_board_ring(center: Vector2, radius: float, color: Color) -> void:
+	var points: PackedVector2Array = PackedVector2Array()
+	var num_pts: int = 48
+	for i: int in range(num_pts + 1):
+		var angle: float = TAU * float(i) / float(num_pts)
+		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+	_zone_preview.draw_polyline(points, color, 1.0)
 
 
 func _draw_preview_ellipse_filled(center: Vector2, half_w: float, half_h: float, color: Color, segments: int = 48) -> void:
