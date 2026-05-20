@@ -468,6 +468,35 @@ func hide_hover_tooltip() -> void:
 	hover_tooltip.visible = false
 
 
+## Show the target declaration tooltip during a throw.
+## target_info contains: prefix, face_value, base_score, total_score,
+## bonus_multiplier_total, streak_lines (Array[String]).
+func show_target_tooltip(target_info: Dictionary) -> void:
+	var prefix: String = target_info["prefix"]
+	var face_value: int = target_info["face_value"]
+	var base_score: int = target_info["base_score"]
+	var total_score: int = target_info["total_score"]
+	var bonus_mult: int = target_info["bonus_multiplier_total"]
+	var streak_lines: Array = target_info.get("streak_lines", [])
+
+	var text: String = "Target: %s%d" % [prefix, face_value]
+	if bonus_mult > 0:
+		text += " | Worth: %d + %dx%d = %d" % [base_score, bonus_mult, face_value, total_score]
+	else:
+		text += " | Worth: %d" % base_score
+
+	for line: String in streak_lines:
+		text += " | " + line
+
+	hover_tooltip.text = text
+	hover_tooltip.visible = true
+
+
+## Hide the target tooltip (when throw completes or new run starts).
+func hide_target_tooltip() -> void:
+	hover_tooltip.visible = false
+
+
 ## Add a modifier square to the panel. Called when a scoring modifier is acquired.
 func add_modifier_to_panel(modifier: Resource) -> void:
 	var square: Panel = Panel.new()

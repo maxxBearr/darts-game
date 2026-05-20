@@ -168,6 +168,9 @@ func _ready() -> void:
 	assembly_screen.throw_mechanic = throw_mechanic
 	assembly_screen.run_confirmed.connect(_on_run_confirmed)
 
+	# Wire dartboard reference to throw_mechanic for target declaration
+	throw_mechanic.dartboard = dartboard
+
 	# Center the dartboard on screen
 	var viewport_size: Vector2 = get_viewport_rect().size
 	dartboard.position = viewport_size / 2.0
@@ -274,6 +277,10 @@ func _start_new_throw() -> void:
 
 ## Called when a dart lands — process through X01 logic and update state.
 func _on_throw_completed(hit_position: Vector2) -> void:
+	# Clear target highlight and tooltip
+	dartboard.clear_declared_target()
+	hud.hide_target_tooltip()
+
 	# Revert any temporary throw modifier bonuses
 	_revert_temp_bonuses()
 	_update_stats_display()
@@ -403,6 +410,8 @@ func _on_new_run() -> void:
 	_start_modifier_pending = false
 	hud.update_turn_score(0)
 	hud.hide_picker()
+	hud.hide_target_tooltip()
+	dartboard.clear_declared_target()
 	scoring_modifier_manager.reset_for_run()
 	hud.clear_modifier_panel()
 	hud.clear_modifier_status()
@@ -726,6 +735,15 @@ func _on_throw_state_changed(new_state: int) -> void:
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
 			_disable_hover()
 			hud.show_instruction("Click or Space to lock vertical")
+			# Declare target and show highlight + tooltip
+			var target: Dictionary = throw_mechanic._declared_target
+			if not target.is_empty():
+				dartboard.set_declared_target(target)
+				var tooltip_info: Dictionary = _build_target_tooltip(target)
+				hud.show_target_tooltip(tooltip_info)
+			else:
+				dartboard.clear_declared_target()
+				hud.hide_target_tooltip()
 		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
 			_disable_hover()
 			hud.show_instruction("Click or Space to lock horizontal")
@@ -957,3 +975,54 @@ func _create_score_label(score: int, hit_position: Vector2, result: Dictionary, 
 			label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
 
 	return label
+
+
+## Build target tooltip info from a declared target and the modifier pipeline.
+func _build_target_tooltip(target_result: Dictionary) -> Dictionary:
+	var face_value: int = target_result["face_value"]
+	var base_multiplier: int = target_result["multiplier"]
+	var base_score: int = face_value * base_multiplier
+
+	# Run through modifier pipeline in preview mode
+	var modified: Dictionary = scoring_modifier_manager.process_score(target_result.duplicate(), true)
+	var modified_multiplier: int = modified["multiplier"]
+	var total_score: int = modified["total_score"]
+	var bonus_mult: int = modified_multiplier - base_multiplier
+
+	var prefix: String = _get_ring_prefix(target_result["ring_name"])
+	var streak_lines: Array[String] = _get_active_streak_info()
+
+	return {
+		"prefix": prefix,
+		"face_value": face_value,
+		"base_score": base_score,
+		"total_score": total_score,
+		"bonus_multiplier_total": bonus_mult,
+		"streak_lines": streak_lines,
+	}
+
+
+func _get_ring_prefix(ring_name: String) -> String:
+	match ring_name:
+		"Inner Single", "Outer Single":
+			return "S"
+		"Double":
+			return "D"
+		"Triple":
+			return "T"
+		"Single Bull":
+			return "SB"
+		"Double Bull":
+			return "DB"
+	return ""
+
+
+## Query active streak modifiers for current streak counts.
+func _get_active_streak_info() -> Array[String]:
+	var lines: Array[String] = []
+	for modifier: Resource in scoring_modifier_manager.active_modifiers:
+		if modifier is StreakBonusModifier and modifier.enabled:
+			var count: int = modifier.get_streak_count()
+			if count > 0:
+				lines.append("%s x%d" % [modifier.modifier_name, count])
+	return lines

@@ -105,6 +105,11 @@ func reset_streak_state() -> void:
 	_reset_streak()
 
 
+## Get the current streak count for display purposes.
+func get_streak_count() -> int:
+	return _streak_count
+
+
 static func get_pool_weight() -> int:
 	return 15
 

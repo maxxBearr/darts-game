@@ -103,6 +103,31 @@ var accuracy_skew_v: float = 0.0
 ## At 0.4, roughly 95% of throws land in the inner 80% of the accuracy ellipse.
 @export_range(0.2, 0.6, 0.01) var gaussian_spread: float = 0.4
 
+## Normalized distance threshold for the green (bonus) zone.
+## At or below this distance, the player gets an accuracy bonus.
+@export_range(0.0, 0.5, 0.01) var green_zone_threshold: float = 0.25
+
+## Normalized distance threshold where the penalty zone begins.
+## Between green_threshold and this value is the neutral zone (no change).
+@export_range(0.3, 0.8, 0.01) var penalty_zone_threshold: float = 0.6
+
+## Accuracy multiplier at the center of the green zone (best case).
+## Values < 1.0 mean the accuracy zone shrinks (tighter grouping).
+@export_range(0.5, 1.0, 0.01) var green_zone_multiplier: float = 0.75
+
+## Accuracy multiplier at the ellipse edge (worst case).
+## Values > 1.0 mean the accuracy zone bloats (wider scatter).
+@export_range(1.5, 4.0, 0.1) var max_edge_penalty_multiplier: float = 2.5
+
+## Color of the accuracy zone when in the green (bonus) zone.
+@export var accuracy_green_color: Color = Color(0.2, 0.85, 0.3, 0.25)
+
+## Color of the accuracy zone in the neutral zone (no bonus or penalty).
+@export var accuracy_neutral_color: Color = Color(1.0, 0.9, 0.2, 0.25)
+
+## Color of the accuracy zone when in the red (penalty) zone.
+@export var accuracy_red_color: Color = Color(0.9, 0.2, 0.15, 0.25)
+
 # Internal state
 var _state: ThrowState = ThrowState.IDLE
 var _board_center: Vector2 = Vector2.ZERO
@@ -119,6 +144,18 @@ var _horizontal_bounce_t: float = 0.0
 
 # Animated skew — tweens from 0.0 to accuracy_skew_v during resolve preview
 var _current_skew_offset: float = 0.0
+
+## The board segment the player declared as their target when placing the aim zone.
+var _declared_target: Dictionary = {}
+
+## The centroid (center point) of the declared target segment in global coordinates.
+var _target_centroid: Vector2 = Vector2.ZERO
+
+## The effective half-width for the horizontal meter at the locked Y position.
+var _h_meter_half_width: float = 0.0
+
+## Reference to the dartboard node, set by main.gd.
+var dartboard: Node2D = null
 
 ## Center of the placed aim ellipse (locked when player confirms placement).
 var _placed_center: Vector2 = Vector2.ZERO
@@ -197,6 +234,58 @@ func _get_horizontal_bounce_speed() -> float:
 	return (6.0 - clampf(horizontal_speed, 1.0, 5.0)) * 2.5
 
 
+## Compute the ellipse half-width at a given Y position.
+## Returns 0.0 if y is outside the ellipse's vertical extent.
+func _get_ellipse_half_width_at_y(y: float) -> float:
+	var dy: float = (y - _placed_center.y) / _aim_half_height
+	if absf(dy) >= 1.0:
+		return 0.0
+	return _aim_half_width * sqrt(1.0 - dy * dy)
+
+
+## Compute normalized distance from an arbitrary point to the target centroid,
+## scaled relative to the aim ellipse size.
+func _get_target_distance_normalized_at(pos: Vector2) -> float:
+	if _declared_target.is_empty():
+		return 0.5
+	var dx: float = pos.x - _target_centroid.x
+	var dy: float = pos.y - _target_centroid.y
+	var norm_x: float = dx / _aim_half_width if _aim_half_width > 0.0 else 0.0
+	var norm_y: float = dy / _aim_half_height if _aim_half_height > 0.0 else 0.0
+	return sqrt(norm_x * norm_x + norm_y * norm_y)
+
+
+## Compute normalized distance from the locked marker position to the target centroid.
+func _get_target_distance_normalized() -> float:
+	return _get_target_distance_normalized_at(Vector2(_horizontal_x, _locked_release_y))
+
+
+## Compute the accuracy zone multiplier based on distance from target centroid.
+## Returns < 1.0 in green zone (bonus), 1.0 in neutral, > 1.0 in penalty zone.
+func _get_accuracy_multiplier(normalized_distance: float) -> float:
+	if normalized_distance <= green_zone_threshold:
+		var t: float = normalized_distance / green_zone_threshold if green_zone_threshold > 0.0 else 0.0
+		return lerpf(green_zone_multiplier, 1.0, t)
+	elif normalized_distance <= penalty_zone_threshold:
+		return 1.0
+	else:
+		var t: float = (normalized_distance - penalty_zone_threshold) / (1.0 - penalty_zone_threshold)
+		t = clampf(t, 0.0, 1.0)
+		return lerpf(1.0, max_edge_penalty_multiplier, t)
+
+
+## Get the accuracy zone color based on the current accuracy multiplier.
+func _get_accuracy_zone_color(accuracy_multiplier: float) -> Color:
+	if accuracy_multiplier <= 1.0:
+		var t: float = (accuracy_multiplier - green_zone_multiplier) / (1.0 - green_zone_multiplier)
+		t = clampf(t, 0.0, 1.0)
+		return accuracy_green_color.lerp(accuracy_neutral_color, t)
+	else:
+		var t: float = (accuracy_multiplier - 1.0) / (max_edge_penalty_multiplier - 1.0)
+		t = clampf(t, 0.0, 1.0)
+		return accuracy_neutral_color.lerp(accuracy_red_color, t)
+
+
 ## Clamp aim center so it stays within the board circle (ellipse may overhang).
 func _clamp_aim_to_board() -> void:
 	_aim_center.x = clampf(_aim_center.x,
@@ -244,10 +333,10 @@ func _process(delta: float) -> void:
 			queue_redraw()
 
 		ThrowState.HORIZONTAL_RELEASE:
-			# Marker bounces horizontally across the full width of the placed ellipse
+			# Marker bounces horizontally across the ellipse width at locked Y
 			var bounce_speed: float = _get_horizontal_bounce_speed()
 			_horizontal_bounce_t += delta * bounce_speed
-			_horizontal_x = _placed_center.x + sin(_horizontal_bounce_t) * _aim_half_width
+			_horizontal_x = _placed_center.x + sin(_horizontal_bounce_t) * _h_meter_half_width
 			queue_redraw()
 
 		ThrowState.RESOLVING:
@@ -303,6 +392,21 @@ func _place_aim_ellipse() -> void:
 	_aim_half_height = _get_aim_half_height()
 	_bounce_t = 0.0
 	_release_y = _placed_center.y
+
+	# Declare target segment based on where the player placed the ellipse
+	if dartboard != null:
+		var target_result: Dictionary = dartboard.calculate_score(_placed_center)
+		if target_result["ring_name"] == "Off Board":
+			_declared_target = {}
+			_target_centroid = _placed_center
+		else:
+			_declared_target = target_result
+			_target_centroid = dartboard.get_segment_centroid(
+				target_result["wedge_index"], target_result["ring_name"])
+	else:
+		_declared_target = {}
+		_target_centroid = _placed_center
+
 	_state = ThrowState.VERTICAL_RELEASE
 	state_changed.emit(ThrowState.VERTICAL_RELEASE)
 	queue_redraw()
@@ -311,6 +415,7 @@ func _place_aim_ellipse() -> void:
 ## Lock the vertical position and transition to HORIZONTAL_RELEASE.
 func _lock_vertical() -> void:
 	_locked_release_y = _release_y
+	_h_meter_half_width = _get_ellipse_half_width_at_y(_locked_release_y)
 	_state = ThrowState.HORIZONTAL_RELEASE
 	_horizontal_bounce_t = 0.0
 	_horizontal_x = _placed_center.x
@@ -343,8 +448,11 @@ func _on_resolve_timer_finished() -> void:
 
 ## Resolve the final dart position using Gaussian sampling with ellipse rejection.
 func _resolve_throw() -> void:
-	var h_half: float = _get_horizontal_accuracy_half()
-	var v_half: float = _get_vertical_accuracy_half()
+	# Apply accuracy scaling based on distance from target centroid
+	var dist: float = _get_target_distance_normalized()
+	var accuracy_mult: float = _get_accuracy_multiplier(dist)
+	var h_half: float = _get_horizontal_accuracy_half() * accuracy_mult
+	var v_half: float = _get_vertical_accuracy_half() * accuracy_mult
 	var center_x: float = _horizontal_x
 	var center_y: float = _locked_release_y + accuracy_skew_v
 
@@ -499,12 +607,25 @@ func _draw_aiming() -> void:
 	_draw_crosshair(center, Color(0.2, 0.5, 1.0, 0.7))
 
 
-## Draw the VERTICAL_RELEASE state: dimmed ellipse + vertical accuracy band + bouncing marker.
+## Draw the VERTICAL_RELEASE state: dimmed ellipse + ghost preview + vertical accuracy band + bouncing marker.
 func _draw_vertical_release() -> void:
 	var center: Vector2 = _placed_center - global_position
 
 	# Dimmed placed ellipse outline
 	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
+
+	# Ghost accuracy preview at current marker position
+	var preview_pos: Vector2 = Vector2(_placed_center.x, _release_y)
+	var ghost_dist: float = _get_target_distance_normalized_at(preview_pos)
+	var ghost_mult: float = _get_accuracy_multiplier(ghost_dist)
+	var ghost_h_half: float = _get_horizontal_accuracy_half() * ghost_mult
+	var ghost_v_half: float = _get_vertical_accuracy_half() * ghost_mult
+	var ghost_color: Color = _get_accuracy_zone_color(ghost_mult)
+	ghost_color.a *= 0.5
+	var ghost_local: Vector2 = preview_pos - global_position
+	_draw_filled_ellipse(ghost_local, ghost_h_half, ghost_v_half, ghost_color)
+	_draw_ellipse_outline(ghost_local, ghost_h_half, ghost_v_half,
+		Color(ghost_color, ghost_color.a * 2.0), 1.5)
 
 	# Vertical accuracy glow band clipped to ellipse
 	var v_half: float = _get_vertical_accuracy_half()
@@ -517,12 +638,25 @@ func _draw_vertical_release() -> void:
 	_draw_marker(marker_pos)
 
 
-## Draw the HORIZONTAL_RELEASE state: dimmed ellipse + locked V band + H band + intersection + marker.
+## Draw the HORIZONTAL_RELEASE state: dimmed ellipse + ghost preview + locked V band + H band + intersection + marker.
 func _draw_horizontal_release() -> void:
 	var center: Vector2 = _placed_center - global_position
 
 	# Dimmed placed ellipse outline
 	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
+
+	# Ghost accuracy preview at current marker position
+	var preview_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y)
+	var ghost_dist: float = _get_target_distance_normalized_at(preview_pos)
+	var ghost_mult: float = _get_accuracy_multiplier(ghost_dist)
+	var ghost_h_half: float = _get_horizontal_accuracy_half() * ghost_mult
+	var ghost_v_half: float = _get_vertical_accuracy_half() * ghost_mult
+	var ghost_color: Color = _get_accuracy_zone_color(ghost_mult)
+	ghost_color.a *= 0.5
+	var ghost_local: Vector2 = preview_pos - global_position
+	_draw_filled_ellipse(ghost_local, ghost_h_half, ghost_v_half, ghost_color)
+	_draw_ellipse_outline(ghost_local, ghost_h_half, ghost_v_half,
+		Color(ghost_color, ghost_color.a * 2.0), 1.5)
 
 	# Locked vertical accuracy band (dimmed, from V release)
 	var v_half: float = _get_vertical_accuracy_half()
@@ -544,20 +678,23 @@ func _draw_horizontal_release() -> void:
 	_draw_marker(marker_pos)
 
 
-## Draw the RESOLVING state: dimmed ellipse + accuracy ellipse + frozen marker.
+## Draw the RESOLVING state: dimmed ellipse + accuracy-scaled ellipse with color feedback + frozen marker.
 func _draw_resolving() -> void:
 	var center: Vector2 = _placed_center - global_position
 
 	# Dimmed placed ellipse outline
 	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
 
-	# Accuracy ellipse at the locked point with skew offset
-	var h_half: float = _get_horizontal_accuracy_half()
-	var v_half: float = _get_vertical_accuracy_half()
+	# Accuracy ellipse at the locked point with skew offset, scaled by target distance
+	var dist: float = _get_target_distance_normalized()
+	var accuracy_mult: float = _get_accuracy_multiplier(dist)
+	var h_half: float = _get_horizontal_accuracy_half() * accuracy_mult
+	var v_half: float = _get_vertical_accuracy_half() * accuracy_mult
+	var zone_color: Color = _get_accuracy_zone_color(accuracy_mult)
 	var skewed_center: Vector2 = Vector2(_horizontal_x, _locked_release_y + _current_skew_offset) - global_position
 
-	_draw_filled_ellipse(skewed_center, h_half, v_half, resolve_preview_color)
-	_draw_ellipse_outline(skewed_center, h_half, v_half, Color(resolve_preview_color, minf(resolve_preview_color.a + 0.3, 1.0)), 1.5)
+	_draw_filled_ellipse(skewed_center, h_half, v_half, zone_color)
+	_draw_ellipse_outline(skewed_center, h_half, v_half, Color(zone_color, minf(zone_color.a + 0.3, 1.0)), 1.5)
 
 	# Frozen marker dot at accuracy ellipse center
 	_draw_marker(skewed_center)

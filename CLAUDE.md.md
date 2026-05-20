@@ -1,10 +1,10 @@
-# Throw Mechanic Refactor: Ellipse-Based Aiming
+# Target Declaration & Accuracy Scaling System
 
 ## Overview
 
-Replace the current rectangular four-stage throw mechanic (aim band → window positioning → vertical meter → horizontal meter) with a three-stage ellipse-based system (place ellipse zone → vertical meter → horizontal meter). All mouse clicks and Space/Enter serve as input for every stage. WASD provides alternative movement during aiming.
+When the player clicks to place the aim ellipse, the clicked board segment becomes their **declared target**. During the meter phases, the accuracy zone dynamically scales based on how close the final locked marker position is to the **centroid of the declared target segment** — not the center of the aim ellipse. Landing near the target centroid rewards tight accuracy (green zone bonus). Landing far from it penalizes with a bloated accuracy zone (red zone penalty). This creates a skill/risk tradeoff on every throw without punishing imprecise mouse placement during aiming.
 
-The core stat model (six stats, 1–100 ranges, component bonuses, upgrades, throw modifiers, balance/skew system) is **unchanged**. Only the throw mechanic's interpretation of those stats changes.
+Additionally, the **horizontal meter width now follows the ellipse geometry** — it bounces across the ellipse width at the locked Y position, not the full ellipse width.
 
 ---
 
@@ -17,324 +17,558 @@ The core stat model (six stats, 1–100 ranges, component bonuses, upgrades, thr
 
 ---
 
-## State Machine
+## System 1: Target Declaration
 
-Remove the `POSITIONING` state entirely. New enum:
+### When the Target is Declared
 
-```
-enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE }
-```
+During `AIMING`, when the player clicks (or presses Space/Enter) to place the ellipse, the click position is passed through the dartboard's scoring system to identify which segment was clicked. That segment becomes the declared target for this throw.
 
-### Flow
-
-```
-IDLE → AIMING → VERTICAL_RELEASE → HORIZONTAL_RELEASE → RESOLVING → DONE
-```
-
-1. **AIMING** — Ellipse zone follows mouse cursor. WASD also moves the zone. Click / Space / Enter places it.
-2. **VERTICAL_RELEASE** — Marker bounces vertically across the full height of the placed ellipse. Click / Space / Enter locks Y.
-3. **HORIZONTAL_RELEASE** — Marker bounces horizontally across the full width of the placed ellipse at locked Y. Click / Space / Enter locks X.
-4. **RESOLVING** — Accuracy ellipse appears at the locked point, skew animates, dart lands via Gaussian with ellipse rejection.
-5. **DONE** — Processing complete, signal emitted.
-
----
-
-## AIMING Stage Details
-
-### Zone Shape
-- The aim zone is an **ellipse** (not a capsule/rectangle).
-- Width (horizontal diameter) is derived from `horizontal_range` using the existing `_get_aim_half_width()` mapping (1–100 stat → `max_aim_half_width` down to `min_aim_half_width`). This value becomes the ellipse's horizontal semi-axis.
-- Height (vertical diameter) is derived from `vertical_range` using the same style of mapping. Introduce `_get_aim_half_height()` that maps `vertical_range` (1–100) from `max_aim_half_height` down to `min_aim_half_height`. Use similar default pixel values as the horizontal counterpart (e.g., `max_aim_half_height: 200.0`, `min_aim_half_height: 5.0` — expose as `@export` vars for tuning).
-- When H range and V range are equal, the ellipse is a perfect circle.
-
-### Input
-- **Mouse**: Ellipse center tracks `get_global_mouse_position()`, clamped so the ellipse stays within board bounds (center ± semi-axis ≤ board edge).
-- **WASD / Arrow Keys**: Move the ellipse center at `window_move_speed` pixels/second (reuse existing export var). If WASD is pressed, the zone moves from its current position via WASD. On any mouse movement, mouse reclaims positioning (zone snaps to mouse). Track this with a simple `_mouse_controls_aim: bool` flag — set `true` on mouse motion, set `false` on WASD press.
-- **Click / Space / Enter**: Lock the ellipse center position. Transition to `VERTICAL_RELEASE`.
-
-### Drawing
-- Draw a filled semi-transparent ellipse using `draw_arc()` (full 360° arc with enough points for smoothness, ~64 segments) or a polygon approximation, filled with `aim_line_color`.
-- Draw the ellipse outline with a slightly more opaque version of the same color.
-- Draw a small crosshair at the ellipse center.
-
-### Variables to Store on Placement
-- `_placed_center: Vector2` — the locked ellipse center position
-- `_aim_half_width: float` — horizontal semi-axis (computed from `horizontal_range` at time of placement)
-- `_aim_half_height: float` — vertical semi-axis (computed from `vertical_range` at time of placement)
-
----
-
-## VERTICAL_RELEASE Stage Details
-
-### Meter Behavior
-- The marker bounces vertically across the **full height** of the placed ellipse: from `_placed_center.y - _aim_half_height` to `_placed_center.y + _aim_half_height`.
-- Bounce speed from `vertical_speed` using existing `_get_vertical_bounce_speed()`.
-- Marker is drawn as a circle at `(_placed_center.x, _release_y)`.
-
-### Accuracy Glow Preview
-- Show a **horizontal band** within the ellipse representing the vertical accuracy zone.
-- Band height = `_get_vertical_accuracy_half() * 2`, centered on the current marker Y position.
-- The band should be **clipped to the ellipse boundary** — at any given Y, the band's horizontal extent is the ellipse width at that Y: `half_width_at_y = _aim_half_width * sqrt(1 - ((y - center_y) / _aim_half_height)²)`.
-- Draw this clipped band with `vertical_glow_color`.
-
-### Drawing
-- Dimmed ellipse outline (the placed zone, faded).
-- Vertical accuracy glow band (clipped to ellipse).
-- Bouncing marker dot.
-
-### Input
-- **Click / Space / Enter**: Lock `_locked_release_y = _release_y`. Transition to `HORIZONTAL_RELEASE`.
-
----
-
-## HORIZONTAL_RELEASE Stage Details
-
-### Meter Behavior
-- The marker bounces horizontally across the **full width** of the placed ellipse: from `_placed_center.x - _aim_half_width` to `_placed_center.x + _aim_half_width`.
-- Bounce speed from `horizontal_speed` using existing `_get_horizontal_bounce_speed()`.
-- Marker is drawn at `(_horizontal_x, _locked_release_y)`.
-
-### Accuracy Glow Preview
-- Show a **vertical band** within the ellipse representing the horizontal accuracy zone.
-- Band width = `_get_horizontal_accuracy_half() * 2`, centered on the current marker X position.
-- Clip to ellipse boundary at any given X: `half_height_at_x = _aim_half_height * sqrt(1 - ((x - center_x) / _aim_half_width)²)`.
-- The intersection of the vertical accuracy band and the previously locked horizontal accuracy band forms the visible accuracy region — draw this overlap region with the combined glow.
-- Also show the locked vertical glow band (dimmed) from the previous stage.
-
-### Drawing
-- Dimmed ellipse outline.
-- Locked vertical accuracy band (dimmed, from V release).
-- Horizontal accuracy glow band (clipped to ellipse).
-- Intersection region highlighted with `resolve_preview_color` or a combined glow.
-- Bouncing marker dot at intersection with locked Y.
-
-### Input
-- **Click / Space / Enter**: Lock `_horizontal_x`. Transition to `RESOLVING`.
-
----
-
-## RESOLVING Stage Details
-
-### Accuracy Ellipse
-- The final accuracy/variance zone is an **ellipse** centered on `(_horizontal_x, _locked_release_y)`.
-- Horizontal semi-axis = `_get_horizontal_accuracy_half()`.
-- Vertical semi-axis = `_get_vertical_accuracy_half()`.
-- When H accuracy and V accuracy stats are equal, this is a circle.
-
-### Skew Animation
-- If `accuracy_skew_v != 0`, tween `_current_skew_offset` from 0 to `accuracy_skew_v` over `resolve_preview_duration`. The accuracy ellipse center shifts vertically by this offset during the animation.
-- Same behavior as current system, just applied to ellipse center instead of rectangle center.
-
-### Drawing
-- Dimmed placed ellipse outline.
-- Accuracy ellipse drawn with `resolve_preview_color`, centered at `(_horizontal_x, _locked_release_y + _current_skew_offset)`.
-- Frozen marker dot at the accuracy ellipse center.
-
-### Dart Resolution — Gaussian with Ellipse Rejection
-Replace the current independent X/Y clamped Gaussian with ellipse-rejection sampling:
+### What Gets Stored
 
 ```gdscript
-func _resolve_throw() -> void:
-    var h_half: float = _get_horizontal_accuracy_half()
-    var v_half: float = _get_vertical_accuracy_half()
-    var center_x: float = _horizontal_x
-    var center_y: float = _locked_release_y + accuracy_skew_v
+## The board segment the player declared as their target when placing the aim zone.
+## Contains the same keys as dartboard.calculate_score() output:
+## face_value, multiplier, total_score, ring_name, wedge_index, segment_color, is_bull.
+var _declared_target: Dictionary = {}
 
-    # Gaussian sample with ellipse rejection
-    var offset_x: float = 0.0
-    var offset_y: float = 0.0
-    for i: int in range(20):  # Safety cap to avoid infinite loop
-        offset_x = randfn(0.0, h_half * gaussian_spread)
-        offset_y = randfn(0.0, v_half * gaussian_spread)
-        # Check if point is inside the accuracy ellipse
-        var ellipse_check: float = (offset_x * offset_x) / (h_half * h_half) + (offset_y * offset_y) / (v_half * v_half)
-        if ellipse_check <= 1.0:
-            break
+## The centroid (center point) of the declared target segment in global coordinates.
+## Used as the reference point for accuracy scaling distance checks.
+var _target_centroid: Vector2 = Vector2.ZERO
+```
 
-    var hit_position: Vector2 = Vector2(center_x + offset_x, center_y + offset_y)
+### Computing the Segment Centroid
+
+The dartboard needs a new public function to compute the centroid of any segment. The centroid is the geometric center of the arc-segment (wedge slice of a ring).
+
+Add to `dartboard.gd`:
+
+```gdscript
+## Compute the global-space centroid of a board segment identified by wedge_index and ring_name.
+## For bullseyes, returns the board center. For wedge segments, returns the midpoint
+## of the arc segment (center angle of the wedge, midpoint radius of the ring).
+func get_segment_centroid(wedge_index: int, ring_name: String) -> Vector2:
+    # Bullseye centroids are at (or near) board center
+    if ring_name == "Double Bull" or ring_name == "double_bull":
+        return global_position
+    if ring_name == "Single Bull" or ring_name == "single_bull":
+        # Midpoint of single bull ring
+        var mid_r: float = board_radius * (RING_DOUBLE_BULL_OUTER + RING_SINGLE_BULL_OUTER) / 2.0
+        # Could offset slightly but center is fine for a ring around center
+        return global_position
+
+    # For wedge segments, compute center angle and midpoint radius
+    var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG
+    var center_angle_rad: float = deg_to_rad(center_angle_deg)
+    var direction: Vector2 = Vector2(sin(center_angle_rad), -cos(center_angle_rad))
+
+    # Determine inner and outer normalized radius for this ring
+    var inner_norm: float = 0.0
+    var outer_norm: float = 0.0
+    # Accept both display names (from calculate_score) and internal names (from flash/hover)
+    match ring_name:
+        "Inner Single", "inner_single":
+            inner_norm = RING_SINGLE_BULL_OUTER
+            outer_norm = RING_INNER_SINGLE_OUTER
+        "Triple", "triple":
+            inner_norm = RING_INNER_SINGLE_OUTER
+            outer_norm = RING_TRIPLE_OUTER
+        "Outer Single", "outer_single":
+            inner_norm = RING_TRIPLE_OUTER
+            outer_norm = RING_OUTER_SINGLE_OUTER
+        "Double", "double":
+            inner_norm = RING_OUTER_SINGLE_OUTER
+            outer_norm = RING_DOUBLE_OUTER
+
+    var mid_r: float = board_radius * (inner_norm + outer_norm) / 2.0
+    return global_position + direction * mid_r
+```
+
+### Flow Integration
+
+In `throw_mechanic.gd`, when transitioning from `AIMING` to `VERTICAL_RELEASE`:
+
+1. Capture the click/placement position.
+2. Call `dartboard.calculate_score(placement_position)` to get the target segment info.
+3. Call `dartboard.get_segment_centroid(result.wedge_index, result.ring_name)` to get the centroid.
+4. Store both in `_declared_target` and `_target_centroid`.
+
+**Important:** The throw mechanic needs a reference to the dartboard node. Currently `start_throw()` receives `board_center` and `board_radius`. This should be extended — either pass the dartboard reference, or add a `dartboard` variable that `main.gd` sets. The cleanest approach is to add an `@export var dartboard: Node2D` on `throw_mechanic.gd` and wire it in the scene tree or in `main.gd._ready()`.
+
+### Edge Case: Off-Board Click
+
+If the player clicks to place the ellipse but the click position is off the board (ring_name == "Off Board"), fall back to using the **ellipse center** as the target centroid, and set `_declared_target` to an empty dictionary. The accuracy scaling system treats an empty target as neutral (no bonus, no penalty). This prevents crashes and handles the edge case gracefully.
+
+### Edge Case: Bullseye Target
+
+If the player clicks on the bull, the centroid is the board center. The accuracy scaling works the same way — distance from board center determines the zone.
+
+---
+
+## System 2: H Meter Width Follows Ellipse Geometry
+
+### Current Behavior (to be changed)
+
+The horizontal meter currently bounces across the full ellipse width regardless of where the vertical meter was stopped.
+
+### New Behavior
+
+After the player locks the vertical position (`_locked_release_y`), compute the ellipse width at that Y coordinate:
+
+```gdscript
+## Compute the ellipse half-width at a given Y position.
+## Returns 0.0 if y is outside the ellipse's vertical extent.
+func _get_ellipse_half_width_at_y(y: float) -> float:
+    var dy: float = (y - _placed_center.y) / _aim_half_height
+    if absf(dy) >= 1.0:
+        return 0.0
+    return _aim_half_width * sqrt(1.0 - dy * dy)
+```
+
+Store this as `_h_meter_half_width` when entering `HORIZONTAL_RELEASE`:
+
+```gdscript
+## The effective half-width for the horizontal meter at the locked Y position.
+## Derived from the ellipse width at _locked_release_y.
+var _h_meter_half_width: float = 0.0
+```
+
+The horizontal marker then bounces between `_placed_center.x - _h_meter_half_width` and `_placed_center.x + _h_meter_half_width`.
+
+### Minimum Floor
+
+No artificial minimum is needed — the accuracy scaling system (System 3) naturally penalizes aiming near the poles, so the "tip exploit" is already handled.
+
+---
+
+## System 3: Accuracy Scaling Based on Target Distance
+
+### Core Mechanic
+
+After both meters are locked (entering `RESOLVING`), compute the normalized distance from the locked marker position to the declared target centroid. This distance determines a multiplier applied to the accuracy zone semi-axes.
+
+### Distance Calculation
+
+```gdscript
+## Compute normalized distance from a point to the target centroid,
+## scaled relative to the aim ellipse size. Returns 0.0 at the centroid,
+## ~1.0 at the ellipse boundary, and >1.0 if somehow outside.
+func _get_target_distance_normalized() -> float:
+    if _declared_target.is_empty():
+        return 0.5  # Neutral fallback for off-board targets
+    var dx: float = _horizontal_x - _target_centroid.x
+    var dy: float = _locked_release_y - _target_centroid.y
+    # Normalize relative to ellipse semi-axes so shape is accounted for
+    var norm_x: float = dx / _aim_half_width if _aim_half_width > 0.0 else 0.0
+    var norm_y: float = dy / _aim_half_height if _aim_half_height > 0.0 else 0.0
+    return sqrt(norm_x * norm_x + norm_y * norm_y)
+```
+
+### Three-Zone Accuracy Scaling
+
+The normalized distance `d` maps to three zones with smooth interpolation:
+
+```gdscript
+## Normalized distance threshold for the green (bonus) zone.
+## At or below this distance, the player gets an accuracy bonus.
+## 0.0 = only exact centroid gets bonus. 0.3 = generous green zone.
+@export_range(0.0, 0.5, 0.01) var green_zone_threshold: float = 0.25
+
+## Normalized distance threshold where the penalty zone begins.
+## Between green_threshold and this value is the neutral zone (no change).
+## Above this value, accuracy starts degrading toward the edge.
+@export_range(0.3, 0.8, 0.01) var penalty_zone_threshold: float = 0.6
+
+## Accuracy multiplier at the center of the green zone (best case).
+## Values < 1.0 mean the accuracy zone shrinks (tighter grouping).
+## 0.7 = 30% tighter accuracy at perfect center hits.
+@export_range(0.5, 1.0, 0.01) var green_zone_multiplier: float = 0.75
+
+## Accuracy multiplier at the ellipse edge (worst case).
+## Values > 1.0 mean the accuracy zone bloats (wider scatter).
+## 2.5 = accuracy zone is 2.5x larger at the very edge.
+@export_range(1.5, 4.0, 0.1) var max_edge_penalty_multiplier: float = 2.5
+```
+
+Compute the final multiplier:
+
+```gdscript
+## Compute the accuracy zone multiplier based on distance from target centroid.
+## Returns < 1.0 in green zone (bonus), 1.0 in neutral, > 1.0 in penalty zone.
+func _get_accuracy_multiplier(normalized_distance: float) -> float:
+    if normalized_distance <= green_zone_threshold:
+        # Green zone: lerp from green_zone_multiplier (at d=0) to 1.0 (at threshold)
+        var t: float = normalized_distance / green_zone_threshold if green_zone_threshold > 0.0 else 0.0
+        return lerpf(green_zone_multiplier, 1.0, t)
+    elif normalized_distance <= penalty_zone_threshold:
+        # Neutral zone: no modification
+        return 1.0
+    else:
+        # Penalty zone: lerp from 1.0 (at penalty_threshold) to max_edge_penalty (at d=1.0)
+        var t: float = (normalized_distance - penalty_zone_threshold) / (1.0 - penalty_zone_threshold)
+        t = clampf(t, 0.0, 1.0)
+        return lerpf(1.0, max_edge_penalty_multiplier, t)
+```
+
+### Application to Accuracy Zone
+
+In `_resolve_throw()` and in the resolving draw function, multiply the accuracy semi-axes by this multiplier:
+
+```gdscript
+var dist: float = _get_target_distance_normalized()
+var accuracy_mult: float = _get_accuracy_multiplier(dist)
+var effective_h_accuracy_half: float = _get_horizontal_accuracy_half() * accuracy_mult
+var effective_v_accuracy_half: float = _get_vertical_accuracy_half() * accuracy_mult
+```
+
+Use `effective_h_accuracy_half` and `effective_v_accuracy_half` everywhere the accuracy zone is drawn or sampled — the resolve preview, the Gaussian rejection sampling, and the ghost preview during meters.
+
+---
+
+## System 4: Accuracy Zone Color Feedback
+
+### Color Lerp Based on Accuracy Multiplier
+
+The accuracy zone color smoothly transitions based on the current accuracy multiplier:
+
+```gdscript
+## Color of the accuracy zone when in the green (bonus) zone.
+@export var accuracy_green_color: Color = Color(0.2, 0.85, 0.3, 0.25)
+
+## Color of the accuracy zone in the neutral zone (no bonus or penalty).
+@export var accuracy_neutral_color: Color = Color(1.0, 0.9, 0.2, 0.25)
+
+## Color of the accuracy zone when in the red (penalty) zone.
+@export var accuracy_red_color: Color = Color(0.9, 0.2, 0.15, 0.25)
+```
+
+Compute the display color:
+
+```gdscript
+## Get the accuracy zone color based on the current accuracy multiplier.
+func _get_accuracy_zone_color(accuracy_multiplier: float) -> Color:
+    if accuracy_multiplier <= 1.0:
+        # Green to neutral: multiplier goes from green_zone_multiplier to 1.0
+        var t: float = (accuracy_multiplier - green_zone_multiplier) / (1.0 - green_zone_multiplier)
+        t = clampf(t, 0.0, 1.0)
+        return accuracy_green_color.lerp(accuracy_neutral_color, t)
+    else:
+        # Neutral to red: multiplier goes from 1.0 to max_edge_penalty_multiplier
+        var t: float = (accuracy_multiplier - 1.0) / (max_edge_penalty_multiplier - 1.0)
+        t = clampf(t, 0.0, 1.0)
+        return accuracy_neutral_color.lerp(accuracy_red_color, t)
+```
+
+This color is used when drawing:
+- The ghost accuracy preview during meters (System 5)
+- The final accuracy ellipse during RESOLVING
+
+---
+
+## System 5: Live Ghost Accuracy Preview During Meters
+
+### Concept
+
+While the vertical and horizontal meters are bouncing, a **ghost preview** of the accuracy zone is drawn at the current marker position. This ghost updates every frame, showing the player in real time what their accuracy zone would look like if they clicked right now. It changes **size** (based on distance from target centroid) and **color** (green/yellow/red) as the marker moves.
+
+### During VERTICAL_RELEASE
+
+The ghost accuracy zone is drawn centered at `(_placed_center.x, _release_y)` — the current vertical marker position, at the ellipse center X (since H hasn't been determined yet).
+
+For the distance calculation during this phase, use the X of the placed center as a stand-in for the final horizontal position, since we don't know it yet. This gives the player directional feedback on the vertical axis at least.
+
+```gdscript
+func _draw_vertical_release() -> void:
+    # ... existing dimmed ellipse and meter drawing ...
+
+    # Ghost accuracy preview at current marker position
+    var preview_pos: Vector2 = Vector2(_placed_center.x, _release_y)
+    var dist: float = _get_target_distance_normalized_at(preview_pos)
+    var mult: float = _get_accuracy_multiplier(dist)
+    var ghost_h_half: float = _get_horizontal_accuracy_half() * mult
+    var ghost_v_half: float = _get_vertical_accuracy_half() * mult
+    var ghost_color: Color = _get_accuracy_zone_color(mult)
+    # Draw with reduced alpha so it reads as a preview
+    ghost_color.a *= 0.5
+    var local_pos: Vector2 = preview_pos - global_position
+    _draw_filled_ellipse(local_pos, ghost_h_half, ghost_v_half, ghost_color)
+    _draw_ellipse_outline(local_pos, ghost_h_half, ghost_v_half,
+        Color(ghost_color, ghost_color.a * 2.0), 1.5)
+```
+
+### During HORIZONTAL_RELEASE
+
+The ghost is drawn at `(_horizontal_x, _locked_release_y)` — the current horizontal marker position at the locked Y. This is the actual position that will be used for the distance check, so the preview is fully accurate.
+
+```gdscript
+func _draw_horizontal_release() -> void:
+    # ... existing drawing ...
+
+    # Ghost accuracy preview at current marker position
+    var preview_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y)
+    var dist: float = _get_target_distance_normalized_at(preview_pos)
+    var mult: float = _get_accuracy_multiplier(dist)
+    var ghost_h_half: float = _get_horizontal_accuracy_half() * mult
+    var ghost_v_half: float = _get_vertical_accuracy_half() * mult
+    var ghost_color: Color = _get_accuracy_zone_color(mult)
+    ghost_color.a *= 0.5
+    var local_pos: Vector2 = preview_pos - global_position
+    _draw_filled_ellipse(local_pos, ghost_h_half, ghost_v_half, ghost_color)
+    _draw_ellipse_outline(local_pos, ghost_h_half, ghost_v_half,
+        Color(ghost_color, ghost_color.a * 2.0), 1.5)
+```
+
+### Helper for Preview Distance
+
+The existing `_get_target_distance_normalized()` uses `_horizontal_x` and `_locked_release_y`, which aren't set during the V meter phase. Add a variant that takes an arbitrary position:
+
+```gdscript
+## Compute normalized distance from an arbitrary point to the target centroid.
+func _get_target_distance_normalized_at(pos: Vector2) -> float:
+    if _declared_target.is_empty():
+        return 0.5
+    var dx: float = pos.x - _target_centroid.x
+    var dy: float = pos.y - _target_centroid.y
+    var norm_x: float = dx / _aim_half_width if _aim_half_width > 0.0 else 0.0
+    var norm_y: float = dy / _aim_half_height if _aim_half_height > 0.0 else 0.0
+    return sqrt(norm_x * norm_x + norm_y * norm_y)
+```
+
+---
+
+## System 6: Target Highlight on Board
+
+### Visual Indicator
+
+When the player places the aim ellipse, the declared target segment should be subtly highlighted on the dartboard so the player can see "this is what I'm aiming for."
+
+Add to `dartboard.gd`:
+
+```gdscript
+## Color of the target segment highlight (shown during throw after placement).
+@export var target_highlight_color: Color = Color(1.0, 0.85, 0.2, 0.12)
+
+## Border color for the target segment highlight.
+@export var target_highlight_border_color: Color = Color(1.0, 0.85, 0.2, 0.4)
+
+## The currently declared target segment. Set by main.gd when the player places the aim zone.
+## Dictionary with wedge_index, ring_name, is_bull keys. Empty = no target.
+var declared_target: Dictionary = {}
+```
+
+Add a new function to set/clear the target:
+
+```gdscript
+## Set the declared target segment for visual highlighting.
+func set_declared_target(target: Dictionary) -> void:
+    declared_target = target
     queue_redraw()
-    throw_completed.emit(hit_position)
+
+## Clear the declared target highlight.
+func clear_declared_target() -> void:
+    declared_target = {}
+    queue_redraw()
 ```
 
-Note: With `gaussian_spread` at 0.4 and center-weighted rolls, the rejection loop almost never iterates more than once. The `for` loop with a cap of 20 is a safety net — if it somehow exhausts all attempts, it uses the last rolled values, which is fine.
+In `_draw()`, after drawing the board but before the flash overlay, draw the target highlight if set. Reuse the existing `_draw_segment()` and `_draw_segment_border()` functions — same approach as hover highlighting but with the target highlight colors.
+
+For bullseye targets, highlight the appropriate bull circle.
+
+### When to Show/Hide
+
+- **Show:** When `main.gd` receives the target declaration (after aim placement click). Call `dartboard.set_declared_target(target_info)`.
+- **Hide:** When the throw resolves (dart lands). Call `dartboard.clear_declared_target()` in `_on_throw_completed()`.
+- **Also hide:** On new run, when clearing state.
 
 ---
 
-## Removed Concepts
+## System 7: Target Tooltip
 
-- **`POSITIONING` state**: Entirely removed. No more W/S window sliding.
-- **Aim band / aim line**: No more vertical rectangular band. Replaced by ellipse.
-- **Window shrink tween**: No longer needed since there's no window to shrink.
-- **`_full_line_top/bottom/height`**: Remove these variables.
-- **`_window_top/bottom/height/center_y`**: Remove these variables.
-- **`_is_shrink_complete`**: Remove.
-- **`shrink_tween_duration`**: Remove this export var.
-- **`window_color` / `window_border_color`**: Remove these export vars (or repurpose for the dimmed ellipse outline).
-- **`window_move_speed`**: Keep — repurpose for WASD movement speed during AIMING.
+### Display Format
 
----
+When the player places the aim zone and declares a target, display a persistent tooltip showing what they're aiming for and what it's worth with current modifiers.
 
-## New Variables
-
-```gdscript
-## Center of the placed aim ellipse (locked when player confirms placement).
-var _placed_center: Vector2 = Vector2.ZERO
-
-## Horizontal semi-axis of the aim ellipse (computed from horizontal_range at placement time).
-var _aim_half_width: float = 0.0
-
-## Vertical semi-axis of the aim ellipse (computed from vertical_range at placement time).
-var _aim_half_height: float = 0.0
-
-## Whether mouse is currently controlling aim position (vs WASD).
-var _mouse_controls_aim: bool = true
-
-## Current aim position during AIMING state (before placement is locked).
-var _aim_center: Vector2 = Vector2.ZERO
+**Format:**
+```
+Target: [ring_prefix] [face_value] | Worth: [base_score] + [bonus_mult]×[face_value] = [total] | [streak_info]
 ```
 
-## New Export Vars
+**Ring prefix mapping:**
+- "Inner Single" or "Outer Single" → `S`
+- "Double" → `D`
+- "Triple" → `T`
+- "Single Bull" → `SB`
+- "Double Bull" → `DB`
+
+**Examples:**
+- No modifiers: `Target: D20 | Worth: 40`
+- With +1x red bonus: `Target: D20 | Worth: 40 + 1×20 = 60`
+- With +1x red and +2x even: `Target: D20 | Worth: 40 + 3×20 = 100`
+- Off board: No tooltip shown
+
+**Streak info:** Only shown if the player has an active streak modifier. Shows the current streak count for the relevant streak type. Format: `[Streak Name] ×[count] 🔥` (fire indicator only when streak is actively contributing bonus).
+
+### Implementation
+
+The target tooltip replaces the hover tooltip during the throw (hover is disabled during meters anyway). It appears in the same HUD location.
+
+**When the target is declared** in `main.gd`:
+1. Run the target segment through `scoring_modifier_manager.process_score(target_result, true)` in preview mode to get the fully modified score.
+2. Compute the bonus breakdown: `bonus_multiplier_total = modified_multiplier - base_multiplier`. If > 0, show the `+ Nx[face_value] = [total]` portion.
+3. Check active streak modifiers for current streak counts and include streak info if applicable.
+4. Pass the formatted info to the HUD for display.
+
+**Add to `hud.gd`:**
 
 ```gdscript
-## Maximum aim ellipse half-height in pixels (at vertical_range = 1). The worst possible vertical spread.
-@export var max_aim_half_height: float = 200.0
+## Show the target declaration tooltip during a throw.
+## target_info contains: prefix (S/D/T/SB/DB), face_value, base_score, total_score,
+## bonus_multiplier_total, streak_lines (Array[String]).
+func show_target_tooltip(target_info: Dictionary) -> void:
+    # Build the display string and show in the tooltip label
+    pass  # Implementation depends on existing HUD tooltip structure
 
-## Minimum aim ellipse half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
-@export var min_aim_half_height: float = 5.0
+## Hide the target tooltip (when throw completes or new run starts).
+func hide_target_tooltip() -> void:
+    pass
 ```
 
-## New Helper Function
+The actual HUD label formatting and positioning follows the existing hover tooltip pattern — reuse the same label/panel if possible, just change the content.
+
+### Worth Calculation Detail
+
+The "Worth" line needs to show the breakdown clearly. To compute it:
 
 ```gdscript
-## Compute the aim ellipse half-height in pixels from the vertical_range stat (1–100).
-func _get_aim_half_height() -> float:
-    var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
-    return lerpf(max_aim_half_height, min_aim_half_height, normalized)
+## Build target tooltip info from a declared target and the modifier pipeline.
+func _build_target_tooltip(target_result: Dictionary) -> Dictionary:
+    var face_value: int = target_result["face_value"]
+    var base_multiplier: int = target_result["multiplier"]
+    var base_score: int = face_value * base_multiplier
+
+    # Run through modifier pipeline in preview mode
+    var modified: Dictionary = scoring_modifier_manager.process_score(target_result.duplicate(), true)
+    var modified_multiplier: int = modified["multiplier"]
+    var total_score: int = modified["total_score"]
+    var bonus_mult: int = modified_multiplier - base_multiplier
+
+    # Build ring prefix
+    var prefix: String = _get_ring_prefix(target_result["ring_name"])
+
+    # Build streak info lines from active streak modifiers
+    var streak_lines: Array[String] = _get_active_streak_info()
+
+    return {
+        "prefix": prefix,
+        "face_value": face_value,
+        "base_score": base_score,
+        "total_score": total_score,
+        "bonus_multiplier_total": bonus_mult,
+        "streak_lines": streak_lines,
+    }
+
+
+func _get_ring_prefix(ring_name: String) -> String:
+    match ring_name:
+        "Inner Single", "Outer Single":
+            return "S"
+        "Double":
+            return "D"
+        "Triple":
+            return "T"
+        "Single Bull":
+            return "SB"
+        "Double Bull":
+            return "DB"
+    return ""
 ```
 
----
+### Streak Info in Tooltip
 
-## Drawing Utilities
+Only show streak status if the player has an active streak modifier. Query the `scoring_modifier_manager.active_modifiers` for any that have `streak_scope != NONE`, and read their current streak count.
 
-### Drawing a Filled Ellipse
-Godot's `draw_arc` doesn't fill. Use `draw_colored_polygon` with points generated from the ellipse equation:
+The streak modifier classes need a public getter for current streak count. Add to `streak_bonus_modifier.gd`:
 
 ```gdscript
-## Draw a filled ellipse centered at `center` (local coords) with given semi-axes and color.
-func _draw_filled_ellipse(center: Vector2, half_w: float, half_h: float, color: Color, segments: int = 64) -> void:
-    var points: PackedVector2Array = PackedVector2Array()
-    for i: int in range(segments):
-        var angle: float = TAU * float(i) / float(segments)
-        points.append(center + Vector2(cos(angle) * half_w, sin(angle) * half_h))
-    draw_colored_polygon(points, color)
+## Get the current streak count for display purposes.
+func get_streak_count() -> int:
+    return _streak_count
 ```
 
-### Drawing an Ellipse Outline
-```gdscript
-## Draw an ellipse outline centered at `center` (local coords).
-func _draw_ellipse_outline(center: Vector2, half_w: float, half_h: float, color: Color, width: float = 2.0, segments: int = 64) -> void:
-    for i: int in range(segments):
-        var angle_a: float = TAU * float(i) / float(segments)
-        var angle_b: float = TAU * float(i + 1) / float(segments)
-        var point_a: Vector2 = center + Vector2(cos(angle_a) * half_w, sin(angle_a) * half_h)
-        var point_b: Vector2 = center + Vector2(cos(angle_b) * half_w, sin(angle_b) * half_h)
-        draw_line(point_a, point_b, color, width)
-```
-
-### Drawing a Band Clipped to Ellipse
-For the accuracy glow bands, generate a polygon that represents the intersection of a horizontal/vertical strip with the ellipse:
-
-```gdscript
-## Draw a horizontal band (y_min to y_max) clipped to the aim ellipse.
-## center, half_w, half_h are the ellipse parameters in local coords.
-func _draw_h_band_clipped(center: Vector2, half_w: float, half_h: float, y_min: float, y_max: float, color: Color, segments: int = 32) -> void:
-    var points: PackedVector2Array = PackedVector2Array()
-    # Clamp band to ellipse vertical extent
-    y_min = maxf(y_min, center.y - half_h)
-    y_max = minf(y_max, center.y + half_h)
-    if y_min >= y_max:
-        return
-    # Right edge: top to bottom
-    for i: int in range(segments + 1):
-        var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
-        var dy: float = (y - center.y) / half_h
-        var x_extent: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
-        points.append(Vector2(center.x + x_extent, y))
-    # Left edge: bottom to top
-    for i: int in range(segments, -1, -1):
-        var y: float = y_min + (y_max - y_min) * float(i) / float(segments)
-        var dy: float = (y - center.y) / half_h
-        var x_extent: float = half_w * sqrt(maxf(1.0 - dy * dy, 0.0))
-        points.append(Vector2(center.x - x_extent, y))
-    draw_colored_polygon(points, color)
-```
-
-A similar `_draw_v_band_clipped` function handles vertical bands (swap x/y logic).
+New color/even-odd streak modifiers (covered in the separate streak slot spec) would need the same getter.
 
 ---
 
 ## Files Affected
 
-### `throw_mechanic.gd` — **Major rewrite**
-- Remove `POSITIONING` from enum and all associated logic.
-- Remove window-related variables, export vars, and draw functions.
-- Replace `_draw_positioning()` entirely.
-- Rewrite `_process()` AIMING to track mouse + handle WASD.
-- Rewrite `_unhandled_input()` to remove POSITIONING input handling; all states now use Click/Space/Enter uniformly.
-- Rewrite all `_draw_*` functions to use ellipses instead of rectangles.
-- Rewrite `_resolve_throw()` to use ellipse rejection sampling.
-- Add new variables, export vars, and helper functions listed above.
-- Add drawing utility functions for filled ellipses, outlines, and clipped bands.
+### `throw_mechanic.gd` — Major changes
+- Add `_declared_target`, `_target_centroid` variables
+- Add `_h_meter_half_width` variable and `_get_ellipse_half_width_at_y()` helper
+- Add accuracy scaling export vars (thresholds, multipliers, colors)
+- Add `_get_target_distance_normalized()`, `_get_target_distance_normalized_at()`, `_get_accuracy_multiplier()`, `_get_accuracy_zone_color()` functions
+- Modify `HORIZONTAL_RELEASE` to use `_h_meter_half_width` instead of full ellipse width
+- Modify `_resolve_throw()` to apply accuracy multiplier before Gaussian sampling
+- Modify all `_draw_*` functions to include ghost accuracy preview with color feedback
+- Modify `_draw_resolving()` to use accuracy-scaled ellipse with appropriate color
+- Need a reference to the dartboard node (add `@export var dartboard: Node2D` or have `main.gd` set it)
 
-### `main.gd` — **Minor updates**
-- Remove the `ThrowState.POSITIONING` match arm in `_on_throw_state_changed()`.
-- Update HUD instruction text: AIMING instruction should say "Move mouse to aim, click to place" (no more W/S window instructions).
-- The POSITIONING instruction is removed entirely.
+### `dartboard.gd` — Moderate changes
+- Add `get_segment_centroid()` function
+- Add `declared_target`, `target_highlight_color`, `target_highlight_border_color` variables
+- Add `set_declared_target()` / `clear_declared_target()` functions
+- Add target highlight drawing in `_draw()` (after segments, before flash)
 
-### `hud.gd` — **Minor updates**
-- Update any instruction strings that reference the old positioning phase.
-- Stats panel labels remain the same (H Range, V Range, etc.) — no changes needed since stat names are unchanged.
+### `main.gd` — Moderate changes
+- Wire dartboard reference to throw_mechanic (if using export var approach)
+- On aim placement: compute target, call `dartboard.set_declared_target()`, build tooltip info, call `hud.show_target_tooltip()`
+- On throw complete: call `dartboard.clear_declared_target()`, call `hud.hide_target_tooltip()`
+- Add `_build_target_tooltip()` and `_get_ring_prefix()` helper functions
+- Add `_get_active_streak_info()` to query streak modifiers for tooltip display
 
-### `dart_build.gd` — **No changes**
-All stat names, bonus application, and balance system remain identical.
+### `hud.gd` — Minor changes
+- Add `show_target_tooltip()` / `hide_target_tooltip()` functions
+- Reuse or adapt existing hover tooltip label/panel for target display
 
-### `dart_component.gd` — **No changes**
-Component stat bonuses remain the same six stats.
+### `streak_bonus_modifier.gd` — Minor change
+- Add `get_streak_count() -> int` public getter
 
-### All modifier files — **No changes**
-Throw modifiers and scoring modifiers are unaffected.
+### `scoring_modifier_manager.gd` — No changes
+- Already supports `process_score()` in preview mode, which is all the tooltip needs
 
 ---
 
-## HUD Instruction Text Updates
+## Integration with Existing Ellipse Throw Mechanic
 
-| State | Old Text | New Text |
-|---|---|---|
-| AIMING | "Click or Space to lock aim position" | "Move to aim, click to place zone" |
-| POSITIONING | "W/S or Up/Down to move window, Enter/Space to lock" | *(removed)* |
-| VERTICAL_RELEASE | "Click or Space to lock vertical position" | "Click or Space to lock vertical" |
-| HORIZONTAL_RELEASE | "Click or Space to lock horizontal position" | "Click or Space to lock horizontal" |
-| RESOLVING | "Releasing..." | "Releasing..." |
+This spec builds on top of the already-implemented ellipse-based throw mechanic. It assumes:
+- `AIMING` state places an ellipse that follows the mouse
+- `_placed_center`, `_aim_half_width`, `_aim_half_height` are already stored on placement
+- `VERTICAL_RELEASE` bounces within the ellipse height
+- `HORIZONTAL_RELEASE` bounces within the ellipse (width change is part of THIS spec)
+- `RESOLVING` draws an accuracy ellipse and does Gaussian rejection sampling
+- Drawing utilities (`_draw_filled_ellipse`, `_draw_ellipse_outline`) already exist
 
 ---
 
 ## Testing Checklist
 
-- [ ] Ellipse renders correctly with equal H/V range (should be a circle)
-- [ ] Ellipse renders correctly with different H/V range (should be visibly elliptical)
-- [ ] Mouse placement works — ellipse follows cursor, click locks it
-- [ ] WASD placement works — arrow keys / WASD move the zone, mouse reclaims on mouse move
-- [ ] Space and Enter work as click alternatives in all three input stages
-- [ ] Vertical meter bounces across full ellipse height
-- [ ] Horizontal meter bounces across full ellipse width at locked Y
-- [ ] Accuracy glow bands clip correctly to ellipse boundary
-- [ ] Accuracy ellipse appears during RESOLVING with correct size
-- [ ] Balance skew shifts the accuracy ellipse vertically during resolve
-- [ ] Dart lands within the accuracy ellipse (never outside it)
-- [ ] Equal H/V accuracy produces a circular accuracy zone
-- [ ] Throw modifiers still apply correctly (temp bonuses affect the right stats)
-- [ ] Dart component bonuses affect zone size and accuracy zone as expected
-- [ ] Upgrades affect zone size and accuracy zone correctly
-- [ ] Game flow (next dart, next turn, next leg, new run) still works
-- [ ] Hover tooltip still works during AIMING (hover should be active)
-- [ ] Hover disabled during meter stages
+- [ ] Clicking on a board segment during AIMING stores the correct target (wedge_index, ring_name, face_value)
+- [ ] Segment centroid computation returns a point visually centered in the segment
+- [ ] Bullseye target centroid returns board center
+- [ ] Off-board click falls back to neutral accuracy (no crash, no bonus/penalty)
+- [ ] H meter width narrows when V meter is stopped near the ellipse poles
+- [ ] H meter runs full width when V meter is stopped at ellipse center
+- [ ] Accuracy zone is visibly smaller (green) when marker is near target centroid
+- [ ] Accuracy zone is visibly larger (red) when marker is near ellipse edge
+- [ ] Accuracy zone is neutral (yellow) in the middle band
+- [ ] Color transitions smoothly between green → yellow → red (no hard pops)
+- [ ] Ghost preview updates every frame during V meter bouncing
+- [ ] Ghost preview updates every frame during H meter bouncing
+- [ ] Ghost preview size and color match the final accuracy zone at the same position
+- [ ] Target segment is highlighted on the dartboard after placement
+- [ ] Target highlight clears when the dart lands
+- [ ] Target tooltip shows correct ring prefix and face value
+- [ ] Target tooltip shows modifier bonus breakdown when modifiers are active
+- [ ] Target tooltip shows streak count only when a streak modifier is equipped
+- [ ] Dart always lands within the accuracy-scaled ellipse (never outside)
+- [ ] Green zone bonus makes grouping noticeably tighter in gameplay
+- [ ] Red zone penalty makes scatter noticeably worse in gameplay
+- [ ] Range stat upgrades make the green zone easier to hit (smaller ellipse = closer to everything)

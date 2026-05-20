@@ -127,10 +127,20 @@ var _checkout_segments: Array[Dictionary] = []
 var _checkout_pulse_active: bool = false
 var _checkout_pulse_time: float = 0.0
 
+## The currently declared target segment. Set by main.gd when the player places the aim zone.
+## Dictionary with wedge_index, ring_name, is_bull keys. Empty = no target.
+var declared_target: Dictionary = {}
+
 ## Picker mode state — for interactive wedge selection UI
 var picker_mode: bool = false
 var _picker_hover_wedge: int = -1
 var _picker_selected_wedges: Array[int] = []
+
+## Color of the target segment highlight (shown during throw after placement).
+@export var target_highlight_color: Color = Color(1.0, 0.85, 0.2, 0.12)
+
+## Border color for the target segment highlight.
+@export var target_highlight_border_color: Color = Color(1.0, 0.85, 0.2, 0.4)
 
 @export var picker_highlight_color: Color = Color(0.2, 0.7, 1.0, 0.25)
 @export var picker_selected_color: Color = Color(0.2, 1.0, 0.4, 0.3)
@@ -192,6 +202,10 @@ func _draw() -> void:
 		var inner_point: Vector2 = direction * board_radius * RING_SINGLE_BULL_OUTER
 		var outer_point: Vector2 = direction * board_radius * RING_DOUBLE_OUTER
 		draw_line(inner_point, outer_point, wire_color, wire_thickness)
+
+	# Draw target segment highlight (declared target during throw)
+	if not declared_target.is_empty():
+		_draw_target_highlight()
 
 	# Draw hover highlight on the segment under the mouse (if active)
 	if _hover_active and _hover_ring_name != "":
@@ -489,6 +503,53 @@ func _lookup_segment_color(wedge_idx: int, is_multi: bool) -> ScoringEnums.Segme
 		return ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
 
 
+## Compute the global-space centroid of a board segment identified by wedge_index and ring_name.
+## For bullseyes, returns the board center. For wedge segments, returns the midpoint
+## of the arc segment (center angle of the wedge, midpoint radius of the ring).
+func get_segment_centroid(wedge_index: int, ring_name: String) -> Vector2:
+	if ring_name == "Double Bull" or ring_name == "double_bull":
+		return global_position
+	if ring_name == "Single Bull" or ring_name == "single_bull":
+		return global_position
+
+	# For wedge segments, compute center angle and midpoint radius
+	var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG
+	var center_angle_rad: float = deg_to_rad(center_angle_deg)
+	var direction: Vector2 = Vector2(sin(center_angle_rad), -cos(center_angle_rad))
+
+	# Determine inner and outer normalized radius for this ring
+	var inner_norm: float = 0.0
+	var outer_norm: float = 0.0
+	match ring_name:
+		"Inner Single", "inner_single":
+			inner_norm = RING_SINGLE_BULL_OUTER
+			outer_norm = RING_INNER_SINGLE_OUTER
+		"Triple", "triple":
+			inner_norm = RING_INNER_SINGLE_OUTER
+			outer_norm = RING_TRIPLE_OUTER
+		"Outer Single", "outer_single":
+			inner_norm = RING_TRIPLE_OUTER
+			outer_norm = RING_OUTER_SINGLE_OUTER
+		"Double", "double":
+			inner_norm = RING_OUTER_SINGLE_OUTER
+			outer_norm = RING_DOUBLE_OUTER
+
+	var mid_r: float = board_radius * (inner_norm + outer_norm) / 2.0
+	return global_position + direction * mid_r
+
+
+## Set the declared target segment for visual highlighting.
+func set_declared_target(target: Dictionary) -> void:
+	declared_target = target
+	queue_redraw()
+
+
+## Clear the declared target highlight.
+func clear_declared_target() -> void:
+	declared_target = {}
+	queue_redraw()
+
+
 ## Update hover state based on the current global mouse position.
 ## Call this from main.gd during hover-active game states.
 ## Returns the score dictionary for the hovered segment (for tooltip display),
@@ -586,6 +647,46 @@ func _draw_hover_segment() -> void:
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_highlight_color)
 			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_border_color, hover_border_thickness)
+
+
+## Draw a highlight on the declared target segment.
+func _draw_target_highlight() -> void:
+	var ring_name: String = declared_target.get("ring_name", "")
+	var is_bull: bool = declared_target.get("is_bull", false)
+	var wedge_idx: int = declared_target.get("wedge_index", -1)
+
+	if is_bull:
+		if ring_name == "Double Bull":
+			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, target_highlight_color)
+			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(points, target_highlight_border_color, hover_border_thickness)
+		elif ring_name == "Single Bull":
+			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, target_highlight_color)
+			var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
+			draw_polyline(outer_points, target_highlight_border_color, hover_border_thickness)
+			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(inner_points, target_highlight_border_color, hover_border_thickness)
+	elif wedge_idx >= 0:
+		var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+		var inner_norm: float = 0.0
+		var outer_norm: float = 0.0
+		match ring_name:
+			"Inner Single":
+				inner_norm = RING_SINGLE_BULL_OUTER
+				outer_norm = RING_INNER_SINGLE_OUTER
+			"Triple":
+				inner_norm = RING_INNER_SINGLE_OUTER
+				outer_norm = RING_TRIPLE_OUTER
+			"Outer Single":
+				inner_norm = RING_TRIPLE_OUTER
+				outer_norm = RING_OUTER_SINGLE_OUTER
+			"Double":
+				inner_norm = RING_OUTER_SINGLE_OUTER
+				outer_norm = RING_DOUBLE_OUTER
+		if outer_norm > 0.0:
+			_draw_segment(start_deg, end_deg, outer_norm, inner_norm, target_highlight_color)
+			_draw_segment_border(start_deg, end_deg, outer_norm, inner_norm, target_highlight_border_color, hover_border_thickness)
 
 
 ## Draw a border outline around a wedge segment.

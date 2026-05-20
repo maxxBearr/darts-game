@@ -10,7 +10,8 @@
       "Bash(Get-Unique)",
       "Bash(Get-ChildItem *)",
       "PowerShell($lines = Get-Content 'C:\\\\Users\\\\max\\\\.claude\\\\projects\\\\C--Users-max-Documents-GitHub-darts-game\\\\3f80c5a0-ae21-4865-acb9-9b437f8f6dda.jsonl'; $humanMessages = @\\(\\); foreach \\($line in $lines\\) { try { $json = $line | ConvertFrom-Json; if \\($json.type -eq 'human'\\) { $humanMessages += $json.message.content } } catch {} }; Write-Output \"Total human messages: $\\($humanMessages.Count\\)\"; Write-Output \"Last message length: $\\($humanMessages[-1].Length\\)\"; Write-Output \"=== LAST MESSAGE \\(first 5000 chars\\) ===\"; $humanMessages[-1].Substring\\(0, [Math]::Min\\(5000, $humanMessages[-1].Length\\)\\))",
-      "PowerShell(Get-Content *)"
+      "PowerShell(Get-Content *)",
+      "Bash(Select-Object -ExpandProperty Name)"
     ]
   }
 }
