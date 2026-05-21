@@ -69,8 +69,6 @@ func get_streak_count() -> int:
 
 
 func get_streak_display() -> String:
-	if _streak_count <= 0:
-		return ""
 	return "Color ×%d" % _streak_count
 
 

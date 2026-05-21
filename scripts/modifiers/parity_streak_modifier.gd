@@ -73,7 +73,5 @@ func get_streak_count() -> int:
 
 
 func get_streak_display() -> String:
-	if _streak_count <= 0:
-		return ""
 	var parity_label: String = "Odd" if target_is_odd else "Even"
 	return "%s ×%d" % [parity_label, _streak_count]

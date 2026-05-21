@@ -224,7 +224,8 @@ func _process(_delta: float) -> void:
 		# modified score without recording to hit history
 		var modified_result: Dictionary = scoring_modifier_manager.process_score(hover_result, true)
 		var is_checkout: bool = _is_checkout_segment(modified_result)
-		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER, mouse_pos, is_checkout)
+		var streak_lines: Array[String] = _get_active_streak_info()
+		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER, mouse_pos, is_checkout, streak_lines)
 
 		# Extract which modifiers triggered for perk-up display
 		var triggered_names: Array[String] = []
@@ -805,18 +806,12 @@ func _on_throw_state_changed(new_state: int) -> void:
 			_disable_hover()
 			hud.clear_modifier_perkup()
 			hud.show_instruction("Click or Space to lock vertical")
-			# Declare target and show highlight + streak info
+			# Declare target and show highlight
 			var target: Dictionary = throw_mechanic._declared_target
 			if not target.is_empty():
 				dartboard.set_declared_target(target)
-				var streak_lines: Array[String] = _get_active_streak_info()
-				if streak_lines.size() > 0:
-					hud.show_streak_info(streak_lines)
-				else:
-					hud.hide_target_tooltip()
 			else:
 				dartboard.clear_declared_target()
-				hud.hide_target_tooltip()
 		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
 			_disable_hover()
 			hud.show_instruction("Click or Space to lock horizontal")

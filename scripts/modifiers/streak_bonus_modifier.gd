@@ -112,8 +112,6 @@ func get_streak_count() -> int:
 
 
 func get_streak_display() -> String:
-	if _streak_count <= 0:
-		return ""
 	var leniency_label: String = ""
 	match leniency:
 		ScoringEnums.StreakLeniency.SAME_RING:

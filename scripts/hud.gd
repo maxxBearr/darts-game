@@ -435,7 +435,8 @@ func clear_modifier_status() -> void:
 ## Positioned directly above the aim point for in-focus feedback during aiming.
 ## Format: "Target: D7 ×3 = 35" (with modifier), or "Target: D7 = 14" (without).
 ## Turns gold when hovering a segment that would win the leg in one dart.
-func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], screen_pos: Vector2 = Vector2.ZERO, is_checkout: bool = false) -> void:
+## streak_lines: current streak display strings appended after the score readout.
+func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], screen_pos: Vector2 = Vector2.ZERO, is_checkout: bool = false, streak_lines: Array[String] = []) -> void:
 	if result.is_empty():
 		hover_tooltip.visible = false
 		return
@@ -461,6 +462,10 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 		text = "Target: %s%d ×%d = %d" % [prefix, face_value, multiplier, total_score]
 	else:
 		text = "Target: %s%d = %d" % [prefix, face_value, total_score]
+
+	# Append streak info
+	for line: String in streak_lines:
+		text += " | " + line
 
 	hover_tooltip.text = text
 	hover_tooltip.visible = true
