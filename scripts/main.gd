@@ -9,6 +9,10 @@ extends Node2D
 ## before the first throw — same UI as the post-leg modifier pick.
 @export var debug_start_with_modifier: bool = false
 
+## Seconds to wait after a dart lands before auto-starting the next throw.
+## Only applies within a turn — turn boundaries still require a button press.
+@export var next_dart_delay: float = 0.8
+
 @onready var dartboard: Node2D = $Dartboard
 @onready var throw_mechanic: Node2D = $ThrowMechanic
 @onready var dart_container: Node2D = $DartContainer
@@ -155,7 +159,6 @@ func _ready() -> void:
 	throw_mechanic.state_changed.connect(_on_throw_state_changed)
 
 	# Connect HUD button signals
-	hud.next_dart_pressed.connect(_on_next_dart)
 	hud.next_turn_pressed.connect(_on_next_turn)
 	hud.next_leg_pressed.connect(_on_next_leg)
 	hud.new_run_pressed.connect(_on_new_run)
@@ -215,11 +218,22 @@ func _process(_delta: float) -> void:
 	# Update the hover tooltip on the HUD (suppress during trigger animations)
 	if _trigger_anim_active or hover_result.is_empty():
 		hud.hide_hover_tooltip()
+		hud.clear_modifier_perkup()
 	else:
 		# Run through the modifier pipeline in preview mode to get the fully
 		# modified score without recording to hit history
 		var modified_result: Dictionary = scoring_modifier_manager.process_score(hover_result, true)
-		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER)
+		var is_checkout: bool = _is_checkout_segment(modified_result)
+		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER, mouse_pos, is_checkout)
+
+		# Extract which modifiers triggered for perk-up display
+		var triggered_names: Array[String] = []
+		var modifications: Array = modified_result.get("modifications", [])
+		for mod: Dictionary in modifications:
+			var source: String = mod.get("source_name", "")
+			if source != "" and source not in triggered_names:
+				triggered_names.append(source)
+		hud.set_modifier_perkup(triggered_names)
 
 
 ## Enable hover feedback on the board and tooltip display.
@@ -234,6 +248,7 @@ func _disable_hover() -> void:
 	dartboard.hover_enabled = false
 	dartboard.clear_hover()
 	hud.hide_hover_tooltip()
+	hud.clear_modifier_perkup()
 
 
 ## Add a scoring modifier to the game. Handles replacement, manager, and HUD panel.
@@ -348,9 +363,12 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	else:
-		# Darts remaining this turn — continue throwing
-		hud.next_dart_button.visible = true
+		# Darts remaining this turn — auto-advance after score animation + delay
 		_awaiting_next_dart = true
+		if score_tween != null and score_tween.is_valid():
+			score_tween.tween_callback(_start_next_dart_timer)
+		else:
+			_start_next_dart_timer()
 
 	# Update dart counter
 	hud.update_darts(response["darts_remaining"], x01_game.current_turn == x01_game.max_turns)
@@ -373,8 +391,18 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 	)
 
 
-## Player presses "Next Dart" — throw another dart in the same turn.
-func _on_next_dart() -> void:
+## Start the next-dart delay timer. Called after the score tween finishes.
+func _start_next_dart_timer() -> void:
+	if not _awaiting_next_dart:
+		return
+	get_tree().create_timer(next_dart_delay).timeout.connect(_auto_next_dart)
+
+
+## Auto-advance to the next dart after the delay timer fires.
+## Guards against stale timers — if the game state moved on, do nothing.
+func _auto_next_dart() -> void:
+	if not _awaiting_next_dart:
+		return
 	_awaiting_next_dart = false
 	_start_new_throw()
 
@@ -720,10 +748,28 @@ func _update_stats_display() -> void:
 
 
 ## Recalculate and update which double segments would win the current leg.
+## Also updates the remaining score color — gold when a single-dart checkout exists.
 func _update_checkout_highlights() -> void:
 	var remaining: int = x01_game.remaining_score
 	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(remaining)
 	dartboard.set_checkout_segments(checkout_segments)
+	hud.set_remaining_checkout_available(checkout_segments.size() > 0)
+
+
+## Check if a hovered segment is one of the checkout-winning doubles.
+## Uses the same checkout list that drives the board highlights and gold score.
+func _is_checkout_segment(result: Dictionary) -> bool:
+	if result["total_score"] != x01_game.remaining_score:
+		return false
+	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(x01_game.remaining_score)
+	var wedge_index: int = result.get("wedge_index", -1)
+	var is_bull: bool = result.get("is_bull", false)
+	for seg: Dictionary in checkout_segments:
+		if seg["type"] == "double_bull" and is_bull and result.get("ring_name", "") == "Double Bull":
+			return true
+		if seg["type"] == "wedge" and seg["wedge_idx"] == wedge_index and result.get("ring_name", "") == "Double":
+			return true
+	return false
 
 
 ## Push the modifier manager's effective wedge values and colors to the dartboard
@@ -757,13 +803,17 @@ func _on_throw_state_changed(new_state: int) -> void:
 			_enable_hover()
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
 			_disable_hover()
+			hud.clear_modifier_perkup()
 			hud.show_instruction("Click or Space to lock vertical")
-			# Declare target and show highlight + tooltip
+			# Declare target and show highlight + streak info
 			var target: Dictionary = throw_mechanic._declared_target
 			if not target.is_empty():
 				dartboard.set_declared_target(target)
-				var tooltip_info: Dictionary = _build_target_tooltip(target)
-				hud.show_target_tooltip(tooltip_info)
+				var streak_lines: Array[String] = _get_active_streak_info()
+				if streak_lines.size() > 0:
+					hud.show_streak_info(streak_lines)
+				else:
+					hud.hide_target_tooltip()
 			else:
 				dartboard.clear_declared_target()
 				hud.hide_target_tooltip()

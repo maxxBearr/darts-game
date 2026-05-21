@@ -3,9 +3,9 @@ Spec date: 2026-05-21
 Status: Shipped 2026-05-21 — uncommitted on branch `streak-item-system`, pending playtest
 Implementation: Claude Code (run by Max during the same Cowork session that wrote this spec)
 Notes: All spec items were implemented. Pool weights for ColorStreak / ParityStreak
-       (both set to 15) may need tuning after playtest. Streak slot UI behavior should
-       be sanity-checked during real runs. Update this status if playtest surfaces
-       partial-ship or revisit decisions, and link to any follow-up spec.
+	   (both set to 15) may need tuning after playtest. Streak slot UI behavior should
+	   be sanity-checked during real runs. Update this status if playtest surfaces
+	   partial-ship or revisit decisions, and link to any follow-up spec.
 ---
 
 # Streak Slot Restriction System & New Streak Modifiers

@@ -452,17 +452,59 @@ func _draw_balance_bar() -> void:
 	var half_w: float = w / 2.0
 
 	# Zone boundaries in pixels from center
+	var perfect_px: float = (dart_build.perfect_threshold / 1.5) * half_w if dart_build else half_w * 0.05
 	var green_px: float = (dart_build.green_threshold / 1.5) * half_w if dart_build else half_w * 0.17
 	var orange_px: float = (dart_build.orange_threshold / 1.5) * half_w if dart_build else half_w * 0.33
 
-	# Red zones (outer)
-	_balance_bar.draw_rect(Rect2(0.0, 0.0, w, h), Color(0.7, 0.2, 0.2, 0.6))
+	# Transition sub-zone boundaries
+	var orange_zone_px: float = orange_px - green_px
+	var go_trans_px: float = orange_zone_px * (dart_build.green_orange_transition_width if dart_build else 0.4)
+	var or_trans_px: float = orange_zone_px * (dart_build.orange_red_transition_width if dart_build else 0.4)
 
-	# Orange zones
-	_balance_bar.draw_rect(Rect2(half_w - orange_px, 0.0, orange_px * 2.0, h), Color(0.8, 0.6, 0.2, 0.6))
+	# Zone colors
+	var perfect_color: Color = Color(0.15, 0.85, 0.4, 0.7)
+	var green_color: Color = Color(0.2, 0.7, 0.3, 0.6)
+	var go_trans_color: Color = Color(0.5, 0.7, 0.25, 0.6)
+	var orange_color: Color = Color(0.8, 0.6, 0.2, 0.6)
+	var or_trans_color: Color = Color(0.75, 0.4, 0.2, 0.6)
+	var red_color: Color = Color(0.7, 0.2, 0.2, 0.6)
 
-	# Green zone (center)
-	_balance_bar.draw_rect(Rect2(half_w - green_px, 0.0, green_px * 2.0, h), Color(0.2, 0.7, 0.3, 0.6))
+	# Draw gradient using thin vertical slices across the full bar width
+	var num_slices: int = int(w)
+	for i: int in range(num_slices):
+		var x: float = float(i)
+		var dist_from_center: float = absf(x - half_w)
+
+		# Determine which zone this pixel falls in and interpolate color
+		var color: Color
+		if dist_from_center <= perfect_px:
+			color = perfect_color
+		elif dist_from_center <= green_px:
+			# Blend from perfect into green
+			var t: float = (dist_from_center - perfect_px) / (green_px - perfect_px) if green_px > perfect_px else 1.0
+			color = perfect_color.lerp(green_color, t)
+		elif dist_from_center <= green_px + go_trans_px:
+			# Green→orange transition
+			var t: float = (dist_from_center - green_px) / go_trans_px if go_trans_px > 0.0 else 1.0
+			color = green_color.lerp(go_trans_color, t)
+		elif dist_from_center <= orange_px - or_trans_px:
+			# Pure orange zone
+			var pure_start: float = green_px + go_trans_px
+			var pure_end: float = orange_px - or_trans_px
+			var t: float = (dist_from_center - pure_start) / (pure_end - pure_start) if pure_end > pure_start else 0.5
+			color = go_trans_color.lerp(orange_color, t)
+		elif dist_from_center <= orange_px:
+			# Orange→red transition
+			var t: float = (dist_from_center - (orange_px - or_trans_px)) / or_trans_px if or_trans_px > 0.0 else 1.0
+			color = orange_color.lerp(or_trans_color, t)
+		else:
+			# Red zone
+			var red_extent: float = half_w - orange_px
+			var into_red: float = dist_from_center - orange_px
+			var t: float = clampf(into_red / red_extent, 0.0, 1.0) if red_extent > 0.0 else 1.0
+			color = or_trans_color.lerp(red_color, t)
+
+		_balance_bar.draw_rect(Rect2(x, 0.0, 1.0, h), color)
 
 	# Needle
 	var balance: float = dart_build.get_balance_value() if dart_build else 0.0
@@ -688,17 +730,28 @@ func _refresh_balance() -> void:
 		return
 
 	var balance: float = dart_build.get_balance_value()
-	var zone: String = dart_build.get_balance_zone()
+	var zone: String = dart_build.get_balance_zone_detailed()
 
 	_balance_label.text = "Balance: %+.2f" % balance
 
 	match zone:
+		"perfect":
+			var total_bonus: float = dart_build.green_bonus + dart_build.perfect_bonus
+			_zone_label.text = "PERFECT (+%.0f all stats)" % total_bonus
+			_zone_label.modulate = Color(0.2, 1.0, 0.5)
 		"green":
 			_zone_label.text = "GREEN (+%.0f all stats)" % dart_build.green_bonus
 			_zone_label.modulate = Color(0.3, 1.0, 0.4)
+		"green_orange":
+			_zone_label.text = "TRANSITION (+%.1f all stats)" % dart_build.green_orange_transition_bonus
+			_zone_label.modulate = Color(0.6, 0.9, 0.35)
 		"orange":
 			_zone_label.text = "ORANGE (neutral)"
 			_zone_label.modulate = Color(1.0, 0.8, 0.3)
+		"orange_red":
+			var skew: float = dart_build.get_accuracy_skew()
+			_zone_label.text = "TRANSITION (skew: %+.1f px)" % skew
+			_zone_label.modulate = Color(0.9, 0.55, 0.3)
 		"red":
 			var skew: float = dart_build.get_accuracy_skew()
 			_zone_label.text = "RED (skew: %+.1f px)" % skew

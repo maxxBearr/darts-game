@@ -11,7 +11,8 @@ const _WedgeSwap = preload("res://scripts/modifiers/wedge_swap_modifier.gd")
 const _OddEvenBonus = preload("res://scripts/modifiers/odd_even_bonus_modifier.gd")
 const _ColorFlip = preload("res://scripts/modifiers/color_flip_modifier.gd")
 const _ColorStreak = preload("res://scripts/modifiers/color_streak_modifier.gd")
-const _ParityStreak = preload("res://scripts/modifiers/parity_streak_modifier.gd")
+const _EvenStreak = preload("res://scripts/modifiers/even_streak_modifier.gd")
+const _OddStreak = preload("res://scripts/modifiers/odd_streak_modifier.gd")
 
 const MODIFIER_TYPES: Array = [
 	_ColorBonus,
@@ -21,7 +22,8 @@ const MODIFIER_TYPES: Array = [
 	_OddEvenBonus,
 	_ColorFlip,
 	_ColorStreak,
-	_ParityStreak,
+	_EvenStreak,
+	_OddStreak,
 ]
 
 

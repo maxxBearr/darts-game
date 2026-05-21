@@ -9,17 +9,39 @@ signal build_changed
 @export var equipped_shaft: DartComponent
 @export var equipped_flight: DartComponent
 
+## Balance at or below this = perfect balance zone (extra bonus to all stats).
+@export_range(0.0, 0.5, 0.01) var perfect_threshold: float = 0.08
+
 ## Balance at or below this = GREEN zone (flat bonus to all stats).
 @export_range(0.0, 1.0, 0.01) var green_threshold: float = 0.25
 
 ## Balance at or below this = ORANGE zone (neutral). Above = RED (skew penalty).
 @export_range(0.0, 1.5, 0.01) var orange_threshold: float = 0.5
 
+## Flat bonus added to ALL six stats in the perfect balance zone (stacks with green_bonus).
+@export var perfect_bonus: float = 3.0
+
 ## Flat bonus added to ALL six stats in the green zone.
 @export var green_bonus: float = 2.0
 
 ## Maximum accuracy skew in pixels at deep red imbalance.
 @export var max_red_skew_pixels: float = 30.0
+
+## Fraction of the orange zone (0.0-1.0) that forms the green→orange transition.
+## The transition starts at green_threshold and extends this fraction into the orange zone.
+@export_range(0.0, 1.0, 0.05) var green_orange_transition_width: float = 0.4
+
+## Flat stat bonus applied in the green→orange transition zone.
+## Suggested: 10-20% of green_bonus for a mild reward.
+@export var green_orange_transition_bonus: float = 0.5
+
+## Fraction of the orange zone (0.0-1.0) that forms the orange→red transition.
+## The transition starts this fraction before orange_threshold inside the orange zone.
+@export_range(0.0, 1.0, 0.05) var orange_red_transition_width: float = 0.4
+
+## Accuracy skew in pixels applied in the orange→red transition zone.
+## Suggested: 10-20% of max_red_skew_pixels for a mild warning.
+@export var orange_red_transition_skew: float = 4.0
 
 ## Player-chosen dart marker outer ring color.
 var dart_outer_color: Color = Color(0.9, 0.85, 0.0)
@@ -49,12 +71,41 @@ func get_balance_zone() -> String:
 		return "red"
 
 
-## Vertical accuracy skew for the red zone.
+## Get the detailed balance zone including transition sub-zones.
+## Returns: "perfect", "green", "green_orange", "orange", "orange_red", or "red".
+func get_balance_zone_detailed() -> String:
+	var abs_balance: float = absf(get_balance_value())
+	if abs_balance <= perfect_threshold:
+		return "perfect"
+	elif abs_balance <= green_threshold:
+		return "green"
+	elif abs_balance <= orange_threshold:
+		var orange_width: float = orange_threshold - green_threshold
+		var into_orange: float = abs_balance - green_threshold
+		var go_transition_end: float = orange_width * green_orange_transition_width
+		var or_transition_start: float = orange_width * (1.0 - orange_red_transition_width)
+		if into_orange <= go_transition_end:
+			return "green_orange"
+		elif into_orange >= or_transition_start:
+			return "orange_red"
+		else:
+			return "orange"
+	else:
+		return "red"
+
+
+## Vertical accuracy skew for the red and orange→red transition zones.
 ## Front-heavy (negative) -> positive skew (dart drops).
 ## Back-heavy (positive) -> negative skew (dart floats).
 func get_accuracy_skew() -> float:
 	var balance: float = get_balance_value()
 	var abs_balance: float = absf(balance)
+
+	# Orange→red transition zone applies mild skew
+	var detailed: String = get_balance_zone_detailed()
+	if detailed == "orange_red":
+		return orange_red_transition_skew * signf(balance)
+
 	if abs_balance <= orange_threshold:
 		return 0.0
 	var red_amount: float = abs_balance - orange_threshold
@@ -83,9 +134,16 @@ func get_total_stat_bonuses() -> Dictionary:
 		bonuses["horizontal_accuracy"] += part.h_accuracy_bonus
 		bonuses["vertical_accuracy"] += part.v_accuracy_bonus
 
-	if get_balance_zone() == "green":
+	var zone: String = get_balance_zone_detailed()
+	if zone == "perfect":
+		for key: String in bonuses.keys():
+			bonuses[key] += green_bonus + perfect_bonus
+	elif zone == "green":
 		for key: String in bonuses.keys():
 			bonuses[key] += green_bonus
+	elif zone == "green_orange":
+		for key: String in bonuses.keys():
+			bonuses[key] += green_orange_transition_bonus
 
 	return bonuses
 

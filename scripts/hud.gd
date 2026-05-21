@@ -31,6 +31,16 @@ signal modifier_selected(index: int)
 
 ## Size of each modifier square in the relic bar (pixels).
 @export var modifier_square_size: int = 40
+
+## Vertical offset above the crosshair for the hover tooltip (pixels).
+@export var hover_tooltip_offset_y: float = 50.0
+
+## How many pixels a modifier square lifts during perk-up hover state.
+@export var perkup_lift_pixels: float = 8.0
+
+## Duration of the perk-up lift/drop animation in seconds.
+@export var perkup_anim_duration: float = 0.15
+
 @onready var stats_container: VBoxContainer = $StatsContainer
 
 const STAT_KEYS: Array[String] = [
@@ -115,6 +125,16 @@ func show_score(result: Dictionary) -> void:
 ## Update the remaining score display.
 func update_remaining(score: int) -> void:
 	remaining_label.text = str(score)
+
+
+## Set the remaining score label to gold when a single-dart checkout exists,
+## or back to default when it doesn't. Driven by the same checkout logic
+## that highlights finishing spots on the board — single source of truth.
+func set_remaining_checkout_available(has_checkout: bool) -> void:
+	if has_checkout:
+		remaining_label.modulate = Color(1.0, 0.85, 0.2)
+	else:
+		remaining_label.modulate = Color(1.0, 1.0, 1.0)
 
 
 ## Update the turn counter display.
@@ -411,9 +431,11 @@ func clear_modifier_status() -> void:
 		_modifier_status_title = null
 
 
-## Show hover tooltip with score info for the hovered segment.
-## Displays the base score, then any modifier effects with highlights.
-func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int]) -> void:
+## Show hover tooltip above the crosshair with simplified score readout.
+## Positioned directly above the aim point for in-focus feedback during aiming.
+## Format: "Target: D7 ×3 = 35" (with modifier), or "Target: D7 = 14" (without).
+## Turns gold when hovering a segment that would win the leg in one dart.
+func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], screen_pos: Vector2 = Vector2.ZERO, is_checkout: bool = false) -> void:
 	if result.is_empty():
 		hover_tooltip.visible = false
 		return
@@ -422,45 +444,65 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int]) ->
 	var face_value: int = result["face_value"]
 	var total_score: int = result["total_score"]
 	var multiplier: int = result["multiplier"]
-	var wedge_index: int = result.get("wedge_index", -1)
 	var is_bull: bool = result.get("is_bull", false)
 
 	if ring_name == "Off Board":
 		hover_tooltip.visible = false
 		return
 
-	var lines: PackedStringArray = PackedStringArray()
+	# Build simplified prefix (S/D/T/SB/DB)
+	var prefix: String = _get_hover_prefix(ring_name)
 
-	# Line 1: Segment name
-	if is_bull:
-		lines.append(ring_name)
+	# Build the compact tooltip text
+	var text: String
+	var base_multiplier: int = _get_base_multiplier(ring_name)
+	var bonus_mult: int = multiplier - base_multiplier
+	if bonus_mult > 0:
+		text = "Target: %s%d ×%d = %d" % [prefix, face_value, multiplier, total_score]
 	else:
-		var original_value: int = original_wedge_order[wedge_index] if wedge_index >= 0 and wedge_index < original_wedge_order.size() else face_value
-		if face_value != original_value:
-			lines.append("%s %d (was %d)" % [ring_name, face_value, original_value])
-		else:
-			lines.append("%s %d" % [ring_name, face_value])
+		text = "Target: %s%d = %d" % [prefix, face_value, total_score]
 
-	var modifications: Array = result.get("modifications", [])
-
-	if modifications.size() > 0:
-		# Show each modifier effect, then final total
-		for mod: Dictionary in modifications:
-			var field: String = mod["field"]
-			var source: String = mod["source_name"]
-			if field == "multiplier":
-				lines.append("%s x%d -> x%d" % [source, mod["old_value"], mod["new_value"]])
-			elif field == "total_score":
-				lines.append("%s +%d" % [source, int(mod["new_value"]) - int(mod["old_value"])])
-			else:
-				lines.append("%s: %s -> %s" % [source, str(mod["old_value"]), str(mod["new_value"])])
-		lines.append("= %d pts" % total_score)
-	else:
-		# No modifiers — just show base score
-		lines.append("%d x%d = %d" % [face_value, multiplier, total_score])
-
-	hover_tooltip.text = "\n".join(lines)
+	hover_tooltip.text = text
 	hover_tooltip.visible = true
+
+	# Gold text when hovering a checkout segment
+	if is_checkout:
+		hover_tooltip.modulate = Color(1.0, 0.85, 0.2)
+	else:
+		hover_tooltip.modulate = Color(1.0, 1.0, 1.0)
+
+	# Position above the crosshair
+	if screen_pos != Vector2.ZERO:
+		hover_tooltip.position = Vector2(
+			screen_pos.x - hover_tooltip.size.x / 2.0,
+			screen_pos.y - hover_tooltip_offset_y - hover_tooltip.size.y
+		)
+
+
+## Get the ring prefix abbreviation for the simplified tooltip.
+func _get_hover_prefix(ring_name: String) -> String:
+	match ring_name:
+		"Inner Single", "Outer Single":
+			return "S"
+		"Double":
+			return "D"
+		"Triple":
+			return "T"
+		"Single Bull":
+			return "SB"
+		"Double Bull":
+			return "DB"
+	return ""
+
+
+## Get the base multiplier for a ring type (before modifier effects).
+func _get_base_multiplier(ring_name: String) -> int:
+	match ring_name:
+		"Double", "Double Bull":
+			return 2
+		"Triple":
+			return 3
+	return 1
 
 
 ## Hide the hover tooltip.
@@ -468,26 +510,14 @@ func hide_hover_tooltip() -> void:
 	hover_tooltip.visible = false
 
 
-## Show the target declaration tooltip during a throw.
-## target_info contains: prefix, face_value, base_score, total_score,
-## bonus_multiplier_total, streak_lines (Array[String]).
-func show_target_tooltip(target_info: Dictionary) -> void:
-	var prefix: String = target_info["prefix"]
-	var face_value: int = target_info["face_value"]
-	var base_score: int = target_info["base_score"]
-	var total_score: int = target_info["total_score"]
-	var bonus_mult: int = target_info["bonus_multiplier_total"]
-	var streak_lines: Array = target_info.get("streak_lines", [])
-
-	var text: String = "Target: %s%d" % [prefix, face_value]
-	if bonus_mult > 0:
-		text += " | Worth: %d + %dx%d = %d" % [base_score, bonus_mult, face_value, total_score]
-	else:
-		text += " | Worth: %d" % base_score
-
-	for line: String in streak_lines:
-		text += " | " + line
-
+## Show streak info during a throw (replaces the full target tooltip).
+## Only displays active streak lines near the crosshair.
+func show_streak_info(streak_lines: Array[String]) -> void:
+	var text: String = ""
+	for i: int in range(streak_lines.size()):
+		if i > 0:
+			text += " | "
+		text += streak_lines[i]
 	hover_tooltip.text = text
 	hover_tooltip.visible = true
 
@@ -495,6 +525,40 @@ func show_target_tooltip(target_info: Dictionary) -> void:
 ## Hide the target tooltip (when throw completes or new run starts).
 func hide_target_tooltip() -> void:
 	hover_tooltip.visible = false
+
+
+## Highlight modifier squares whose modifiers triggered on the hovered segment.
+## triggered_names: modifier_name strings that appeared in the modifications array.
+func set_modifier_perkup(triggered_names: Array[String]) -> void:
+	for child: Node in modifier_panel.get_children():
+		if not child.has_meta("modifier"):
+			continue
+		var modifier: Resource = child.get_meta("modifier")
+		var should_perkup: bool = modifier.modifier_name in triggered_names
+		var is_perked: bool = child.has_meta("perked_up") and child.get_meta("perked_up")
+
+		if should_perkup and not is_perked:
+			child.set_meta("perked_up", true)
+			var tween: Tween = create_tween()
+			tween.tween_property(child, "position:y", child.position.y - perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+			# Brighten the square
+			child.modulate = Color(1.3, 1.3, 1.3, 1.0)
+		elif not should_perkup and is_perked:
+			child.set_meta("perked_up", false)
+			var tween: Tween = create_tween()
+			tween.tween_property(child, "position:y", child.position.y + perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+			# Restore original visual state
+			_update_modifier_square_visual(child as Panel)
+
+
+## Clear all perk-up states on modifier squares.
+func clear_modifier_perkup() -> void:
+	for child: Node in modifier_panel.get_children():
+		if child.has_meta("perked_up") and child.get_meta("perked_up"):
+			child.set_meta("perked_up", false)
+			var tween: Tween = create_tween()
+			tween.tween_property(child, "position:y", child.position.y + perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+			_update_modifier_square_visual(child as Panel)
 
 
 ## Add a modifier square to the panel. Called when a scoring modifier is acquired.
