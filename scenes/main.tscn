@@ -49,9 +49,16 @@ script = ExtResource("1_main")
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
 script = ExtResource("2_dartboard")
-arc_points = 15
+board_radius = 330.0
+arc_points = 20
+wedge_b_single = Color(0.95513755, 0.9015385, 0.7296874, 1)
+wire_thickness = 1.2
+surround_outer_multiplier = 1.0
 number_font_size = 25
+checkout_pulse_color = Color(1, 0.8509804, 0.2, 0.8666667)
 checkout_pulse_speed = 4.0
+checkout_pulse_min_alpha = 0.3
+checkout_pulse_max_alpha = 0.9
 flash_duration = 0.4
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
@@ -334,6 +341,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("10_assembly")
 stats_position = Vector2(40, 350)
+zone_preview_board_radius = 90.0
 zone_preview_label_offset = 12.59
 color_ui_position = Vector2(920, 500)
 color_ui_size = Vector2(200, 180)

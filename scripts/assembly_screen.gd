@@ -851,7 +851,7 @@ func _draw_preview_dartboard(center: Vector2) -> void:
 	var r: float = zone_preview_board_radius
 
 	# Surround
-	_zone_preview.draw_circle(center, r * 1.15, Color(0.12, 0.12, 0.12))
+	_zone_preview.draw_circle(center, r * 0.93, Color(0.12, 0.12, 0.12))
 
 	# Wedge colors (muted so overlays stay readable)
 	var single_a: Color = Color(0.06, 0.06, 0.06)
