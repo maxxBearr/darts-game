@@ -51,10 +51,10 @@ const STAT_DISPLAY_NAMES: Dictionary = {
 const STAT_DESCRIPTIONS: Dictionary = {
 	"horizontal_range": "Shrinks the aim ellipse horizontally. Also reduces the distance the horizontal marker travels, making it easier to time.",
 	"vertical_range": "Shrinks the aim ellipse vertically. Also reduces the distance the vertical marker travels, making it easier to time.",
-	"horizontal_speed": "Slows the horizontal release marker. Higher = easier to time your click.",
-	"vertical_speed": "Slows the vertical release marker. Higher = easier to time your click.",
-	"horizontal_accuracy": "Tightens horizontal dart landing variance. Higher = dart lands closer to where you clicked.",
-	"vertical_accuracy": "Tightens vertical dart landing variance. Higher = dart lands closer to where you clicked.",
+	"horizontal_speed": "Slows the speed of the horizantal merer.",
+	"vertical_speed": "Slows the speed of the vertical meter.",
+	"horizontal_accuracy": "Shortens the width of the accruacy zone.",
+	"vertical_accuracy": "Shrinks the height of the accuracy zone"
 }
 
 const BAR_MAX_WIDTH: float = 120.0

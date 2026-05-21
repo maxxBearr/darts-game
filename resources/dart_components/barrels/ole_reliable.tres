@@ -7,9 +7,9 @@
 script = ExtResource("1")
 component_name = "Ole Reliable"
 description = "A balanced barrel with modest bonuses across the board"
-weight = -0.15000000000000002
+weight = -0.19999999999999996
 texture = ExtResource("2_cwk7d")
-h_range_bonus = 15.0
-v_range_bonus = 15.0
+h_range_bonus = 25.0
+v_range_bonus = 10.0
+h_speed_bonus = 4.0
 h_accuracy_bonus = 4.0
-v_accuracy_bonus = 4.0
