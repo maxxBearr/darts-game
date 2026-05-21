@@ -510,6 +510,15 @@ func add_modifier_to_panel(modifier: Resource) -> void:
 	_update_modifier_square_visual(square)
 
 
+## Remove a modifier square from the panel by matching the modifier reference.
+## Called when a streak modifier is replaced by a new one in the same category.
+func remove_modifier_from_panel(modifier: Resource) -> void:
+	for child: Node in modifier_panel.get_children():
+		if child.has_meta("modifier") and child.get_meta("modifier") == modifier:
+			child.queue_free()
+			break
+
+
 ## Clear all modifier squares from the panel. Called on new run.
 func clear_modifier_panel() -> void:
 	for child: Node in modifier_panel.get_children():
@@ -572,12 +581,22 @@ func _select_upgrade(index: int) -> void:
 
 ## Show 3 modifier cards for the player to pick from.
 func show_modifier_choices(modifiers: Array) -> void:
+	var empty_info: Array[String] = ["", "", ""]
+	show_modifier_choices_with_replacement(modifiers, empty_info)
+
+
+## Show 3 modifier cards with optional replacement warnings.
+## replacement_info is an Array[String] of length 3. Empty string = no warning.
+## Non-empty string = warning text shown on the card (e.g., "Replaces: Wedge Streak").
+func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: Array[String]) -> void:
 	_modifier_mode = true
 	score_label.text = "Choose a scoring modifier!"
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
 		var modifier: Resource = modifiers[i]
 		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+		if replacement_info[i] != "":
+			button_text += "\n⚠ %s" % replacement_info[i]
 		buttons[i].text = button_text
 		var color: Color = modifier.rarity_color
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)

@@ -52,6 +52,15 @@ const RING_ADJACENCY: Dictionary = {
 	"double": ["outer_single"],
 }
 
+## Which streak slot category a streak modifier belongs to.
+## Only one streak modifier per category can be equipped at a time.
+enum StreakCategory {
+	NONE,    ## Not a streak modifier — no slot restriction
+	WEDGE,   ## Wedge-based streaks (same ring, adjacent, whole wedge)
+	COLOR,   ## Color-based streaks (consecutive same-color hits)
+	PARITY,  ## Even/odd-based streaks (consecutive same-parity hits)
+}
+
 ## Which slot a dart component fits in.
 enum ComponentSlot {
 	BARREL,

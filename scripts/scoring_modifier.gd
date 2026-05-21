@@ -23,6 +23,11 @@ extends Resource
 ## The rarity tier of this modifier instance.
 @export var rarity_tier: ScoringEnums.Rarity = ScoringEnums.Rarity.COMMON
 
+## Which streak slot category this modifier occupies.
+## NONE means no slot restriction (non-streak modifiers).
+## Streak modifiers set this to their category so the one-per-category rule can be enforced.
+@export var streak_category: ScoringEnums.StreakCategory = ScoringEnums.StreakCategory.NONE
+
 ## Whether this modifier is currently active. Toggled by the player at any time.
 var enabled: bool = true
 
@@ -35,6 +40,18 @@ var rarity: String:
 var rarity_color: Color:
 	get:
 		return ScoringEnums.RARITY_DATA[rarity_tier]["color"]
+
+
+## Get the current streak count for display purposes.
+## Override in streak modifier subclasses. Returns 0 for non-streak modifiers.
+func get_streak_count() -> int:
+	return 0
+
+
+## Get a short display name for what this streak tracks (e.g., "Ring ×3").
+## Override in streak modifier subclasses. Returns "" for non-streak modifiers.
+func get_streak_display() -> String:
+	return ""
 
 
 ## Override in PER_DART subclasses. Receives the enriched score dictionary and

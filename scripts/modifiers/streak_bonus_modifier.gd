@@ -16,6 +16,7 @@ func _init() -> void:
 	modifier_name = "Wedge Streak"
 	timing = ScoringEnums.ModifierTiming.PER_DART
 	config_type = ScoringEnums.ConfigType.NONE
+	streak_category = ScoringEnums.StreakCategory.WEDGE
 
 
 func apply(result: Dictionary, context: Dictionary) -> Dictionary:
@@ -108,6 +109,20 @@ func reset_streak_state() -> void:
 ## Get the current streak count for display purposes.
 func get_streak_count() -> int:
 	return _streak_count
+
+
+func get_streak_display() -> String:
+	if _streak_count <= 0:
+		return ""
+	var leniency_label: String = ""
+	match leniency:
+		ScoringEnums.StreakLeniency.SAME_RING:
+			leniency_label = "Ring"
+		ScoringEnums.StreakLeniency.ADJACENT_SECTIONS:
+			leniency_label = "Adj"
+		ScoringEnums.StreakLeniency.WHOLE_WEDGE:
+			leniency_label = "Wedge"
+	return "%s ×%d" % [leniency_label, _streak_count]
 
 
 static func get_pool_weight() -> int:

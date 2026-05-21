@@ -236,9 +236,14 @@ func _disable_hover() -> void:
 	hud.hide_hover_tooltip()
 
 
-## Add a scoring modifier to the game. Handles both the manager and HUD panel.
+## Add a scoring modifier to the game. Handles replacement, manager, and HUD panel.
 func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
-	scoring_modifier_manager.add_modifier(modifier, config)
+	var replaced: Resource = scoring_modifier_manager.add_modifier(modifier, config)
+
+	# If a modifier was replaced, remove its panel square
+	if replaced != null:
+		hud.remove_modifier_from_panel(replaced)
+
 	hud.add_modifier_to_panel(modifier)
 	_sync_board_state()
 	_update_checkout_highlights()
@@ -462,7 +467,16 @@ func _on_run_confirmed() -> void:
 		var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3)
 		for mod: ScoringModifier in generated:
 			_current_modifiers.append(mod)
-		hud.show_modifier_choices(_current_modifiers)
+
+		# Build replacement info for each modifier choice
+		var replacement_info: Array[String] = []
+		for mod: ScoringModifier in _current_modifiers:
+			var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
+			if conflict != null:
+				replacement_info.append("Replaces: %s" % conflict.modifier_name)
+			else:
+				replacement_info.append("")
+		hud.show_modifier_choices_with_replacement(_current_modifiers, replacement_info)
 	else:
 		_start_new_throw()
 
@@ -478,7 +492,16 @@ func _on_upgrade_selected(index: int) -> void:
 	var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3)
 	for mod: ScoringModifier in generated:
 		_current_modifiers.append(mod)
-	hud.show_modifier_choices(_current_modifiers)
+
+	# Build replacement info for each modifier choice
+	var replacement_info: Array[String] = []
+	for mod: ScoringModifier in _current_modifiers:
+		var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
+		if conflict != null:
+			replacement_info.append("Replaces: %s" % conflict.modifier_name)
+		else:
+			replacement_info.append("")
+	hud.show_modifier_choices_with_replacement(_current_modifiers, replacement_info)
 
 
 ## Player picks a scoring modifier card.
@@ -805,7 +828,16 @@ func _cancel_picker() -> void:
 	_pending_modifier = null
 	_picker_selected_wedge = -1
 	_leg_phase = "modifier_pick"
-	hud.show_modifier_choices(_current_modifiers)
+
+	# Rebuild replacement info when returning to modifier pick
+	var replacement_info: Array[String] = []
+	for mod: ScoringModifier in _current_modifiers:
+		var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
+		if conflict != null:
+			replacement_info.append("Replaces: %s" % conflict.modifier_name)
+		else:
+			replacement_info.append("")
+	hud.show_modifier_choices_with_replacement(_current_modifiers, replacement_info)
 
 
 func _finish_picker() -> void:
@@ -1021,8 +1053,8 @@ func _get_ring_prefix(ring_name: String) -> String:
 func _get_active_streak_info() -> Array[String]:
 	var lines: Array[String] = []
 	for modifier: Resource in scoring_modifier_manager.active_modifiers:
-		if modifier is StreakBonusModifier and modifier.enabled:
-			var count: int = modifier.get_streak_count()
-			if count > 0:
-				lines.append("%s x%d" % [modifier.modifier_name, count])
+		if modifier is ScoringModifier and modifier.enabled:
+			var display: String = modifier.get_streak_display()
+			if display != "":
+				lines.append(display)
 	return lines

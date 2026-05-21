@@ -100,16 +100,48 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 	return result
 
 
+## Check if adding a modifier would replace an existing streak modifier.
+## Returns the existing modifier that would be replaced, or null if no conflict.
+func get_streak_conflict(new_modifier: ScoringModifier) -> ScoringModifier:
+	if new_modifier.streak_category == ScoringEnums.StreakCategory.NONE:
+		return null
+	for existing: Resource in active_modifiers:
+		if existing is ScoringModifier and existing.streak_category == new_modifier.streak_category:
+			return existing
+	return null
+
+
+## Remove a specific modifier from the active list.
+## Used when a streak modifier is being replaced by a new one in the same category.
+func remove_modifier(modifier: Resource) -> void:
+	var idx: int = active_modifiers.find(modifier)
+	if idx >= 0:
+		active_modifiers.remove_at(idx)
+
+
 ## Register a new modifier. For ON_ACQUIRE modifiers, immediately applies
 ## board-state changes. config is a Dictionary with modifier-specific settings
 ## (e.g., {"wedge_index": 5} for PICK_WEDGE modifiers).
 ## For NONE config_type modifiers, pass an empty dictionary.
-func add_modifier(modifier: Resource, config: Dictionary) -> void:
+## If the modifier has a streak category that conflicts with an existing modifier,
+## the existing one is removed first (replacement).
+## Returns the replaced modifier, or null if no replacement occurred.
+func add_modifier(modifier: Resource, config: Dictionary) -> Resource:
+	# Check for streak slot conflict and remove the existing one
+	var replaced: Resource = null
+	if modifier is ScoringModifier:
+		var conflict: ScoringModifier = get_streak_conflict(modifier as ScoringModifier)
+		if conflict != null:
+			remove_modifier(conflict)
+			replaced = conflict
+
 	active_modifiers.append(modifier)
 
 	# If this is an ON_ACQUIRE modifier, apply its board-state changes now
 	if modifier.timing == ScoringEnums.ModifierTiming.ON_ACQUIRE:
 		modifier.apply_to_board(effective_wedge_values, effective_wedge_colors, config)
+
+	return replaced
 
 
 ## Get the effective face value for a wedge by index (0-19). For display/hover.
