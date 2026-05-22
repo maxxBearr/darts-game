@@ -1,160 +1,247 @@
-# Active Spec: Shop System
+# Checkout Helper
 
-**Spec date:** 2026-05-21
+**Spec date:** 2026-05-22
 **Status:** Designed, ready for implementation
-**Scope:** New post-leg system. Every three legs, the player enters a "shop" that uses the dart board itself as the shop interface — they throw their accumulated spare darts at lit-up spots on the board to earn upgrades. Builds on the [HUD / Assembly Polish Pass](specs/2026-05-21-hud-assembly-polish.md): the parity slot system and the shared checkout-detection function are assumed to be in place.
+**Scope:** New always-on (toggleable visibility) helper that surfaces valid checkout paths and setup-target recommendations, accounting for all active scoring modifiers including live streak state. Builds on the existing `calculate_checkout_segments` function in `scoring_modifier_manager.gd` and the established preview-mode scoring pipeline. Replaces the implicit "the player figures it out" assumption that breaks down once 5+ modifiers are stacked.
 
 ## Summary
 
-Replace the leg-end pick screen on every third leg with a "shop round." The player throws a number of darts equal to the spare darts they saved across the preceding three legs. Spots on the board light up with rarity indicators (common, uncommon, rare). Hitting a lit spot reveals two random upgrades of that rarity, of which the player picks one. Hit nothing, get nothing.
+At low modifier counts the player can mentally compute checkout paths from the standard x01 chart. By the time 5+ modifiers are stacked — especially with mid-turn streak modifiers (wedge / color / parity) that mutate state per-dart — the math becomes effectively impossible to do by hand. The helper closes that gap with a solver that runs the actual scoring pipeline in simulation, surfaces valid paths in a text panel, and recommends setup targets when no checkout is available.
 
-Five parts to the spec:
+Six parts to the spec:
 
-1. Cadence — when shops happen, how they interact with the existing per-leg upgrade pick.
-2. Spare-dart math — how many darts the player gets at the shop.
-3. Board setup — how many spots light up, what rarities, where they sit.
-4. Throw resolution — what happens on hit, miss, and total whiff.
-5. Visuals — the "swirly shader" treatment for lit spots and the zero-dart fallback.
-
----
-
-## 1. Cadence and Flow
-
-Shops fire after every third leg. The run flow becomes:
-
-Leg 1 → 2 upgrade picks → Leg 2 → 2 upgrade picks → Leg 3 → **Shop** → Leg 4 → 2 upgrade picks → Leg 5 → 2 upgrade picks → Leg 6 → **Shop** → ...
-
-The shop replaces the post-leg pick screen on shop legs (3, 6, 9, ...) entirely. On non-shop legs, the existing 2-upgrade pick continues unchanged.
-
-The shop is not itself a leg. It does not consume a leg slot, advance run scaling, or accrue any leg-side state. It is a screen that runs between the end of one leg and the start of the next.
-
-**Why per-leg picks continue:** the game is currently hard. The shop is additive — a richer reward on milestone legs — not a replacement for the steady drip of upgrades that keeps non-shop legs feeling worthwhile. Not the moment to scale player power down.
+1. The solver — recursive simulation, candidate target set, speculative state save/restore.
+2. The setup solver — recommended throws when no checkout exists, using a precomputed preferred-remainder list.
+3. The display — right-side text panel with annotated paths and progressive narrowing.
+4. The toggle button — visibility control, gated by checkout availability.
+5. The modifier-toggle soft hint — passive nudge to experiment with toggling modifiers.
+6. Edge cases — off-board preservation, off-script throws, hopeless states.
 
 ---
 
-## 2. Spare-Dart Math
+## 1. The Solver
 
-Each leg has a finite dart budget. Saving darts means finishing the leg before exhausting that budget.
+The solver answers: "given my current remaining, darts left this turn, active modifiers, and live streak state — what darts can I throw to land at exactly 0 with a double on the finishing dart?"
 
-**Formula:**
-- At leg start: `total_darts_in_leg = max_turns * darts_per_turn` (currently 5 × 3 = 15).
-- Each throw during the leg: `used_darts += 1`.
-- On a bust: the remaining darts in the busted turn count toward `used_darts` (busting on dart 1 of a turn burns the full 3-dart turn).
-- On a leg win: `saved_darts_this_leg = total_darts_in_leg - used_darts`.
+### 1a. Approach
 
-**Across the shop window:** `shop_darts = saved_darts from leg N-2 + saved_darts from leg N-1 + saved_darts from leg N`, where leg N is the leg that just ended.
+Recursive simulation, not a lookup table. The existing `process_score(raw_result, is_preview)` pipeline in `scoring_modifier_manager.gd` already handles modifier application correctly for single darts. The solver wraps that pipeline in a multi-dart recursive search:
 
-The formula is intentionally written in terms of `max_turns` and `darts_per_turn` because future modifiers may alter either value. The math stays correct regardless.
+```
+func solve_checkout(remaining, darts_left) -> Array[CheckoutPath]:
+    paths = []
+    for target in candidate_targets:
+        snapshot = snapshot_streak_state()
+        result = speculative_score(synthesize_result(target))
+        if is_finishing_dart(target) and result.total_score == remaining:
+            paths.append([target])
+        elif result.total_score < remaining and darts_left > 1:
+            for sub_path in solve_checkout(remaining - result.total_score, darts_left - 1):
+                paths.append([target] + sub_path)
+        restore_streak_state(snapshot)
+    return paths
+```
 
-The accumulator resets to 0 once the shop concludes — the next window begins from the next leg.
+Only doubles (including double bull) can be the finishing dart per x01 rules.
 
----
+### 1b. Candidate target set
 
-## 3. Board Setup
+Each dart's candidate target list:
 
-When the shop opens, a number of board spots light up with rarity indicators. The player will throw `shop_darts` darts at this board.
+- **40 single hits** (20 inner singles + 20 outer singles). Per the existing modifier code, inner and outer singles share face value but differ in ring zone — important for wedge-streak modifiers with `SAME_RING` or `ADJACENT_SECTIONS` leniency. Solver treats them as distinct candidates; the display layer collapses them to `S{wedge}` with the larger-area outer single preferred for tie-breaks.
+- **20 doubles**
+- **20 triples**
+- **Single bull** (face 25, multiplier 1)
+- **Double bull** (face 25, multiplier 2)
+- **One "deliberate non-scoring" candidate** — represents an intentional off-board throw. Scores 0 face value, no multiplier, `wedge_index = -1`, `segment_color = -1`. By construction it resets all currently active streaks (each streak modifier's reset condition fires on this input). Required for finding paths that involve strategic streak-breaking.
 
-### 3a. Lit-spot count
+Total: 83 candidates per dart.
 
-`lit_spots = shop_darts + 3`
+Note: the deliberate non-scoring candidate covers off-board-style streak-breaking. Streak-breaking via a low-value scoring hit (e.g., single 4 to break an odd streak while still adding 4 to the total) is already covered by the normal scoring candidates — no separate candidate type needed.
 
-The flat +3 slack gives the player consistent breathing room — always a few more targets than darts, so the player gets meaningful choice in *which* targets to prioritize. This holds across the range: 3 darts → 6 spots, 9 darts → 12 spots, 15 darts → 18 spots.
+### 1c. Speculative state save/restore
 
-### 3b. Rarity distribution
+The current `is_preview=true` mode deliberately does *not* mutate streak state. That's correct for hover tooltips. For multi-dart recursion, dart-2's simulation must see the streak state dart-1 would have created — so a new mutating-but-restorable "speculative" mode is required.
 
-Within the lit spots:
+**`ScoringModifier` base class additions:**
 
-- `rares = max(1, floor(lit_spots / 6))` — at least one rare guaranteed.
-- `uncommons = floor(lit_spots / 3)`.
-- `commons = lit_spots - rares - uncommons`.
+- `func save_streak_state() -> Dictionary` — returns a snapshot of all internal streak fields (default returns empty dict for non-streak modifiers).
+- `func restore_streak_state(snapshot: Dictionary) -> void` — restores from a snapshot.
 
-The "at least one rare" floor means a shop is never just commons. There is always a high-stakes target on the board.
+Each streak modifier subclass (`StreakBonusModifier`, `ColorStreakModifier`, `ParityStreakModifier`) overrides these to snapshot/restore their member vars (`_streak_count`, `_streak_wedge_index`, `_streak_ring`, `_streak_color`).
 
-### 3c. Placement rules
+**`ScoringModifierManager` additions:**
 
-Rarity governs which board regions a spot can land on:
+- `func snapshot_all_streak_state() -> Array[Dictionary]` — calls `save_streak_state` on each active modifier, in order.
+- `func restore_all_streak_state(snapshots: Array[Dictionary]) -> void` — restores in matching order.
+- `func speculative_score(raw_result: Dictionary) -> Dictionary` — runs the same pipeline as `process_score`, mutates streak state, does *not* append to hit history.
 
-- **Commons** fill the larger single regions of wedges.
-- **Uncommons and rares** fill the smaller double and triple rings.
+The solver wraps each candidate dart in a snapshot/restore around the recursive sub-call. Hit history (turn/leg/run) is similarly preserved by not appending during speculative simulation.
 
-Within those constraints, placement is random. Which specific wedge a common occupies, and which specific double/triple a rare occupies, is rolled per shop.
+### 1d. Result ranking
 
-**Emergent strategy:** because doubles and triples are physically adjacent to their corresponding singles, missing a hard rare often clips into the related single. If that single happens to be lit as a common, the player has an organic near-miss reward — the geometry creates the safety net, not a separate consolation mechanic. The player who reads the lit-spot clusters before throwing will outperform the one who yolos at rares. This is one of the three interacting systems the game wants the player calculating every throw (board RNG read + skill/confidence + stat-driven hit probability).
+Returns the top N paths (default 5, exported tuning var `max_displayed_paths`) ranked by:
 
----
+1. **Fewest darts first** — finish in 1 > finish in 2 > finish in 3.
+2. **Fattest reliable segment** within the same dart count — larger singles (outer) > smaller singles (inner) > doubles > triples (variance heuristic; rewards consistent play). Bulls rank between doubles and triples by physical size.
+3. **Fewest deliberate-non-scoring darts** as final tie-breaker — paths that fully use their darts rank above paths that include intentional skips.
 
-## 4. Throw Resolution
+### 1e. Performance
 
-### 4a. Hitting a lit spot
-
-When a dart lands on a lit spot:
-
-1. The spot's rarity tier determines which pool the items roll from (common / uncommon / rare).
-2. Two items of that rarity are rolled and shown to the player.
-3. The player picks one. The picked item is added to the loadout. The other is discarded.
-4. Any existing slot-conflict rules apply (see 4d).
-5. The spot deactivates — no longer lit — for the rest of the shop.
-
-The 2-of-2 pick is narrower than the regular leg-end 2-of-3 pick. Intentional: the throw itself is already a meaningful choice (which spot to target), so the post-hit menu stays small.
-
-The shop draws from the same item pool the per-leg picks use, weighted by the rarity tier of the hit spot. Stat upgrades and modifiers can both appear in the shop — they are not segregated by source.
-
-### 4b. Hitting an unlit area
-
-The dart lands normally on the board (or misses the board entirely), no reward triggers, the dart is spent. The next dart is thrown.
-
-### 4c. Whiffing the entire shop
-
-If the player throws every dart without landing on a single lit spot: hit nothing, get nothing. No consolation upgrade, no reroll. The shop ends with no rewards.
-
-Intentional. The spare-dart system already rewards play quality; softening misses dilutes that signal.
-
-### 4d. Streak slot interactions
-
-The shop does not score throws — no scoring modifiers apply, no streak counters update. Streak items still respect their slot conflict rules at the pick step: if a player picks a streak item from the 2-of-2 menu and they already have an item in that streak slot equipped (color, wedge, or parity), the existing replace warning fires. Same logic and UI as the leg-end pick. No duplicates.
+Worst case ~83³ ≈ 570k leaves per turn, computed at turn start and again after each throw. Trivially fast in GDScript at frame-time scales. Within a single `solve_checkout` call, cache by `(remaining, darts_left, streak_state_hash)` to dedupe identical sub-problems. No cross-turn caching needed.
 
 ---
 
-## 5. Visuals
+## 2. The Setup Solver
 
-### 5a. Lit-spot treatment
+When `solve_checkout` returns zero valid paths, the helper switches to setup mode and recommends a single dart target that leaves the player at a remainder with known good checkouts next turn.
 
-Lit spots are rendered with a swirly, animated shader-style fill. Visual reference: the Balatro main menu background, or the moving curved pattern of a stylized zebra. The shader animates continuously so the lit spots read as alive.
+### 2a. Preferred remainder list (precomputed)
 
-Rarity is encoded by color:
+For the current modifier configuration, precompute the set of remainders that have at least one valid checkout in 3 darts (assuming a turn-fresh streak state for V1):
 
-- **Common:** white / light grey.
-- **Uncommon:** blue.
-- **Rare:** purple.
+```
+func compute_preferred_remainders() -> Array[int]:
+    preferred = []
+    for r in range(2, 181):
+        if solve_checkout(r, 3).size() > 0:
+            preferred.append(r)
+    return preferred
+```
 
-The shader pattern is the same across rarities; only the color palette differs. This keeps the shop visually coherent and lets the player parse rarity at a glance from across the board.
+This runs once when modifier state changes — acquire, sell, swap, toggle, leg reset — and is cached on `ScoringModifierManager`. Roughly 179 solver runs; the work is spread across an event rather than a throw, so per-throw cost is just a set membership check.
 
-### 5b. Zero-dart shop ("oh dear")
+### 2b. Setup recommendation
 
-If the player saved zero darts across the three preceding legs (`shop_darts == 0`), the shop screen still appears. The board has no lit spots. A brief humorous acknowledgment plays — something tonal along the lines of *"oh dear, you didn't save ANY darts... oh well"* — then the shop closes and the next leg begins.
+When no checkout exists this turn, for each candidate dart target:
 
-The point is to make the consequence of poor play visible rather than silently skipping the shop. Brief, in-character, no extra dialogue.
+1. Speculatively simulate the throw; observe the resulting remainder.
+2. Score this target by where its resulting remainder ranks in the preferred-remainder list. Higher preferred remainders (more dart slack next turn) outrank lower ones.
+
+Pick the single best setup target. Display: `"Aim {target} → leaves you at {remainder}"`.
+
+V1 always recommends one dart at a time, even when called early in the turn. The recommendation updates after each throw. Multi-dart setup planning is deferred.
+
+### 2c. Off-board preservation
+
+If every scoring candidate would push the remaining below 0 (bust) or into a non-checkout-eligible state with no recoverable setup, the solver's deliberate non-scoring candidate naturally wins by being the only target that preserves the remaining. The display string in this case reads `"Aim off-board → preserves remaining ({remaining})"` rather than the default setup phrasing.
+
+This emerges naturally from the solver; no special code path needed beyond the display layer recognizing the deliberate-non-scoring target and labeling it as preservation.
+
+### 2d. V2 streak-aware preferred list (deferred)
+
+V1 assumes turn-fresh streak state when computing the preferred-remainder list. This is correct for `WITHIN_TURN` streak modifiers (they reset at turn end) but potentially inaccurate for `WITHIN_LEG` modifiers that carry an active streak into next turn. Upgrade only if playtest shows the setup recommendations giving bad advice in carry-over scenarios.
+
+---
+
+## 3. Display
+
+### 3a. Location
+
+Right-side panel, below the current stats readout. Permanent UI region — same panel slot whether the helper is visible or hidden. Position, panel background, font sizes, text colors, and spacing all exported with hover descriptions per project conventions.
+
+### 3b. Path display format
+
+When the helper is visible and checkouts exist, show the top N paths as an ordered list. Each path renders as a single line:
+
+```
+Dart 1 → Dart 2 → Dart 3
+```
+
+With segment names spelled out (`T20`, `S5`, `D20`, `Bull`, `D-Bull`). For dart targets with notable modifier interactions, append a parenthetical annotation:
+
+```
+0 (break Odd ×2) → D5 (10)
+T20 (60) → T20 (Wedge ×2: 90) → D-Bull (50)
+```
+
+Annotation rules:
+
+- **Deliberate non-scoring dart:** always annotate with the streak being broken: `(break {streak_name} ×{count_before_break})`. If multiple streaks are being broken by this dart, list them comma-separated.
+- **Dart triggering a streak bonus:** `({streak_name} ×{N}: {effective_score})`.
+- **Vanilla dart with no streak interaction:** `({score})`.
+
+All annotation string templates exported so wording can be tweaked without code changes.
+
+### 3c. Progressive narrowing on throws
+
+After the player throws a dart:
+
+1. Determine which displayed paths started with that exact dart target.
+2. Keep those paths visible; the first-dart portion of the label highlights in green to indicate the committed step.
+3. Filter out paths that did not start with the actual hit.
+4. If zero displayed paths remain (player went off-script, missed, or the throw scored differently due to modifier RNG), full recompute from new remainder and display the new top N.
+
+This preserves player intent — the helper does not snap to a different optimal path the player wasn't planning to follow.
+
+### 3d. No board markup
+
+The dartboard itself receives no new visual treatment from the helper. Existing checkout-double highlights (the `calculate_checkout_segments` overlay) remain as-is. No path arrows, numbered overlays, or aim indicators on the board. All helper information is textual in the side panel.
+
+---
+
+## 4. Toggle Button
+
+A single button controls helper visibility. Three states:
+
+- **Disabled (greyed):** No valid checkout exists this turn. Button is non-pressable. The setup recommendation (when relevant) is shown independently of this button — setup messaging is always displayed when active.
+- **Inactive (pressable, helper hidden):** At least one valid checkout exists, but the player has chosen to hide the helper. Button reads "Show Checkout" or carries an icon for the hidden state.
+- **Active (pressable, helper visible):** Helper is showing. Button reads "Hide Checkout" or shows the active state.
+
+The button state recomputes after every throw and every modifier-state change. The player's visibility preference persists across throws — toggling on once keeps the helper visible until the player toggles off (or the disabled state preempts it).
+
+Button styles for each state — colors, icons, label strings — all exported with hover descriptions.
+
+---
+
+## 5. Modifier-Toggle Soft Hint
+
+When the player has at least one toggleable (unlocked) scoring modifier active, the helper appends a one-line soft hint below the path list:
+
+> Try toggling a modifier to recalculate
+
+The hint:
+
+- Does *not* suggest which specific modifier to toggle. The active recommendation ("disable Color Streak to enable T20-T20-Bull") is intentionally avoided — it makes the helper feel like it's playing for the player.
+- Only appears when the player has at least one unlocked modifier in the active set. If all active modifiers are locked, the hint is suppressed.
+- Appears in both checkout and setup states.
+
+The helper recomputes on every modifier-toggle event, just as it does on throws. No special UI for the recompute — the panel updates in place.
+
+Hint text exported as a string variable for easy phrasing tweaks.
+
+---
+
+## 6. Edge Cases
+
+- **Player throws something not on any displayed path:** Full recompute from new remainder. No "off-script" UI; the helper just updates.
+- **Multiple paths tie at every ranking criterion:** Stable sort by candidate target enum order. Predictable, never surfaces UI noise.
+- **Off-board preservation state:** Setup solver naturally produces the off-board recommendation; display layer labels it appropriately (see 2c).
+- **Helper visible but no checkouts exist:** Toggle button greys out; setup recommendation displays in the same panel region with a distinct visual treatment (e.g., italic, different color tag) to differentiate setup from checkout.
+- **Player at remaining 1 or other non-checkout-eligible value:** Solver returns no paths (no double sums to 1). Helper treats this as a setup case.
+- **Speculative simulation must not leak into hit history:** Solver wraps simulations to ensure `hit_history_turn` / `hit_history_leg` / `hit_history_run` remain untouched until a real throw lands.
 
 ---
 
 ## Deferred / Out of Scope
 
-- **Reroll mechanics** for either lit-spot generation or the post-hit 2-of-2 options. Could land later as a stat upgrade or a shop-specific modifier.
-- **Shop variants** (themed shops, boss shops, alternate layouts). One shop type for now.
-- **Item-specific shop interactions** (e.g., a modifier that biases shop rolls or alters lit-spot placement). Future hook.
-- **Run-end interaction.** If a shop would fire after the final leg of a run, behavior is undefined for now. Resolve in implementation, or wait until run structure firms up (this depends on the unresolved meta-progression / run-length question).
-- **Static on-board modifier visuals.** Still deferred from the HUD pass — art-direction-dependent.
+- **V2 streak-aware preferred remainder list.** Project carried-over streak state forward when computing the preferred set. Build only if V1's setup recommendations fail in playtest under `WITHIN_LEG` / `WITHIN_RUN` carry-over scenarios.
+- **Active modifier-toggle suggestions.** Helper telling the player exactly which modifier to disable to unlock a checkout. Intentionally avoided per agency-over-hand-holding design call.
+- **Dart-accuracy-aware EV ranking.** Ranking paths by the player's actual hit probability using dart component stats. Currently the fattest-reliable-segment heuristic handles this implicitly. Upgrade only if playtest reveals bad advice.
+- **Multi-turn setup planning.** Helper suggesting full 3-dart setup sequences when no checkout exists. V1 handles one dart at a time.
+- **Helper interaction with future rule-modifier category** (extra turns, rethrows). Out of scope until rule modifiers exist as a system.
 
 ---
 
 ## Implementation Notes
 
-- All tunable values — the `lit_spots` slack constant (currently +3), the rarity floor formulas, shader animation speed, the zero-dart acknowledgment duration — exposed as exported variables with hover descriptions per project conventions.
+- All tunable values exposed as exported variables with hover descriptions per project conventions: `max_displayed_paths`, panel position/colors/font sizes/spacing, button styles for each state, annotation string templates, hint message text.
 - Static typing throughout per project conventions.
-- Reuse the streak conflict logic established by the HUD pass for the parity slot. The shop pick step calls the same conflict-check function the leg-end pick uses. Do not duplicate.
-- The shop's item pool must be the same data source the per-leg picks use. Rarity weighting is determined by the spot's rarity tier, not a separate shop-specific pool.
-- `shop_darts` accounting must persist across legs within the run. Counter resets to 0 immediately after a shop concludes (success, whiff, or zero-dart all reset).
-- A shop is its own screen / state, not a modal on top of a leg. Clean transition between leg-end and leg-start.
+- The solver lives in `scoring_modifier_manager.gd` alongside the existing `calculate_checkout_segments`. The existing single-dart function should be generalized into the recursive solver — the 1-dart case becomes its base case rather than a separate function.
+- Preferred-remainder list cached as `Array[int]` on `ScoringModifierManager`, invalidated and immediately recomputed on any modifier-state change. Recompute is triggered explicitly off the throw path to keep per-throw work minimal.
+- Side panel UI extends the existing right-side stats area. Reuse existing panel layout / typography rather than creating a separate widget.
+- Toggle button state derives from `solve_checkout(...).is_empty()` — single source of truth, no separate "has checkout" flag to maintain.
+- The helper UI listens to existing turn/throw/modifier signals and re-queries the solver. If clean signals don't yet exist for "throw resolved" and "modifier state changed", surface them — they will be needed regardless.
 
 ---
 

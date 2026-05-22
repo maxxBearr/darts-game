@@ -105,6 +105,9 @@ var _picker_header: Label
 ## Picker prompt label (created on demand).
 var _picker_prompt: Label
 
+## Total shop darts for the current shop (for "thrown/total" label).
+var _shop_total_darts: int = 0
+
 
 func _ready() -> void:
 	# Connect action buttons
@@ -439,10 +442,14 @@ func _show_stat_preview(upgrade: Dictionary) -> void:
 
 
 ## Called when the mouse enters an upgrade button — show stat preview.
+## Only previews if the item at this index is an accuracy upgrade (not a modifier).
 func _on_upgrade_hover(index: int) -> void:
-	if _modifier_mode or index >= _preview_upgrades.size():
+	if index >= _preview_upgrades.size():
 		return
-	_show_stat_preview(_preview_upgrades[index])
+	var upgrade: Dictionary = _preview_upgrades[index]
+	if upgrade.is_empty():
+		return
+	_show_stat_preview(upgrade)
 
 
 ## Called when the mouse exits an upgrade button — restore real stats.
@@ -566,7 +573,7 @@ func clear_modifier_status() -> void:
 ## Format: "Target: D7 ×3 = 35" (with modifier), or "Target: D7 = 14" (without).
 ## Turns gold when hovering a segment that would win the leg in one dart.
 ## streak_lines: current streak display strings appended after the score readout.
-func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], screen_pos: Vector2 = Vector2.ZERO, is_checkout: bool = false, streak_lines: Array[String] = []) -> void:
+func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], screen_pos: Vector2 = Vector2.ZERO, is_checkout: bool = false, streak_lines: Array[String] = [], would_bust: bool = false) -> void:
 	if result.is_empty():
 		hover_tooltip.visible = false
 		return
@@ -593,15 +600,20 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 	else:
 		text = "Target: %s%d = %d" % [prefix, face_value, total_score]
 
-	# Append streak info
-	for line: String in streak_lines:
-		text += " | " + line
+	# Append bust warning or streak info
+	if would_bust:
+		text += " | ⚠ BUST"
+	else:
+		for line: String in streak_lines:
+			text += " | " + line
 
 	hover_tooltip.text = text
 	hover_tooltip.visible = true
 
-	# Gold text when hovering a checkout segment
-	if is_checkout:
+	# Color: red for bust, gold for checkout, white otherwise
+	if would_bust:
+		hover_tooltip.modulate = Color(1.0, 0.3, 0.25)
+	elif is_checkout:
 		hover_tooltip.modulate = Color(1.0, 0.85, 0.2)
 	else:
 		hover_tooltip.modulate = Color(1.0, 1.0, 1.0)
@@ -864,7 +876,10 @@ func enter_shop_mode(saved_darts: int) -> void:
 	turn_score_label.visible = false
 	leg_label.visible = false
 	bust_label.visible = false
-	dart_label.text = "Saved: %d dart%s" % [saved_darts, "" if saved_darts == 1 else "s"]
+	_shop_total_darts = saved_darts
+	dart_label.text = "Thrown: 0 / %d" % saved_darts
+	dart_label.remove_theme_font_size_override("font_size")
+	dart_label.modulate = Color(1.0, 1.0, 1.0)
 	dart_indicator.set_shop_darts(saved_darts, saved_darts)
 
 
@@ -891,7 +906,8 @@ func show_shop_entry(leg: int, target: int, turns_used: int, saved_darts: int) -
 func show_shop_header(darts_remaining: int) -> void:
 	upgrade_container.visible = false
 	next_leg_button.visible = false
-	dart_label.text = "%d dart%s left" % [darts_remaining, "" if darts_remaining == 1 else "s"]
+	var thrown: int = _shop_total_darts - darts_remaining
+	dart_label.text = "Thrown: %d / %d" % [thrown, _shop_total_darts]
 	dart_indicator.set_darts_remaining(darts_remaining)
 	if darts_remaining > 0:
 		score_label.text = "SHOP — Throw at the lit spots!"
@@ -908,9 +924,18 @@ func show_shop_zero_darts() -> void:
 
 ## Show the shop's 2-of-2 mixed item pick (modifiers and/or accuracy upgrades).
 ## items is an Array[Dictionary] with {type: "modifier"|"upgrade", data: ...}.
-func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int) -> void:
+func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replacement_info: Array[String] = []) -> void:
 	_modifier_mode = true
 	score_label.text = "You hit a spot! Pick one (%d dart%s left)" % [darts_remaining, "" if darts_remaining == 1 else "s"]
+
+	# Build preview data — upgrade dicts for accuracy items, empty for modifiers
+	_preview_upgrades = []
+	for item: Dictionary in items:
+		if item["type"] == "upgrade":
+			_preview_upgrades.append(item["data"])
+		else:
+			_preview_upgrades.append({})
+
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(mini(items.size(), 2)):
 		var item: Dictionary = items[i]
@@ -930,9 +955,21 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int) -> voi
 			button_color = upgrade["color"]
 			buttons[i].tooltip_text = upgrade["description"]
 
+		if i < replacement_info.size() and replacement_info[i] != "":
+			button_text += "\n⚠ %s" % replacement_info[i]
+
 		buttons[i].text = button_text
 		buttons[i].self_modulate = Color(button_color.r, button_color.g, button_color.b, 1.0)
 		buttons[i].visible = true
+
+		# Connect hover preview signals
+		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
+			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
+		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
+			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
+		buttons[i].mouse_entered.connect(_on_upgrade_hover.bind(i))
+		buttons[i].mouse_exited.connect(_on_upgrade_unhover)
+
 	# Hide the third button for 2-of-2 pick
 	buttons[2].visible = false
 	upgrade_container.visible = true

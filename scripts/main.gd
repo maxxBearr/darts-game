@@ -268,8 +268,9 @@ func _process(_delta: float) -> void:
 		# modified score without recording to hit history
 		var modified_result: Dictionary = scoring_modifier_manager.process_score(hover_result, true)
 		var is_checkout: bool = _is_checkout_segment(modified_result)
+		var would_bust: bool = _would_bust(modified_result)
 		var streak_lines: Array[String] = _get_active_streak_info()
-		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER, mouse_pos, is_checkout, streak_lines)
+		hud.show_hover_tooltip(modified_result, dartboard.WEDGE_ORDER, mouse_pos, is_checkout, streak_lines, would_bust)
 
 		# Extract which modifiers triggered for perk-up display
 		var triggered_names: Array[String] = []
@@ -313,6 +314,12 @@ func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
 func _start_new_throw() -> void:
 	_disable_hover()
 	hud.hide_score()
+
+	if _in_shop:
+		# Shop throws skip scoring modifiers and leg HUD updates
+		hud.show_instruction("Move to aim, click to place zone")
+		throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
+		return
 
 	# Build context for throw modifier evaluation
 	var context: Dictionary = {
@@ -580,6 +587,25 @@ func _start_shop(response: Dictionary) -> void:
 	dartboard.clear_checkout_segments()
 	hud.enter_shop_mode(_shop_darts_remaining)
 
+	# Cache stats so shop upgrade picks can show hover previews
+	var current_stats: Dictionary = {
+		"horizontal_range": throw_mechanic.horizontal_range,
+		"vertical_range": throw_mechanic.vertical_range,
+		"vertical_accuracy": throw_mechanic.vertical_accuracy,
+		"horizontal_accuracy": throw_mechanic.horizontal_accuracy,
+		"vertical_speed": throw_mechanic.vertical_speed,
+		"horizontal_speed": throw_mechanic.horizontal_speed,
+	}
+	var base_stats: Dictionary = {
+		"horizontal_range": _base_horizontal_range,
+		"vertical_range": _base_vertical_range,
+		"vertical_accuracy": _base_vertical_accuracy,
+		"horizontal_accuracy": _base_horizontal_accuracy,
+		"vertical_speed": _base_vertical_speed,
+		"horizontal_speed": _base_horizontal_speed,
+	}
+	hud.cache_stats(current_stats, base_stats)
+
 	# Slide board off to the left, then back from the right with shop spots
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var center: Vector2 = viewport_size / 2.0
@@ -690,7 +716,20 @@ func _on_shop_throw_completed(hit_position: Vector2) -> void:
 		var rarity: ScoringEnums.Rarity = spot["rarity"] as ScoringEnums.Rarity
 		_shop_pick_items = _generate_shop_picks(rarity)
 		_leg_phase = "shop_pick"
-		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining)
+
+		# Build replacement warnings for modifier items
+		var replacement_info: Array[String] = []
+		for item: Dictionary in _shop_pick_items:
+			if item["type"] == "modifier":
+				var mod: ScoringModifier = item["data"] as ScoringModifier
+				var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
+				if conflict != null:
+					replacement_info.append("Replaces: %s" % conflict.modifier_name)
+				else:
+					replacement_info.append("")
+			else:
+				replacement_info.append("")
+		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining, replacement_info)
 	else:
 		# Miss — continue or end
 		hud.show_shop_header(_shop_darts_remaining)
@@ -1138,11 +1177,30 @@ func _update_stats_display() -> void:
 
 ## Recalculate and update which double segments would win the current leg.
 ## Also updates the remaining score color — gold when a single-dart checkout exists.
+## Skipped during shop mode (no scoring in the shop).
 func _update_checkout_highlights() -> void:
+	if _in_shop:
+		return
 	var remaining: int = x01_game.remaining_score
 	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(remaining)
 	dartboard.set_checkout_segments(checkout_segments)
 	hud.set_remaining_checkout_available(checkout_segments.size() > 0)
+
+
+## Check if hitting the hovered segment would cause a bust.
+## Same logic as x01_game: below zero, leaves 1, or hits zero without a double.
+func _would_bust(result: Dictionary) -> bool:
+	var points: int = result["total_score"]
+	var new_remaining: int = x01_game.remaining_score - points
+	if new_remaining < 0:
+		return true
+	if new_remaining == 1:
+		return true
+	var ring_name: String = result.get("ring_name", "")
+	var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
+	if new_remaining == 0 and not is_double:
+		return true
+	return false
 
 
 ## Check if a hovered segment is one of the checkout-winning doubles.
@@ -1263,7 +1321,18 @@ func _cancel_picker() -> void:
 
 	if _in_shop:
 		_leg_phase = "shop_pick"
-		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining)
+		var shop_replace_info: Array[String] = []
+		for item: Dictionary in _shop_pick_items:
+			if item["type"] == "modifier":
+				var mod: ScoringModifier = item["data"] as ScoringModifier
+				var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
+				if conflict != null:
+					shop_replace_info.append("Replaces: %s" % conflict.modifier_name)
+				else:
+					shop_replace_info.append("")
+			else:
+				shop_replace_info.append("")
+		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining, shop_replace_info)
 		return
 
 	_leg_phase = "modifier_pick"

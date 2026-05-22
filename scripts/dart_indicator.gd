@@ -30,6 +30,8 @@ var _dart_containers: Array[HBoxContainer] = []
 var _barrel_component: DartComponent
 var _shaft_component: DartComponent
 var _flight_component: DartComponent
+var _original_position: Vector2 = Vector2.ZERO
+var _position_saved: bool = false
 
 
 ## Update how many darts are remaining and refresh display.
@@ -112,23 +114,35 @@ func _update_dart_modulate() -> void:
 
 
 ## Set the indicator to shop mode showing a custom dart count.
-## Shrinks darts when count > 3 to fit. All darts start active.
+## Shrinks darts when count > 3 to fit. Shifts position up for large counts.
 func set_shop_darts(total: int, remaining: int) -> void:
+	if not _position_saved:
+		_original_position = position
+		_position_saved = true
+
 	# Rebuild with the right number of darts
 	for container: HBoxContainer in _dart_containers:
 		container.queue_free()
 	_dart_containers.clear()
 
 	var count: int = maxi(total, 1)
-	# Shrink height when many darts
 	var dart_h: float = mini_dart_height
 	var dart_sp: float = mini_dart_spacing
-	if count > 6:
+	if count > 10:
+		dart_h = mini_dart_height * 0.45
+		dart_sp = mini_dart_spacing * 0.3
+	elif count > 6:
 		dart_h = mini_dart_height * 0.6
 		dart_sp = mini_dart_spacing * 0.4
 	elif count > 3:
 		dart_h = mini_dart_height * 0.8
 		dart_sp = mini_dart_spacing * 0.6
+
+	# Shift position up so the stack doesn't overflow downward
+	var total_height: float = float(count) * (dart_h + dart_sp) - dart_sp
+	var normal_height: float = 3.0 * (mini_dart_height + mini_dart_spacing) - mini_dart_spacing
+	var overflow: float = maxf(total_height - normal_height, 0.0)
+	position = _original_position - Vector2(0.0, overflow)
 
 	for i: int in range(count):
 		var dart_row: HBoxContainer = HBoxContainer.new()
@@ -163,6 +177,8 @@ func restore_normal_darts() -> void:
 	for container: HBoxContainer in _dart_containers:
 		container.queue_free()
 	_dart_containers.clear()
+	if _position_saved:
+		position = _original_position
 	_using_textures = false
 	set_dart_components(_barrel_component, _shaft_component, _flight_component)
 

@@ -1,16 +1,20 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last seeded from Claude.ai project memory on 2026-05-21.*
+*Canonical design doc. Last refreshed 2026-05-21 after the HUD/Assembly polish + Shop systems shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
-## Status snapshot (as of 2026-05-21, beyond what this doc describes below)
+## Status snapshot (as of 2026-05-21)
 
-- The streak slot restriction system + Color Streak + Parity Streak modifiers have been implemented (uncommitted on branch `streak-item-system`). See `specs/` for the archived spec once it lands.
-- Phase 5 (Dart Parts & Assembly Screen) is *not* still planned — `dart_build.gd`, `assembly_screen.gd`, and the balance system (green/orange/red zones with accuracy skew) exist in the codebase. The "PLANNED" status below is outdated.
-- The "Phase Outline" further down lags reality; the design philosophy and architecture rules are still accurate.
+Three feature passes shipped on or near this date, all merged to main:
+
+- **Streak slot restriction system + Color Streak + Parity Streak modifiers** (`specs/2026-05-21-streak-slots-and-modifiers.md`). One-per-category slot rule for three streak categories (WEDGE, COLOR, PARITY).
+- **HUD / Assembly Polish Pass** (`specs/2026-05-21-hud-assembly-polish.md`). Balance bar gradient with new transition sub-zones, score-gold checkout indicator, target tooltip relocation above the crosshair with perk-up hover state, Even/Odd parity streak differentiation.
+- **Shop System** (`specs/2026-05-21-shop-system.md`). Every third leg, the post-leg upgrade pick is replaced by a shop where the player throws their accumulated spare darts at lit-up board spots to earn rarity-tiered upgrades.
+
+Phase 5 (Dart Parts & Assembly Screen) is also shipped — `dart_build.gd`, `assembly_screen.gd`, and the balance system exist in the codebase. The phase outline further down has been updated to match.
 
 ---
 
@@ -31,7 +35,8 @@ A Balatro-style roguelike built around darts. The player customizes a dart from 
 - The classic 501 becomes a mid-run challenge; later legs (701, 801+) require strong builds.
 - Player must finish each leg by reaching exactly 0, with the final dart landing on a double (or double bullseye). Standard darts "double out" rule.
 - Bust rules: if a dart would take the score below 0, to exactly 1 (impossible to finish since no double = 1), or to 0 without hitting a double, the entire 3-dart turn busts — score reverts to what it was at the start of that turn, remaining darts forfeited.
-- Between legs, the player picks one of three stat upgrades (randomized, rarity-weighted).
+- Between legs, the player picks one of three stat upgrades (randomized, rarity-weighted) **on non-shop legs**. On every third leg, the upgrade pick is replaced by a **shop round** — see the Shop System section below.
+- Spare darts (the difference between the leg's dart budget and darts actually used) accumulate across legs and spend at the shop.
 - Fail a leg (don't reach 0 in 5 turns) → run over.
 
 ---
@@ -196,7 +201,7 @@ Stats are on a 1–100 scale (except speeds which are ~1.0–5.0). Base values a
 - **`color_bonus_modifier.gd`** (`ColorBonusModifier`) — PER_DART. Adds `bonus_multiplier` to darts landing on segments of a specific `target_color`.
 - **`streak_bonus_modifier.gd`** (`StreakBonusModifier`) — PER_DART, streak_category WEDGE. Awards cumulative +1x per consecutive qualifying hit on the same wedge. Leniency tiers: SAME_RING, ADJACENT_SECTIONS, WHOLE_WEDGE.
 - **`color_streak_modifier.gd`** (`ColorStreakModifier`) — PER_DART, streak_category COLOR. Awards cumulative +1x per consecutive same-color hit.
-- **`parity_streak_modifier.gd`** (`ParityStreakModifier`) — PER_DART, streak_category PARITY. Awards cumulative +1x per consecutive same-parity (odd/even) hit.
+- **`parity_streak_modifier.gd`** (`ParityStreakModifier`) — base resource for parity streak behavior. After the HUD pass (2026-05-21), parity is split into two distinct items: **`even_streak_modifier.gd`** and **`odd_streak_modifier.gd`**, both declaring `streak_category PARITY` and sharing the single parity slot under the standard one-per-category rule. PER_DART. Awards cumulative +1x per consecutive same-parity hit (evens-only or odds-only depending on which item is equipped).
 - **`odd_even_bonus_modifier.gd`** (`OddEvenBonusModifier`) — PER_DART. Bonus on odd or even face values.
 - **`wedge_swap_modifier.gd`** (`WedgeSwapModifier`) — ON_ACQUIRE, PICK_TWO_WEDGES config. Swaps two wedges' positions on the board.
 - **`color_flip_modifier.gd`** (`ColorFlipModifier`) — ON_ACQUIRE. Flips segment colors.
@@ -234,6 +239,7 @@ Key properties per component:
   - **Green (0.0 – 0.3):** Bonus to all stats. Balanced dart flies true.
   - **Orange (0.3 – 0.6):** Neutral, no effect.
   - **Red (0.6+):** Penalties start scaling. Accuracy skew introduced.
+- **Transition sub-zones (HUD polish, 2026-05-21):** between the three named zones, two soft transition bands apply mild gameplay effects — a slight stat boost just inside the green→orange edge, and a slight accuracy skew just inside the orange→red edge. Magnitudes started at ~10–20% of the corresponding full-zone effect and are tuned via exported vars. The visual bar is rendered as a smooth color gradient even though the three named zones still drive the dominant gameplay states.
 - Balance affects accuracy specifically (thematically clean — a balanced dart flies straighter). Components give range/speed/accuracy, balance is a separate accuracy modifier on top.
 - Imbalanced builds should sometimes be the right choice — a rare barrel with extreme stats that pushes into orange/red can be worth the penalty if the raw stats are good enough. "Your dart parts determine your ceiling, your balance determines how cleanly you can actually deliver."
 - Balance thresholds and bonus values are all exported vars on `DartBuild` for inspector tuning.
@@ -297,6 +303,64 @@ Between legs, the player picks one of three randomized stat upgrades. Each upgra
 - Base stats are snapshotted at run start and restored on new run.
 - Duplicates within a single set of 3 are allowed.
 - Logic lives in `main.gd` currently; will migrate to a dedicated manager when items get complex.
+- **On shop legs (every third leg), this pick is replaced by the shop round** — see below. On non-shop legs the 2-of-3 (or 3-of-3 — TODO confirm against current code) pick continues unchanged.
+
+---
+
+## Shop System (IMPLEMENTED 2026-05-21)
+
+*Spec: `specs/2026-05-21-shop-system.md`. Implementation lives across `main.gd` (state machine + lit-spot generation, gated on `_in_shop` and `_leg_phase`), `dartboard.gd` (lit-spot drawing + `check_shop_hit`), `hud.gd` (shop hover tooltip), `modifier_registry.gd` (rarity-weighted item pool draw), and `x01_game.gd` (saved-darts accumulator). The swirly fill effect is `shaders/shop_spot.gdshader`.*
+
+### Cadence
+
+Every third leg, the post-leg upgrade pick is replaced by a shop round. The shop is not itself a leg — it does not consume a leg slot or advance run scaling. It's a screen between leg-end and leg-start. On non-shop legs, the regular per-leg upgrade pick continues unchanged. Tunable via `shop_cadence` (default 3).
+
+### Spare-Dart Math
+
+Each leg has a finite dart budget: `total_darts_in_leg = max_turns * darts_per_turn` (currently 5 × 3 = 15). Each throw increments `used_darts`. On a bust, the remaining darts in the busted turn are counted as used (busting on dart 1 of a turn burns the full 3-dart turn). On leg win, `saved_darts = total_darts_in_leg - used_darts`.
+
+`shop_darts` is the sum of saved darts across the three legs preceding the shop. The accumulator resets to 0 once the shop concludes.
+
+### Board Setup
+
+- `lit_spots = shop_darts + 3` (flat +3 slack via `shop_spot_slack` export). The slack gives the player meaningful choice in *which* targets to prioritize.
+- Rarity distribution within lit spots:
+  - `rares = max(1, floor(lit_spots / 6))` — at least one rare guaranteed.
+  - `uncommons = floor(lit_spots / 3)`.
+  - `commons` fill the rest.
+- Placement: commons fill the larger single regions of wedges; uncommons and rares fill the smaller double and triple rings. Within those constraints, placement is random.
+
+### Throw Resolution
+
+When a dart hits a lit spot, two items of that rarity tier are rolled and shown to the player. The player picks one; the other is discarded. The spot deactivates for the rest of the shop. Existing slot-conflict rules (streak categories) apply — same logic as the leg-end pick.
+
+The shop draws from the same item pool the per-leg picks use, weighted by rarity tier. Stat upgrades and scoring modifiers can both appear.
+
+Missing a lit spot does nothing. If the player whiffs every dart, they get nothing — no consolation. The spare-dart system already rewards play quality; softening misses would dilute that.
+
+The shop does not score throws. No scoring modifiers apply, no streak counters update.
+
+### Visuals
+
+Lit spots are filled with a Balatro-style swirly animated shader (`shop_spot.gdshader`), tinted by rarity:
+
+- **Common:** white / light grey.
+- **Uncommon:** blue.
+- **Rare:** purple.
+
+### Zero-Dart Shop
+
+If the player saved zero darts across the three preceding legs (`shop_darts == 0`), the shop screen still appears. The board has no lit spots. A brief "oh dear, you didn't save ANY darts" acknowledgment plays (duration tunable via `shop_zero_dart_duration`), then the shop closes and the next leg begins. The point is to make the consequence of poor play visible.
+
+### Emergent Strategy
+
+Three interacting systems the player calculates on every shop throw: (1) the **board RNG read** — what's lit, where, what shape are the clusters; (2) **skill/confidence** — can I hit that triple under pressure; (3) **stat-driven hit probability** — do my dart parts give me the precision to back the read. Because doubles and triples are physically adjacent to their corresponding singles, missing a hard rare often clips into a related common spot — a natural geometric near-miss reward, not a designed-in consolation mechanic.
+
+This three-interaction trinity is a load-bearing design principle for the project. Future reward-delivery systems should preserve it.
+
+### Open: Run-End Interaction
+
+If a shop would fire after the final leg of a run, behavior is currently undefined. Resolution depends on whether runs are fixed-length or open-ended — which itself depends on meta-progression scope. See Open Design Questions below.
 
 ---
 
@@ -312,9 +376,10 @@ Between legs, the player picks one of three randomized stat upgrades. Each upgra
 ### Phase 3.75 — Four-Stage Throw Rework — COMPLETE
 ### Phase 4a — Scoring Modifier Infrastructure — COMPLETE
 ### Phase 4b — Enum Refactor + Hover/Inspect + Modifier Panel — COMPLETE
-### Phase 4c — Streak Slot Restriction + Color/Parity Streaks — COMPLETE (uncommitted on `streak-item-system` branch as of 2026-05-21)
-### Phase 5 — Dart Parts & Assembly Screen — COMPLETE (was marked planned in earlier doc; verify on next pass)
-### Phase 6 — Shop & Run Structure — PLANNED
+### Phase 4c — Streak Slot Restriction + Color/Parity Streaks — COMPLETE (merged 2026-05-21)
+### Phase 4d — HUD / Assembly Polish Pass — COMPLETE (merged 2026-05-21). Balance bar gradient + transition sub-zones, score-gold checkout indicator, target tooltip relocated above the crosshair with perk-up hover state, Even/Odd parity streak differentiation.
+### Phase 5 — Dart Parts & Assembly Screen — COMPLETE
+### Phase 6 — Shop System — COMPLETE (merged 2026-05-21). Run-end interaction with the shop is the remaining open question — see Open Design Questions below.
 ### Phase 7 — More Modifiers & Items — PLANNED
 ### Phase 8 — Form System — PLANNED
 ### Phase 9+ — Polish & Beyond — FUTURE
@@ -323,12 +388,17 @@ Between legs, the player picks one of three randomized stat upgrades. Each upgra
 
 ## Open Design Questions
 
-1. **Dart count scaling:** Fixed 15 darts per leg forever, or does it change? Could decrease as difficulty climbs. Could be modifier-dependent.
-2. **Modifier stacking/conflicts:** Can modifiers conflict (e.g., "doubles worth 0" + must finish on a double)? Intended as a design feature (risk/reward) or something to prevent?
+1. **Dart count scaling:** Fixed 15 darts per leg forever, or does it change? Could decrease as difficulty climbs. Could be modifier-dependent. Now also affects shop yield, since `shop_darts` is derived from leg dart budgets.
+2. **Modifier stacking/conflicts (broader):** Can modifiers conflict (e.g., "doubles worth 0" + must finish on a double)? Intended as a design feature (risk/reward) or something to prevent? The streak slot system answered this for streak modifiers (one per category). The broader non-streak case is still open.
 3. **Absolute weight:** A potential second weight axis (total dart mass) affecting throw arc or power. Currently only directional balance is tracked.
 4. **Distribution type for variance:** Currently uniform `randf_range`. Gaussian would feel more natural (most darts near center, fewer at edges).
-5. **Currency system:** What do you earn? Points scored? Legs cleared? Both? How does shop pricing work?
+5. **Shop run-end interaction:** What happens if a shop would fire after the final leg of a run? Deferred from the shop spec. Depends partly on whether runs are fixed-length or open-ended, which depends on #6.
 6. **Meta-progression scope:** What persists across runs? Unlocked parts? Unlocked modifiers? Cosmetics?
+
+### Resolved since previous refresh
+
+- **Currency system.** No traditional currency. Spare darts saved across legs are the de facto currency and spend at the shop directly by throwing. See Shop System section.
+- **Streak modifier conflicts.** Resolved by the one-per-category slot rule (Phase 4c).
 
 ---
 
@@ -342,4 +412,7 @@ Between legs, the player picks one of three randomized stat upgrades. Each upgra
 - **Three balance zones (green/orange/red)** rather than a continuous curve. Simple for players to understand and tune.
 - **Board renders effective values.** If a wedge is modified, the number on the board changes. The player should never have to remember invisible modifications.
 - **Hover/inspect active during AIMING and between darts.** Not during POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, or RESOLVING — player needs to focus during active throw phases.
-- **Streak modifiers are one-per-category.** Three slot categories (WEDGE, COLOR, PARITY). Picking a new streak modifier in a category the player already has triggers replacement, shown on the pick card.
+- **Streak modifiers are one-per-category.** Three slot categories (WEDGE, COLOR, PARITY). Picking a new streak modifier in a category the player already has triggers replacement, shown on the pick card. The PARITY category contains two distinct items (Even Streak / Odd Streak) that compete for the single slot.
+- **Spare darts are the shop currency.** No coins, no points-to-spend. Saving darts in a leg (finishing efficiently) directly translates to shop throwing power. Skill expressed in regular play = leverage in the shop.
+- **Three calculating interactions on every throw.** Board RNG read + skill/confidence + stat-driven hit probability. The shop's geometric placement rules deliberately invoke all three; future reward-delivery systems should preserve this trinity rather than collapse it.
+- **The board's checkout-highlight function is the single source of truth for "can win."** The HUD score-gold indicator and the board's gold checkout highlights both read from the same function. They must never disagree.

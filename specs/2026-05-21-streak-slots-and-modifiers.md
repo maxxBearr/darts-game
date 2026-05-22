@@ -1,11 +1,8 @@
 ---
 Spec date: 2026-05-21
-Status: Shipped 2026-05-21 — uncommitted on branch `streak-item-system`, pending playtest
+Status: Shipped 2026-05-21 — merged to main and playtested.
 Implementation: Claude Code (run by Max during the same Cowork session that wrote this spec)
-Notes: All spec items were implemented. Pool weights for ColorStreak / ParityStreak
-	   (both set to 15) may need tuning after playtest. Streak slot UI behavior should
-	   be sanity-checked during real runs. Update this status if playtest surfaces
-	   partial-ship or revisit decisions, and link to any follow-up spec.
+Notes: All spec items shipped. Parity Streak was later split into distinct Even Streak and Odd Streak items by the [HUD / Assembly Polish Pass](2026-05-21-hud-assembly-polish.md) — both share the parity slot under the same one-per-category rule established here. Pool weights for ColorStreak / ParityStreak (15 each) were set during this spec and have held through playtest so far.
 ---
 
 # Streak Slot Restriction System & New Streak Modifiers

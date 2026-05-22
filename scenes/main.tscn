@@ -47,7 +47,7 @@ outline_color = Color(0, 0, 0, 1)
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
 next_dart_delay = 0.1
-shop_cadence = 2
+shop_cadence = 1
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
 script = ExtResource("2_dartboard")
@@ -64,8 +64,9 @@ checkout_pulse_max_alpha = 0.9
 checkout_border_thickness = 5.0
 flash_duration = 0.4
 shop_color_common = Color(0.47250032, 0.47250032, 0.47250032, 0.9843137)
-shop_color_uncommon = Color(0.047058824, 0, 0.99607843, 0.95686275)
+shop_color_uncommon = Color(0.05000019, 0, 1, 0.8784314)
 shop_color_rare = Color(0.6509804, 0.23921569, 0.85490197, 0.94509804)
+shop_border_thickness = 2.2
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
