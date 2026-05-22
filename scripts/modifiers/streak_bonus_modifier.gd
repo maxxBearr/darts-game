@@ -106,6 +106,16 @@ func reset_streak_state() -> void:
 	_reset_streak()
 
 
+func save_streak_state() -> Dictionary:
+	return {"wedge_index": _streak_wedge_index, "ring": _streak_ring, "count": _streak_count}
+
+
+func restore_streak_state_from(snapshot: Dictionary) -> void:
+	_streak_wedge_index = snapshot.get("wedge_index", -1)
+	_streak_ring = snapshot.get("ring", "")
+	_streak_count = snapshot.get("count", 0)
+
+
 ## Get the current streak count for display purposes.
 func get_streak_count() -> int:
 	return _streak_count
@@ -161,4 +171,5 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> StreakBonusModifier:
 	mod.modifier_name = "Wedge Streak (%s)" % leniency_name
 	mod.description = "+1x per consecutive hit on the same wedge (per %s)" % scope_name
 
+	mod.roll_toggleable()
 	return mod

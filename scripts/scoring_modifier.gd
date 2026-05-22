@@ -28,8 +28,11 @@ extends Resource
 ## Streak modifiers set this to their category so the one-per-category rule can be enforced.
 @export var streak_category: ScoringEnums.StreakCategory = ScoringEnums.StreakCategory.NONE
 
-## Whether this modifier is currently active. Toggled by the player at any time.
+## Whether this modifier is currently active. Only toggleable if unlocked.
 var enabled: bool = true
+
+## Whether the player can toggle this modifier on/off. Locked modifiers stay active.
+var toggleable: bool = false
 
 ## Rarity name for display — derived from rarity_tier.
 var rarity: String:
@@ -52,6 +55,18 @@ func get_streak_count() -> int:
 ## Override in streak modifier subclasses. Returns "" for non-streak modifiers.
 func get_streak_display() -> String:
 	return ""
+
+
+## Snapshot internal streak state for speculative simulation.
+## Override in streak modifier subclasses. Returns empty dict for non-streak modifiers.
+func save_streak_state() -> Dictionary:
+	return {}
+
+
+## Restore internal streak state from a snapshot.
+## Override in streak modifier subclasses.
+func restore_streak_state_from(snapshot: Dictionary) -> void:
+	pass
 
 
 ## Override in PER_DART subclasses. Receives the enriched score dictionary and
@@ -80,6 +95,16 @@ func _track_modification(result: Dictionary, field: String, old_value: Variant, 
 		"old_value": old_value,
 		"new_value": new_value,
 	})
+
+
+## Chance (0-100) that a generated modifier is unlocked (toggleable).
+## The remaining percentage produces locked (always-on) modifiers.
+const UNLOCK_CHANCE: int = 35
+
+
+## Roll whether this modifier is toggleable. Call from subclass generate().
+func roll_toggleable() -> void:
+	toggleable = randi_range(1, 100) <= UNLOCK_CHANCE
 
 
 ## Relative weight for how likely this modifier type is to appear in the pool.

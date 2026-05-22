@@ -46,8 +46,8 @@ outline_color = Color(0, 0, 0, 1)
 
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
+debug_start_with_modifier = true
 next_dart_delay = 0.1
-shop_cadence = 1
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
 script = ExtResource("2_dartboard")
@@ -86,6 +86,9 @@ accuracy_red_color = Color(0.9019608, 0.2, 0.14901961, 0.12941177)
 script = ExtResource("4_hud")
 hover_tooltip_offset_y = 2.0
 upgrade_button_opacity = 1.0
+checkout_font_size = 13
+checkout_position = Vector2(975, 350)
+picker_header_half_width = 600.0
 
 [node name="LegLabel" type="Label" parent="HUD" unique_id=462079680]
 offset_left = 20.0
@@ -123,10 +126,9 @@ label_settings = SubResource("LabelSettings_info")
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -471.0
-offset_top = 20.0
-offset_right = -20.0
-offset_bottom = 60.0
+offset_left = -451.0
+offset_top = 2.0
+offset_bottom = 42.0
 grow_horizontal = 0
 theme_override_font_sizes/font_size = 13
 label_settings = SubResource("LabelSettings_score")
@@ -136,10 +138,10 @@ horizontal_alignment = 2
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -430.0
-offset_top = 65.0
-offset_right = -20.0
-offset_bottom = 110.0
+offset_left = -428.0
+offset_top = 26.0
+offset_right = -18.0
+offset_bottom = 71.0
 grow_horizontal = 0
 theme_override_font_sizes/font_size = 9
 label_settings = SubResource("LabelSettings_bust")
@@ -162,10 +164,10 @@ horizontal_alignment = 1
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -244.0
-offset_top = 120.0
-offset_right = -84.0
-offset_bottom = 160.0
+offset_left = -203.0
+offset_top = 71.0
+offset_right = -43.0
+offset_bottom = 111.0
 grow_horizontal = 0
 text = "Next Dart"
 
@@ -173,10 +175,10 @@ text = "Next Dart"
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -244.0
-offset_top = 120.0
-offset_right = -84.0
-offset_bottom = 160.0
+offset_left = -203.0
+offset_top = 71.0
+offset_right = -43.0
+offset_bottom = 111.0
 grow_horizontal = 0
 text = "Next Turn"
 
@@ -184,10 +186,10 @@ text = "Next Turn"
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -244.0
-offset_top = 120.0
-offset_right = -84.0
-offset_bottom = 160.0
+offset_left = -203.0
+offset_top = 71.0
+offset_right = -43.0
+offset_bottom = 111.0
 grow_horizontal = 0
 text = "Next Leg"
 
@@ -195,10 +197,10 @@ text = "Next Leg"
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -244.0
-offset_top = 120.0
-offset_right = -84.0
-offset_bottom = 160.0
+offset_left = -203.0
+offset_top = 71.0
+offset_right = -43.0
+offset_bottom = 111.0
 grow_horizontal = 0
 text = "New Run"
 
@@ -264,9 +266,9 @@ anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
 offset_left = -340.0
-offset_top = 170.0
+offset_top = 121.0
 offset_right = -20.0
-offset_bottom = 400.0
+offset_bottom = 306.0
 grow_horizontal = 0
 
 [node name="StatsTitle" type="Label" parent="HUD/StatsContainer" unique_id=2114441324]

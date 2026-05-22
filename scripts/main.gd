@@ -194,6 +194,7 @@ func _ready() -> void:
 	hud.new_run_pressed.connect(_on_new_run)
 	hud.upgrade_selected.connect(_on_upgrade_selected)
 	hud.modifier_selected.connect(_on_modifier_selected)
+	hud.modifier_toggled.connect(_on_modifier_toggled)
 
 	# Connect assembly screen
 	assembly_screen.dart_build = dart_build
@@ -222,9 +223,10 @@ func _ready() -> void:
 	# Sync dartboard with modifier manager's effective board state
 	_sync_board_state()
 
-	# Sync any debug modifiers to the HUD panel
+	# Sync any debug modifiers to the HUD panel (skip ON_ACQUIRE board-state modifiers)
 	for modifier: Resource in scoring_modifier_manager.active_modifiers:
-		hud.add_modifier_to_panel(modifier)
+		if modifier.timing != ScoringEnums.ModifierTiming.ON_ACQUIRE:
+			hud.add_modifier_to_panel(modifier)
 
 	# Show assembly screen instead of starting immediately
 	_show_assembly()
@@ -305,9 +307,14 @@ func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
 	if replaced != null:
 		hud.remove_modifier_from_panel(replaced)
 
-	hud.add_modifier_to_panel(modifier)
+	# ON_ACQUIRE modifiers are one-time board changes — no panel square needed
+	if modifier.timing != ScoringEnums.ModifierTiming.ON_ACQUIRE:
+		hud.add_modifier_to_panel(modifier)
 	_sync_board_state()
+	scoring_modifier_manager.invalidate_preferred_remainders()
+	scoring_modifier_manager._build_solver_candidates()
 	_update_checkout_highlights()
+	_update_checkout_helper()
 
 
 ## Start a new throw (single dart).
@@ -406,26 +413,27 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Branch on what happened
 	if response["is_bust"]:
 		hud.show_bust(response["bust_reason"])
+		hud.hide_checkout_helper()
 		if response["is_game_over"]:
-			# Run is over
 			_run_over = true
 			hud.show_game_over(response["current_leg"], response["target_score"])
 		else:
-			# Turn lost to bust, but run continues
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	elif response["is_leg_won"]:
-		# Leg complete — show golden 0, clear checkout highlights
+		# Leg complete — show golden 0, clear checkout highlights and helper
 		hud.update_remaining(0)
 		hud.set_remaining_checkout_available(true)
 		dartboard.clear_checkout_segments()
+		hud.hide_checkout_helper()
 		_awaiting_next_leg = true
 		if score_tween != null and score_tween.is_valid():
 			score_tween.tween_callback(_show_leg_upgrades.bind(response))
 		else:
 			_show_leg_upgrades(response)
 	elif response["is_turn_over"]:
-		# Used all 3 darts without bust or win
+		# Used all 3 darts without bust or win — hide helper until next turn
+		hud.hide_checkout_helper()
 		if response["is_game_over"]:
 			_run_over = true
 			hud.show_game_over(response["current_leg"], response["target_score"])
@@ -447,6 +455,9 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	_enable_hover()
 
 	_update_checkout_highlights()
+	# Only recompute checkout helper if darts remain this turn
+	if not response["is_turn_over"] and not response["is_bust"] and not response["is_leg_won"]:
+		_update_checkout_helper()
 
 
 ## Show the leg-complete upgrade UI or shop entry. Called after the score animation finishes.
@@ -519,6 +530,7 @@ func _on_next_turn() -> void:
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	_start_new_throw()
 	_update_checkout_highlights()
+	_update_checkout_helper()
 
 
 ## Player presses "Next Leg" — advance to next leg, enter shop, or leave shop.
@@ -549,6 +561,7 @@ func _on_next_leg() -> void:
 	_update_all_hud()
 	_start_new_throw()
 	_update_checkout_highlights()
+	_update_checkout_helper()
 
 
 ## Player presses "New Run" — start fresh after game over.
@@ -1185,6 +1198,38 @@ func _update_checkout_highlights() -> void:
 	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(remaining)
 	dartboard.set_checkout_segments(checkout_segments)
 	hud.set_remaining_checkout_available(checkout_segments.size() > 0)
+
+
+## Update the checkout helper panel with solver results.
+## Runs the solver for the current remaining score and darts left.
+func _update_checkout_helper() -> void:
+	if _in_shop:
+		hud.hide_checkout_helper()
+		return
+
+	var remaining: int = x01_game.remaining_score
+	var darts_left: int = 3 - x01_game.darts_this_turn
+
+	# Check if the player has any unlocked (toggleable) modifiers (for the hint)
+	var has_toggleable: bool = false
+	for modifier: Resource in scoring_modifier_manager.active_modifiers:
+		if modifier is ScoringModifier and modifier.toggleable:
+			has_toggleable = true
+			break
+
+	var paths: Array[Array] = scoring_modifier_manager.solve_checkout(remaining, darts_left)
+
+	if paths.size() > 0:
+		hud.update_checkout_display(paths, has_toggleable)
+	else:
+		var setup: Dictionary = scoring_modifier_manager.get_setup_recommendation(remaining)
+		hud.update_setup_display(setup, has_toggleable)
+
+
+## Called when a modifier is toggled on/off — recompute checkout helper.
+func _on_modifier_toggled() -> void:
+	_update_checkout_highlights()
+	_update_checkout_helper()
 
 
 ## Check if hitting the hovered segment would cause a bust.

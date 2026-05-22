@@ -56,4 +56,5 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> OddEvenBonusModifier:
 	mod.modifier_name = "%s Bonus +%dx" % [parity_name, mod.bonus_multiplier]
 	mod.description = "+%d multiplier on %s-numbered wedges" % [mod.bonus_multiplier, parity_name.to_lower()]
 
+	mod.roll_toggleable()
 	return mod

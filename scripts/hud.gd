@@ -7,6 +7,7 @@ signal next_leg_pressed
 signal new_run_pressed
 signal upgrade_selected(index: int)
 signal modifier_selected(index: int)
+signal modifier_toggled
 
 @onready var score_label: Label = $ScoreLabel
 @onready var instruction_label: Label = $InstructionLabel
@@ -47,6 +48,29 @@ signal modifier_selected(index: int)
 ## Corner radius of upgrade/modifier pick buttons in pixels.
 @export_range(0.0, 16.0, 1.0) var upgrade_button_corner_radius: float = 6.0
 
+@export_group("Checkout Helper")
+
+## Font size for checkout path lines.
+@export var checkout_font_size: int = 12
+
+## Color for the checkout path text.
+@export var checkout_text_color: Color = Color(0.85, 0.85, 0.85)
+
+## Color for setup recommendation text.
+@export var checkout_setup_color: Color = Color(0.7, 0.8, 1.0)
+
+## Color for committed (already-thrown) steps in a path.
+@export var checkout_committed_color: Color = Color(0.3, 1.0, 0.4)
+
+## Hint text shown when modifiers can be toggled.
+@export var checkout_toggle_hint: String = "Try toggling a modifier to recalculate"
+
+## Position of the checkout helper panel on screen.
+@export var checkout_position: Vector2 = Vector2(1000.0, 200.0)
+
+## Width of the checkout helper panel.
+@export var checkout_width: float = 280.0
+
 @onready var stats_container: VBoxContainer = $StatsContainer
 
 const STAT_KEYS: Array[String] = [
@@ -77,6 +101,9 @@ const BAR_MAX_WIDTH: float = 120.0
 const BAR_HEIGHT: float = 12.0
 const STAT_MAX_VALUE: float = 100.0
 
+## Width of stat name labels (shrink to pull labels closer to bars).
+@export var stat_label_width: float = 90.0
+
 var _stat_bars: Dictionary = {}
 var _stat_value_labels: Dictionary = {}
 var _modifier_status_title: Label
@@ -100,13 +127,17 @@ const PREVIEW_BOOST_COLOR: Color = Color(0.3, 0.8, 1.0)
 ## Color for stat bars showing a previewed upgrade penalty.
 const PREVIEW_PENALTY_COLOR: Color = Color(1.0, 0.5, 0.2)
 
-## Picker header label (created on demand).
-var _picker_header: Label
-## Picker prompt label (created on demand).
-var _picker_prompt: Label
 
 ## Total shop darts for the current shop (for "thrown/total" label).
 var _shop_total_darts: int = 0
+
+## Checkout helper panel and state.
+var _checkout_panel: VBoxContainer
+var _checkout_toggle_button: Button
+var _checkout_path_labels: Array[Label] = []
+var _checkout_hint_label: Label
+var _checkout_visible: bool = false
+var _checkout_has_paths: bool = false
 
 
 func _ready() -> void:
@@ -134,6 +165,7 @@ func _ready() -> void:
 	modifier_tooltip.visible = false
 
 	_build_stat_bars()
+	_build_checkout_panel()
 
 
 ## Display the result of the current throw (per-dart feedback).
@@ -323,7 +355,7 @@ func _build_stat_bars() -> void:
 
 		var name_lbl: Label = Label.new()
 		name_lbl.text = STAT_DISPLAY_NAMES[key] + ":"
-		name_lbl.custom_minimum_size = Vector2(90.0, BAR_HEIGHT + 2.0)
+		name_lbl.custom_minimum_size = Vector2(stat_label_width, BAR_HEIGHT + 2.0)
 		name_lbl.size_flags_horizontal = 0
 		name_lbl.add_theme_font_size_override("font_size", 12)
 		row.add_child(name_lbl)
@@ -748,7 +780,8 @@ func _on_modifier_hover(square: Panel) -> void:
 	var modifier: Resource = square.get_meta("modifier")
 	if modifier:
 		var status: String = "ON" if modifier.enabled else "OFF"
-		modifier_tooltip.text = "%s [%s]\n%s\nClick to toggle" % [modifier.modifier_name, status, modifier.description]
+		var lock_info: String = "Click to toggle" if modifier.toggleable else "Locked"
+		modifier_tooltip.text = "%s [%s]\n%s\n%s" % [modifier.modifier_name, status, modifier.description, lock_info]
 		modifier_tooltip.visible = true
 
 
@@ -757,18 +790,18 @@ func _on_modifier_unhover() -> void:
 	modifier_tooltip.visible = false
 
 
-## Toggle modifier on click.
+## Toggle modifier on click (only if unlocked/toggleable).
 func _on_modifier_clicked(event: InputEvent, square: Panel) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var modifier: Resource = square.get_meta("modifier")
-		if modifier:
+		if modifier and modifier.toggleable:
 			modifier.enabled = not modifier.enabled
 			_update_modifier_square_visual(square)
-			# Refresh tooltip to show new state
 			_on_modifier_hover(square)
+			modifier_toggled.emit()
 
 
-## Update the visual appearance of a modifier square based on enabled state.
+## Update the visual appearance of a modifier square based on enabled/locked state.
 func _update_modifier_square_visual(square: Panel) -> void:
 	var modifier: Resource = square.get_meta("modifier")
 	if not modifier:
@@ -784,6 +817,19 @@ func _update_modifier_square_visual(square: Panel) -> void:
 		style.set_border_width_all(0)
 		square.modulate = Color(0.3, 0.3, 0.3, 0.6)
 	square.add_theme_stylebox_override("panel", style)
+
+	# Add or update lock/unlock indicator
+	var lock_label: Label
+	if square.has_meta("lock_label"):
+		lock_label = square.get_meta("lock_label")
+	else:
+		lock_label = Label.new()
+		lock_label.add_theme_font_size_override("font_size", 10)
+		lock_label.position = Vector2(2.0, 0.0)
+		lock_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		square.add_child(lock_label)
+		square.set_meta("lock_label", lock_label)
+	lock_label.text = "🔓" if modifier.toggleable else "🔒"
 
 
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.
@@ -812,6 +858,9 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 	for i: int in range(3):
 		var modifier: Resource = modifiers[i]
 		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
+			var lock_tag: String = "🔓 Toggleable" if modifier.toggleable else "🔒 Locked"
+			button_text += "\n%s" % lock_tag
 		if replacement_info[i] != "":
 			button_text += "\n⚠ %s" % replacement_info[i]
 		buttons[i].text = button_text
@@ -823,48 +872,20 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 	next_leg_button.visible = false
 
 
-## Show the wedge picker header text.
+## Show the wedge picker header text (uses the score label).
 func show_picker_header(text: String) -> void:
-	if _picker_header == null:
-		_picker_header = Label.new()
-		_picker_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_picker_header.add_theme_font_size_override("font_size", 24)
-		_picker_header.modulate = Color(1.0, 0.9, 0.5)
-		_picker_header.anchors_preset = Control.PRESET_CENTER_TOP
-		_picker_header.anchor_top = 0.03
-		_picker_header.anchor_bottom = 0.03
-		_picker_header.grow_horizontal = Control.GROW_DIRECTION_BOTH
-		_picker_header.offset_left = -300.0
-		_picker_header.offset_right = 300.0
-		add_child(_picker_header)
-	_picker_header.text = text
-	_picker_header.visible = true
+	score_label.text = text
 
 
-## Show a picker confirmation prompt below the header.
+## Show a picker confirmation prompt (uses the instruction label).
 func show_picker_prompt(text: String) -> void:
-	if _picker_prompt == null:
-		_picker_prompt = Label.new()
-		_picker_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_picker_prompt.add_theme_font_size_override("font_size", 16)
-		_picker_prompt.modulate = Color(0.85, 0.85, 0.85)
-		_picker_prompt.anchors_preset = Control.PRESET_CENTER_TOP
-		_picker_prompt.anchor_top = 0.08
-		_picker_prompt.anchor_bottom = 0.08
-		_picker_prompt.grow_horizontal = Control.GROW_DIRECTION_BOTH
-		_picker_prompt.offset_left = -400.0
-		_picker_prompt.offset_right = 400.0
-		add_child(_picker_prompt)
-	_picker_prompt.text = text
-	_picker_prompt.visible = true
+	instruction_label.text = text
 
 
-## Hide picker UI elements.
+## Hide picker UI elements (clear the labels used for picker text).
 func hide_picker() -> void:
-	if _picker_header != null:
-		_picker_header.visible = false
-	if _picker_prompt != null:
-		_picker_prompt.visible = false
+	score_label.text = ""
+	instruction_label.text = ""
 
 
 # --- Shop UI ---
@@ -945,6 +966,9 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 		if item["type"] == "modifier":
 			var modifier: Resource = item["data"]
 			button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
+				var lock_tag: String = "🔓 Toggleable" if modifier.toggleable else "🔒 Locked"
+				button_text += "\n%s" % lock_tag
 			button_color = modifier.rarity_color
 			buttons[i].tooltip_text = modifier.description
 		else:
@@ -1005,3 +1029,187 @@ func show_shop_complete() -> void:
 ## Reset the next leg button text to default.
 func reset_next_leg_button() -> void:
 	next_leg_button.text = "Next Leg"
+
+
+# --- Checkout Helper ---
+
+## Build the checkout helper panel as a standalone positioned container.
+func _build_checkout_panel() -> void:
+	var container: VBoxContainer = VBoxContainer.new()
+	container.position = checkout_position
+	container.size = Vector2(checkout_width, 0.0)
+	container.add_theme_constant_override("separation", 4)
+	add_child(container)
+
+	_checkout_toggle_button = Button.new()
+	_checkout_toggle_button.text = "Show Checkout"
+	_checkout_toggle_button.add_theme_font_size_override("font_size", 12)
+	_checkout_toggle_button.custom_minimum_size = Vector2(checkout_width, 0.0)
+	_checkout_toggle_button.pressed.connect(_on_checkout_toggle)
+	container.add_child(_checkout_toggle_button)
+	_checkout_toggle_button.visible = false
+
+	_checkout_panel = VBoxContainer.new()
+	_checkout_panel.add_theme_constant_override("separation", 2)
+	_checkout_panel.custom_minimum_size = Vector2(checkout_width, 0.0)
+	_checkout_panel.visible = false
+	container.add_child(_checkout_panel)
+
+	_checkout_hint_label = Label.new()
+	_checkout_hint_label.add_theme_font_size_override("font_size", 11)
+	_checkout_hint_label.modulate = Color(0.6, 0.6, 0.7)
+	_checkout_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_checkout_hint_label.custom_minimum_size = Vector2(checkout_width, 0.0)
+	_checkout_hint_label.visible = false
+	container.add_child(_checkout_hint_label)
+
+
+## Toggle checkout helper visibility.
+func _on_checkout_toggle() -> void:
+	_checkout_visible = not _checkout_visible
+	_checkout_panel.visible = _checkout_visible
+	_checkout_toggle_button.text = "Hide Checkout" if _checkout_visible else "Show Checkout"
+
+
+## Update the checkout helper display with solved paths.
+## paths: Array of Arrays of {target, result} dicts from the solver.
+## has_toggleable_modifiers: whether the hint should show.
+func update_checkout_display(paths: Array[Array], has_toggleable_modifiers: bool) -> void:
+	_checkout_has_paths = paths.size() > 0
+
+	# Clear old path labels
+	for label: Label in _checkout_path_labels:
+		label.queue_free()
+	_checkout_path_labels.clear()
+
+	if _checkout_has_paths:
+		_checkout_toggle_button.visible = true
+		_checkout_toggle_button.disabled = false
+		_checkout_toggle_button.text = "Hide Checkout" if _checkout_visible else "Show Checkout"
+		_checkout_panel.visible = _checkout_visible
+
+		# Title
+		var title: Label = Label.new()
+		title.text = "— Checkout Paths —"
+		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		title.add_theme_font_size_override("font_size", checkout_font_size)
+		title.modulate = Color(0.8, 0.8, 0.6)
+		_checkout_panel.add_child(title)
+		_checkout_path_labels.append(title)
+
+		for path: Array in paths:
+			var line: Label = Label.new()
+			line.text = _format_checkout_path(path)
+			line.add_theme_font_size_override("font_size", checkout_font_size)
+			line.add_theme_color_override("font_color", checkout_text_color)
+			line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			line.custom_minimum_size = Vector2(280.0, 0.0)
+			_checkout_panel.add_child(line)
+			_checkout_path_labels.append(line)
+	else:
+		_checkout_toggle_button.visible = true
+		_checkout_toggle_button.disabled = true
+		_checkout_toggle_button.text = "No Checkout"
+		_checkout_panel.visible = false
+
+	# Hint
+	if has_toggleable_modifiers:
+		_checkout_hint_label.text = checkout_toggle_hint
+		_checkout_hint_label.visible = _checkout_visible or not _checkout_has_paths
+	else:
+		_checkout_hint_label.visible = false
+
+
+## Update the display with a setup recommendation (no checkout available).
+func update_setup_display(recommendation: Dictionary, has_toggleable_modifiers: bool) -> void:
+	# Clear old path labels
+	for label: Label in _checkout_path_labels:
+		label.queue_free()
+	_checkout_path_labels.clear()
+
+	_checkout_toggle_button.visible = true
+	_checkout_toggle_button.disabled = true
+	_checkout_toggle_button.text = "No Checkout"
+	_checkout_has_paths = false
+	_checkout_panel.visible = true
+
+	var title: Label = Label.new()
+	title.text = "— Setup —"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", checkout_font_size)
+	title.modulate = Color(0.8, 0.8, 0.6)
+	_checkout_panel.add_child(title)
+	_checkout_path_labels.append(title)
+
+	var target: Dictionary = recommendation.get("target", {})
+	var remainder: int = recommendation.get("resulting_remainder", 0)
+	var target_name: String = _get_target_display_name(target)
+
+	var line: Label = Label.new()
+	if target.get("ring_name", "") == "Off Board":
+		line.text = "Aim off-board → preserves remaining (%d)" % remainder
+	else:
+		line.text = "Aim %s → leaves you at %d" % [target_name, remainder]
+	line.add_theme_font_size_override("font_size", checkout_font_size)
+	line.add_theme_color_override("font_color", checkout_setup_color)
+	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	line.custom_minimum_size = Vector2(280.0, 0.0)
+	_checkout_panel.add_child(line)
+	_checkout_path_labels.append(line)
+
+	if has_toggleable_modifiers:
+		_checkout_hint_label.text = checkout_toggle_hint
+		_checkout_hint_label.visible = true
+	else:
+		_checkout_hint_label.visible = false
+
+
+## Hide the checkout helper entirely (e.g., during shop or between legs).
+func hide_checkout_helper() -> void:
+	_checkout_panel.visible = false
+	_checkout_toggle_button.visible = false
+	_checkout_hint_label.visible = false
+
+
+## Get a display-friendly name for a solver target (e.g., "T20", "D-Bull", "S5").
+func _get_target_display_name(target: Dictionary) -> String:
+	var ring: String = target.get("ring_name", "")
+	var face: int = target.get("face_value", 0)
+	match ring:
+		"Inner Single", "Outer Single":
+			return "S%d" % face
+		"Double":
+			return "D%d" % face
+		"Triple":
+			return "T%d" % face
+		"Single Bull":
+			return "Bull"
+		"Double Bull":
+			return "D-Bull"
+		"Off Board":
+			return "Off"
+	return "?"
+
+
+## Format a single checkout path into a display string.
+func _format_checkout_path(path: Array) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	for step: Dictionary in path:
+		var target: Dictionary = step["target"]
+		var result: Dictionary = step["result"]
+		var name: String = _get_target_display_name(target)
+		var scored: int = result["total_score"]
+
+		var annotation: String = ""
+		if target["ring_name"] == "Off Board":
+			annotation = "break streak"
+		elif result.has("streak_triggered") and result["streak_triggered"]:
+			var streak_name: String = result.get("streak_name", "")
+			var streak_count: int = result.get("streak_count", 0)
+			annotation = "%s ×%d: %d" % [streak_name, streak_count, scored]
+		else:
+			annotation = str(scored)
+
+		parts.append("%s (%s)" % [name, annotation])
+
+	return " → ".join(parts)

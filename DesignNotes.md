@@ -1,14 +1,19 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-21 after the HUD/Assembly polish + Shop systems shipped.*
+*Canonical design doc. Last refreshed 2026-05-22 after the Checkout Helper + Locked/Unlocked modifier status passes shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
-## Status snapshot (as of 2026-05-21)
+## Status snapshot
 
-Three feature passes shipped on or near this date, all merged to main:
+**Shipped 2026-05-22 (on `checkout-helper` branch):**
+
+- **Checkout Helper** (`specs/2026-05-22-checkout-helper.md`). Solver-based helper in a right-side text panel that surfaces valid checkout paths (annotated for streak interactions and deliberate streak-breaks) and falls back to a single-dart setup recommendation when no checkout exists this turn. Accounts for all active modifiers including live streak state. Toggleable visibility, with a soft "try toggling a modifier" hint when any unlocked modifier is active.
+- **Locked/Unlocked modifier status** (no separate spec — shipped contemporaneous follow-on). Every modifier instance rolls toggleable at generation time; 35% become unlocked (clickable on/off), 65% lock as always-on. Locked carries no compensating buff — rarity is the power axis, and swap-anytime via shop/post-leg picks keeps commits real but not permanent.
+
+**Shipped 2026-05-21 (all merged to main):**
 
 - **Streak slot restriction system + Color Streak + Parity Streak modifiers** (`specs/2026-05-21-streak-slots-and-modifiers.md`). One-per-category slot rule for three streak categories (WEDGE, COLOR, PARITY).
 - **HUD / Assembly Polish Pass** (`specs/2026-05-21-hud-assembly-polish.md`). Balance bar gradient with new transition sub-zones, score-gold checkout indicator, target tooltip relocation above the crosshair with perk-up hover state, Even/Odd parity streak differentiation.
@@ -174,26 +179,45 @@ Stats are on a 1–100 scale (except speeds which are ~1.0–5.0). Base values a
 - `ConfigType { NONE, PICK_WEDGE, PICK_TWO_WEDGES }` — whether the player must configure the modifier.
 - `Rarity { COMMON, UNCOMMON, RARE }` — rarity tier for upgrades and modifiers.
 
-### `scoring_modifier_manager.gd` — Manages the scoring modifier pipeline.
+### `scoring_modifier_manager.gd` — Manages the scoring modifier pipeline + checkout solver.
+
+**Modifier pipeline:**
 
 - Owns `effective_wedge_values: Array[int]` — mutable copy of wedge order, modified by ON_ACQUIRE modifiers.
 - Owns `effective_wedge_colors: Array[Dictionary]` — segment colors per wedge (single/multi keys).
 - Owns `active_modifiers: Array[Resource]` — all acquired modifiers in acquisition order.
 - Owns hit history at three granularities: `hit_history_turn`, `hit_history_leg`, `hit_history_run`.
-- `process_score(raw_result, is_preview)` — runs the scoring pipeline. Applies effective wedge values, then loops through active PER_DART modifiers calling `apply()`. If `is_preview` is true (for hover tooltips), skips history recording.
+- `process_score(raw_result, is_preview)` — runs the scoring pipeline. Applies effective wedge values, then loops through active PER_DART modifiers calling `apply()`. If `is_preview` is true (for hover tooltips), skips history recording AND skips streak state mutation.
+- `speculative_score(raw_result)` — third mode introduced for the checkout solver: mutates streak state (so dart-2's simulation can see dart-1's effects) but does NOT append to hit history.
+- `snapshot_all_streak_state()` / `restore_all_streak_state(snapshots)` — save and restore the live streak state on every active modifier. Used by the solver to wrap each candidate dart's speculative simulation.
 - `add_modifier(modifier, config) -> Resource` — registers a modifier, applies ON_ACQUIRE effects, records to active list. Enforces one-per-category streak slot restriction (returns replaced modifier if applicable).
 - History reset methods: `reset_for_turn()`, `reset_for_leg()`, `reset_for_run()`.
 - `get_effective_value()` / `get_effective_color()` for display and hover.
 - Debug: `debug_modifiers` export array for dragging in test modifiers via inspector.
 - Modification tracking: `_track_modification()` records what each modifier changed for tooltip display.
 
+**Checkout solver (added 2026-05-22):**
+
+- `solve_checkout(remaining, darts_left) -> Array[Array]` — public entry. Returns up to N path candidates (default 5, exported via `max_displayed_paths`), each a list of `{target, result}` steps. Caller is `_update_checkout_helper()` in `main.gd`.
+- `_solve_recursive(remaining, darts_left, cache)` — depth-N tree search across the 83 candidate targets. Internal cache keyed by `(remaining, darts_left, streak_state_hash)` dedupes sub-problems within a single call.
+- `_solve_first(remaining, darts_left, cache) -> bool` — early-termination existence variant. Used by `compute_preferred_remainders` which only cares whether a checkout exists, not what it looks like.
+- `_solver_candidates` cached at modifier-state changes — 83 candidate targets (40 singles, 20 doubles, 20 triples, 2 bulls, 1 deliberate-non-scoring).
+- `get_setup_recommendation(remaining)` — returns a single-dart setup target when `solve_checkout` finds no path. Two-tier lexicographic ranking: Tier 0 = lands at a 1-dart-finishable remainder next turn (best); Tier 1 = lands at a 3-dart-checkoutable remainder (fallback). Tiebreak by (next-turn finishing target fatness, this-throw fatness, higher new_remaining). Off-board fallback when nothing reasonable is reachable.
+- `_one_dart_finishable: Dictionary` — cached map `{remainder → fatness_of_best_finishing_double}`. Computed cheaply by running 22 doubles through the preview pipeline. Source of truth for the Tier 0 check above.
+- `_preferred_remainders: Array[int]` — cached set of remainders that have at least one 3-dart checkout under the current modifier state. Computed via 179 iterations of `_solve_first` sharing one cache across all iterations (this shared cache is the key perf optimization — naive approach was 5s pinwheel).
+- `invalidate_preferred_remainders()` — marks both caches dirty; called on every modifier-state change.
+- `calculate_checkout_segments(remaining)` — legacy single-dart finder, kept for the existing board double-highlight overlay (separate concern from the helper's text display).
+
 ### `scoring_modifier.gd` — Base Resource class for all scoring modifiers.
 
 - `class_name ScoringModifier extends Resource`
-- Exports: `modifier_name`, `description`, `timing`, `streak_scope`, `streak_category`, `config_type`, `rarity`, `rarity_color`.
+- Exports: `modifier_name`, `description`, `timing`, `streak_scope`, `streak_category`, `config_type`, `rarity_tier`. Derived getters expose `rarity` (display name) and `rarity_color` from the rarity tier.
+- Runtime state: `enabled: bool` (true by default; toggled off when the player clicks an unlocked modifier) and `toggleable: bool` (rolled at generation via `roll_toggleable()`).
 - Virtual method `apply(result, context) -> Dictionary` — override in subclasses.
 - Virtual methods `get_streak_count()` and `get_streak_display()` for streak modifier tooltip integration.
+- Virtual methods `save_streak_state()` / `restore_streak_state_from(snapshot)` — overridden by streak subclasses to support speculative simulation by the checkout solver. Non-streak modifiers return empty dicts and are no-ops.
 - Helper `_track_modification()` for recording changes to the result.
+- Lock/unlock system: `UNLOCK_CHANCE: int = 35` (constant). `roll_toggleable()` rolls a d100 against this — 35% land toggleable, 65% locked. Called from each subclass's `generate()` after rarity is set.
 
 ### Modifier Subclasses (in `res://scripts/modifiers/`)
 
@@ -364,6 +388,90 @@ If a shop would fire after the final leg of a run, behavior is currently undefin
 
 ---
 
+## Checkout Helper (IMPLEMENTED 2026-05-22)
+
+*Spec: `specs/2026-05-22-checkout-helper.md`. Solver lives in `scoring_modifier_manager.gd`, UI in `hud.gd` (right-side panel below stats, plus toggle button and soft hint label). Triggered from `_update_checkout_helper()` in `main.gd`, which runs after every throw and on modifier-state changes.*
+
+### Why it exists
+
+At low modifier counts the player can mentally compute checkout paths from the standard x01 chart. Past about 5 stacked modifiers — especially when streak modifiers mutate state per-dart — the math is effectively impossible to do by hand. The helper closes that gap with a solver-driven text panel.
+
+### Solver behavior
+
+- Recursive simulation across 83 candidate targets per dart (20 inner singles + 20 outer singles + 20 doubles + 20 triples + single bull + double bull + one deliberate-non-scoring candidate).
+- Uses the existing scoring pipeline's `speculative_score(...)` mode that mutates streak state per simulated dart, then `snapshot_all_streak_state()` / `restore_all_streak_state(...)` to roll back between candidates.
+- Returns up to `max_displayed_paths` (default 5) paths, ranked by (1) fewest darts, (2) fattest reliable segment per step (outer single > inner single > double > single bull > triple > double bull > off-board), (3) fewest deliberate-non-scoring darts as final tiebreak.
+- Caches sub-problems by `(remaining, darts_left, streak_state_hash)` within a single solve call.
+
+### Setup recommendation
+
+When `solve_checkout` returns zero paths, the helper switches to setup mode. Setup ranking is **two-tier lexicographic**:
+
+- **Tier 0 (best):** resulting remainder is in `_one_dart_finishable` — next turn checks out in a single dart.
+- **Tier 1 (fallback):** resulting remainder is in `_preferred_remainders` — next turn has at least one 3-dart checkout.
+- **Otherwise:** skip the candidate.
+
+Within tiers, tiebreaks are (a) fattest next-turn finishing target, (b) fattest this-throw target, (c) higher new_remaining as final stable tiebreak.
+
+If no candidate qualifies anywhere, the helper recommends an off-board throw to preserve the current remaining. Display string: `"Aim off-board → preserves remaining (N)"`.
+
+**Important:** the setup logic explicitly does NOT prefer higher remainders generally — higher remainder = harder next-turn checkout, not easier. The original spec wording got this backwards; the shipped implementation flipped it.
+
+### Display
+
+- Right-side panel under the existing stats readout. Text-based, no new board markup. Existing `calculate_checkout_segments` board double-highlight stays as-is.
+- Annotated path format: `Dart 1 → Dart 2 → Dart 3`, each step labeled with score and any streak interaction (e.g., `0 (break Odd ×2) → D5 (10)` or `T20 (Wedge ×2: 90)`).
+- Progressive narrowing: after each throw, paths that started with the actual hit stay visible and the committed dart's label turns green; others filter out. Off-script throws trigger a full recompute.
+- Toggle button has three states: disabled+greyed (no checkout exists), inactive (checkout exists but hidden), active (helper visible). The player's visibility preference persists across throws.
+
+### Soft toggle hint
+
+When the player has at least one **toggleable** (unlocked) scoring modifier active, the helper appends "Try toggling a modifier to recalculate" below the path list. Intentionally passive — does NOT name a specific modifier ("disable Color Streak…"). Active suggestions were rejected because they feel like the helper is playing for the player; passive nudges preserve agency. Hint suppressed when all active modifiers are locked.
+
+### Performance notes
+
+The naive precompute for `_preferred_remainders` ran 179 separate `solve_checkout` calls with fresh per-iteration caches and produced a 3-5 second pinwheel on first invocation. Shipped fix uses (a) a shared cache across all 179 iterations, and (b) a find-first-path variant of the solver (`_solve_first`) since existence is all that's needed. Drops the cost to ~hundreds of ms in vanilla.
+
+### Deferred from spec
+
+- V2 streak-aware preferred remainder list (project carried-over streak state forward when computing the preferred set). Build only if V1 gives bad advice under `WITHIN_LEG` / `WITHIN_RUN` carry-over.
+- Active modifier-toggle suggestions ("disable X to enable T20-T20-Bull"). Intentionally avoided per agency-over-hand-holding design call.
+- Dart-accuracy-aware EV ranking. Fattest-segment heuristic handles this implicitly for now.
+- Multi-turn setup planning. V1 recommends one dart at a time.
+- Helper integration with future rule-modifier category (extra turns, rethrows, etc. — see Open Design Questions).
+
+---
+
+## Locked/Unlocked Modifier Status (IMPLEMENTED 2026-05-22)
+
+*No separate spec — shipped as a contemporaneous follow-on Claude Code pass on the `checkout-helper` branch. Implementation lives in `scoring_modifier.gd` (the constant, the field, and the roll method) and in each modifier subclass's `generate()` (the call site).*
+
+### The rule
+
+Every modifier instance, at generation time, rolls toggleable vs. locked. The roll is a flat d100 against `UNLOCK_CHANCE: int = 35`:
+
+- **~35% toggleable (unlocked).** Player can click the modifier card to disable/re-enable it. Disabled modifiers don't fire in the scoring pipeline.
+- **~65% locked.** Always active, no click interaction.
+
+### Design rationale
+
+The 65/35 bias makes **unlocked the rare/precious state**, not the default. Most builds end up predominantly locked — toggling is a niche precision tool, not a default verb of play. This was a deliberate choice over flipping to majority-unlocked.
+
+**Locked carries no compensating buff.** A locked-common is strictly worse than an unlocked-common; an unlocked-rare is strictly better than a locked-rare of the same archetype. **Rarity is the power axis**, not lock status. This puts the interesting decision at the rarity boundary: "do I take this locked-rare or hold out for an unlocked-uncommon?"
+
+**Swappable anytime upgrades are offered.** Locked status applies *while you keep the modifier* — you can swap it out at the next shop or post-leg pick. Commits are leg-scale, not run-scale. Long enough to feel like a real choice, short enough to not feel punishing.
+
+### How it interacts with the checkout helper
+
+The "Try toggling a modifier to recalculate" hint in the checkout helper only appears when at least one active modifier is `toggleable=true`. Locked-only builds correctly don't see the hint. The helper recomputes on any toggle event.
+
+### What didn't ship (deferred)
+
+- **Modifier Switchboard shop item.** Earlier design conversation considered making "toggling capability" itself a shop unlock. Currently toggling is universally available (for unlocked modifiers) without needing an unlock item. Could revisit if toggling proves too powerful in playtest.
+- **Streak reset on toggle.** Conceptual cost: toggling off a streak modifier forfeits any accumulated streak count. Currently not implemented — toggling is free of streak penalty. Easy to add later by hooking the modifier's `enabled` setter to call `_reset_streak()`.
+
+---
+
 ## Phase Outline
 
 *Note: status markers below may lag reality. Cross-check against actual code state.*
@@ -380,7 +488,9 @@ If a shop would fire after the final leg of a run, behavior is currently undefin
 ### Phase 4d — HUD / Assembly Polish Pass — COMPLETE (merged 2026-05-21). Balance bar gradient + transition sub-zones, score-gold checkout indicator, target tooltip relocated above the crosshair with perk-up hover state, Even/Odd parity streak differentiation.
 ### Phase 5 — Dart Parts & Assembly Screen — COMPLETE
 ### Phase 6 — Shop System — COMPLETE (merged 2026-05-21). Run-end interaction with the shop is the remaining open question — see Open Design Questions below.
-### Phase 7 — More Modifiers & Items — PLANNED
+### Phase 6.5 — Checkout Helper — COMPLETE (shipped 2026-05-22 on `checkout-helper` branch). Solver-driven text panel for valid checkout paths and setup recommendations. Lives in `scoring_modifier_manager.gd` + `hud.gd`.
+### Phase 6.6 — Locked/Unlocked Modifier Status — COMPLETE (shipped 2026-05-22 on `checkout-helper` branch). 65/35 lock-rate roll at modifier generation. Toggle interaction in HUD modifier panel.
+### Phase 7 — More Modifiers & Items — PLANNED. Includes the **rule-modifier category** (turn-count buffs, rethrows, see-extra-options-at-shop, etc.) as a deferred-but-discussed expansion.
 ### Phase 8 — Form System — PLANNED
 ### Phase 9+ — Polish & Beyond — FUTURE
 
@@ -389,16 +499,19 @@ If a shop would fire after the final leg of a run, behavior is currently undefin
 ## Open Design Questions
 
 1. **Dart count scaling:** Fixed 15 darts per leg forever, or does it change? Could decrease as difficulty climbs. Could be modifier-dependent. Now also affects shop yield, since `shop_darts` is derived from leg dart budgets.
-2. **Modifier stacking/conflicts (broader):** Can modifiers conflict (e.g., "doubles worth 0" + must finish on a double)? Intended as a design feature (risk/reward) or something to prevent? The streak slot system answered this for streak modifiers (one per category). The broader non-streak case is still open.
+2. **Modifier stacking/conflicts (broader, non-streak):** Can modifiers conflict (e.g., "doubles worth 0" + must finish on a double)? Intended as a design feature (risk/reward) or something to prevent? The streak slot system answered this for streak modifiers (one per category). The lock/toggle system gives the player an out on toggleable conflicts. The broader question — what about *locked* non-streak modifiers that lock the player out of checkout altogether — is still open. The checkout helper makes the failure mode visible (no valid paths surfaced) but doesn't prevent the situation.
 3. **Absolute weight:** A potential second weight axis (total dart mass) affecting throw arc or power. Currently only directional balance is tracked.
 4. **Distribution type for variance:** Currently uniform `randf_range`. Gaussian would feel more natural (most darts near center, fewer at edges).
 5. **Shop run-end interaction:** What happens if a shop would fire after the final leg of a run? Deferred from the shop spec. Depends partly on whether runs are fixed-length or open-ended, which depends on #6.
 6. **Meta-progression scope:** What persists across runs? Unlocked parts? Unlocked modifiers? Cosmetics?
+7. **Rule-modifier category (new):** Discussed during the checkout helper design pass but explicitly deferred. Items that affect run-structure rather than scoring: +1 turn per leg, get a rethrow each leg, see +1 option at upgrade pick, etc. Likely needs its own slot system distinct from the 6 scoring slots, and the checkout helper will need to learn about these (extra darts affect solver depth, rethrows introduce a new decision point). Pure design space, no implementation yet.
 
 ### Resolved since previous refresh
 
 - **Currency system.** No traditional currency. Spare darts saved across legs are the de facto currency and spend at the shop directly by throwing. See Shop System section.
 - **Streak modifier conflicts.** Resolved by the one-per-category slot rule (Phase 4c).
+- **Player agency vs. helper paternalism.** Resolved by the soft-hint design call in the checkout helper — passive nudges ("try toggling a modifier") instead of active suggestions ("disable Color Streak to enable T20-T20-Bull"). Will inform all future helper-style features.
+- **Modifier commitment texture.** Resolved by the lock/unlock system — 65% locked / 35% toggleable, with rarity as the power axis (not lock status). See the Locked/Unlocked Modifier Status section.
 
 ---
 
@@ -416,3 +529,8 @@ If a shop would fire after the final leg of a run, behavior is currently undefin
 - **Spare darts are the shop currency.** No coins, no points-to-spend. Saving darts in a leg (finishing efficiently) directly translates to shop throwing power. Skill expressed in regular play = leverage in the shop.
 - **Three calculating interactions on every throw.** Board RNG read + skill/confidence + stat-driven hit probability. The shop's geometric placement rules deliberately invoke all three; future reward-delivery systems should preserve this trinity rather than collapse it.
 - **The board's checkout-highlight function is the single source of truth for "can win."** The HUD score-gold indicator and the board's gold checkout highlights both read from the same function. They must never disagree.
+- **The checkout helper is solver-driven, not lookup-based.** Modifiers (especially streak modifiers that mutate state per dart) break the static x01 checkout chart. The helper runs the actual scoring pipeline in simulation per candidate dart, with speculative streak-state mutation + restore between candidates. Caches sub-problems within each solve.
+- **Setup recommendations rank by 1-dart-finishable next-turn first, not by "highest remaining."** Higher new_remaining is the wrong direction (harder next-turn checkout). Tier 0: lands at a 1-dart finish. Tier 1: lands at any 3-dart-checkoutable remainder. Within tiers, prefer fattest next-turn finishing target.
+- **Soft hints over active suggestions.** "Try toggling a modifier" instead of "disable Color Streak to enable T20-T20-Bull." Active suggestions feel like the helper is playing for the player; passive nudges teach the verb without commandeering the decision. Applies to all future helper-style features.
+- **Locked/unlocked is a 65/35 generation roll with no compensating buff for locked.** Rarity is the power axis, not lock status. Locked is a *constraint* (can't toggle off) at the same statline as unlocked. The interesting decision lives at the rarity boundary (locked-rare vs unlocked-uncommon), not within a single rarity.
+- **Modifier commits are leg-scale, not run-scale.** Locked items can be swapped at the next shop or post-leg pick. Long enough for commits to feel real; short enough to not feel punishing.

@@ -64,6 +64,15 @@ func reset_streak_state() -> void:
 	_reset_streak()
 
 
+func save_streak_state() -> Dictionary:
+	return {"color": _streak_color, "count": _streak_count}
+
+
+func restore_streak_state_from(snapshot: Dictionary) -> void:
+	_streak_color = snapshot.get("color", -1)
+	_streak_count = snapshot.get("count", 0)
+
+
 func get_streak_count() -> int:
 	return _streak_count
 
@@ -96,4 +105,5 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> ColorStreakModifier:
 	mod.modifier_name = "Color Streak"
 	mod.description = "+1x per consecutive same-color hit (per %s)" % scope_name
 
+	mod.roll_toggleable()
 	return mod

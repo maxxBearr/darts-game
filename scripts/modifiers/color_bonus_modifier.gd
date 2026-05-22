@@ -70,4 +70,5 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> ColorBonusModifier:
 	mod.modifier_name = "%s Bonus +%dx" % [color_name, mod.bonus_multiplier]
 	mod.description = "+%d multiplier on %s segments" % [mod.bonus_multiplier, color_name]
 
+	mod.roll_toggleable()
 	return mod

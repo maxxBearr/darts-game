@@ -68,6 +68,14 @@ func reset_streak_state() -> void:
 	_reset_streak()
 
 
+func save_streak_state() -> Dictionary:
+	return {"count": _streak_count}
+
+
+func restore_streak_state_from(snapshot: Dictionary) -> void:
+	_streak_count = snapshot.get("count", 0)
+
+
 func get_streak_count() -> int:
 	return _streak_count
 
