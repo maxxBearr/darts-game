@@ -46,8 +46,7 @@ outline_color = Color(0, 0, 0, 1)
 
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
-debug_start_with_modifier = true
-next_dart_delay = 0.1
+next_dart_delay = 0.05
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
 script = ExtResource("2_dartboard")
@@ -88,7 +87,6 @@ hover_tooltip_offset_y = 2.0
 upgrade_button_opacity = 1.0
 checkout_font_size = 13
 checkout_position = Vector2(975, 350)
-picker_header_half_width = 600.0
 
 [node name="LegLabel" type="Label" parent="HUD" unique_id=462079680]
 offset_left = 20.0

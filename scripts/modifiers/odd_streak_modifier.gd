@@ -23,14 +23,20 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> OddStreakModifier:
 	var mod: OddStreakModifier = OddStreakModifier.new()
 	mod.rarity_tier = rarity_tier
 
-	# Roll streak scope
-	var scopes: Array[ScoringEnums.StreakScope] = [
-		ScoringEnums.StreakScope.WITHIN_TURN,
-		ScoringEnums.StreakScope.WITHIN_LEG,
-	]
-	mod.streak_scope = scopes[randi_range(0, scopes.size() - 1)]
+	match rarity_tier:
+		ScoringEnums.Rarity.COMMON:
+			mod.streak_scope = ScoringEnums.StreakScope.WITHIN_TURN
+		ScoringEnums.Rarity.UNCOMMON:
+			mod.streak_scope = ScoringEnums.StreakScope.WITHIN_LEG
+		ScoringEnums.Rarity.RARE:
+			mod.streak_scope = ScoringEnums.StreakScope.WITHIN_RUN
 
-	var scope_name: String = "turn" if mod.streak_scope == ScoringEnums.StreakScope.WITHIN_TURN else "leg"
+	const SCOPE_NAMES: Dictionary = {
+		ScoringEnums.StreakScope.WITHIN_TURN: "turn",
+		ScoringEnums.StreakScope.WITHIN_LEG: "leg",
+		ScoringEnums.StreakScope.WITHIN_RUN: "run",
+	}
+	var scope_name: String = SCOPE_NAMES[mod.streak_scope]
 
 	mod.modifier_name = "Odd Streak"
 	mod.description = "+1x per consecutive odd hit (per %s)" % scope_name

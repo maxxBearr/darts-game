@@ -145,21 +145,23 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> StreakBonusModifier:
 	var mod: StreakBonusModifier = StreakBonusModifier.new()
 	mod.rarity_tier = rarity_tier
 
-	var scopes: Array[ScoringEnums.StreakScope] = [
-		ScoringEnums.StreakScope.WITHIN_TURN,
-		ScoringEnums.StreakScope.WITHIN_LEG,
-	]
-	mod.streak_scope = scopes[randi_range(0, scopes.size() - 1)]
-
 	match rarity_tier:
 		ScoringEnums.Rarity.COMMON:
 			mod.leniency = ScoringEnums.StreakLeniency.SAME_RING
+			mod.streak_scope = ScoringEnums.StreakScope.WITHIN_TURN
 		ScoringEnums.Rarity.UNCOMMON:
 			mod.leniency = ScoringEnums.StreakLeniency.ADJACENT_SECTIONS
+			mod.streak_scope = ScoringEnums.StreakScope.WITHIN_LEG
 		ScoringEnums.Rarity.RARE:
 			mod.leniency = ScoringEnums.StreakLeniency.WHOLE_WEDGE
+			mod.streak_scope = ScoringEnums.StreakScope.WITHIN_RUN
 
-	var scope_name: String = "turn" if mod.streak_scope == ScoringEnums.StreakScope.WITHIN_TURN else "leg"
+	const SCOPE_NAMES: Dictionary = {
+		ScoringEnums.StreakScope.WITHIN_TURN: "turn",
+		ScoringEnums.StreakScope.WITHIN_LEG: "leg",
+		ScoringEnums.StreakScope.WITHIN_RUN: "run",
+	}
+	var scope_name: String = SCOPE_NAMES[mod.streak_scope]
 
 	const LENIENCY_NAMES: Dictionary = {
 		ScoringEnums.StreakLeniency.SAME_RING: "Same Ring",

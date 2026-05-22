@@ -89,12 +89,12 @@ const STAT_DISPLAY_NAMES: Dictionary = {
 }
 
 const STAT_DESCRIPTIONS: Dictionary = {
-	"horizontal_range": "Shrinks the aim ellipse horizontally. Also reduces the distance the horizontal marker travels, making it easier to time.",
-	"vertical_range": "Shrinks the aim ellipse vertically. Also reduces the distance the vertical marker travels, making it easier to time.",
+	"horizontal_range": "Tightens the aiming ellipse to shrink towards your target. Allows for easier H meter timing",
+	"vertical_range": "Shortens the aiming ellipse to shrink towards your target. Alows for easier V meter timing,",
 	"horizontal_speed": "Slows the speed of the horizantal merer.",
 	"vertical_speed": "Slows the speed of the vertical meter.",
 	"horizontal_accuracy": "Shortens the width of the accruacy zone.",
-	"vertical_accuracy": "Shrinks the height of the accuracy zone"
+	"vertical_accuracy": "Shrinks the height of the accuracy zone."
 }
 
 const BAR_MAX_WIDTH: float = 120.0
@@ -634,7 +634,7 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 
 	# Append bust warning or streak info
 	if would_bust:
-		text += " | ⚠ BUST"
+		text += " | !! BUST"
 	else:
 		for line: String in streak_lines:
 			text += " | " + line
@@ -829,7 +829,7 @@ func _update_modifier_square_visual(square: Panel) -> void:
 		lock_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		square.add_child(lock_label)
 		square.set_meta("lock_label", lock_label)
-	lock_label.text = "🔓" if modifier.toggleable else "🔒"
+	lock_label.text = "O" if modifier.toggleable else "X"
 
 
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.
@@ -859,10 +859,10 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 		var modifier: Resource = modifiers[i]
 		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
 		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
-			var lock_tag: String = "🔓 Toggleable" if modifier.toggleable else "🔒 Locked"
+			var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[LOCKED]"
 			button_text += "\n%s" % lock_tag
 		if replacement_info[i] != "":
-			button_text += "\n⚠ %s" % replacement_info[i]
+			button_text += "\n!! %s" % replacement_info[i]
 		buttons[i].text = button_text
 		var color: Color = modifier.rarity_color
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
@@ -967,7 +967,7 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 			var modifier: Resource = item["data"]
 			button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
 			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
-				var lock_tag: String = "🔓 Toggleable" if modifier.toggleable else "🔒 Locked"
+				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[LOCKED]"
 				button_text += "\n%s" % lock_tag
 			button_color = modifier.rarity_color
 			buttons[i].tooltip_text = modifier.description
@@ -980,7 +980,7 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 			buttons[i].tooltip_text = upgrade["description"]
 
 		if i < replacement_info.size() and replacement_info[i] != "":
-			button_text += "\n⚠ %s" % replacement_info[i]
+			button_text += "\n!! %s" % replacement_info[i]
 
 		buttons[i].text = button_text
 		buttons[i].self_modulate = Color(button_color.r, button_color.g, button_color.b, 1.0)
