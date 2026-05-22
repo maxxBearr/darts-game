@@ -41,6 +41,12 @@ signal modifier_selected(index: int)
 ## Duration of the perk-up lift/drop animation in seconds.
 @export var perkup_anim_duration: float = 0.15
 
+## Background opacity of upgrade/modifier pick buttons (0 = transparent, 1 = solid).
+@export_range(0.0, 1.0, 0.05) var upgrade_button_opacity: float = 0.85
+
+## Corner radius of upgrade/modifier pick buttons in pixels.
+@export_range(0.0, 16.0, 1.0) var upgrade_button_corner_radius: float = 6.0
+
 @onready var stats_container: VBoxContainer = $StatsContainer
 
 const STAT_KEYS: Array[String] = [
@@ -79,6 +85,21 @@ var _modifier_rows: Array[Dictionary] = []
 ## Whether upgrade buttons are in modifier selection mode.
 var _modifier_mode: bool = false
 
+## Current upgrades for hover preview (set during accuracy pick phase).
+var _preview_upgrades: Array[Dictionary] = []
+
+## Cached current stats for restoring after hover preview.
+var _cached_current_stats: Dictionary = {}
+
+## Cached base stats for restoring after hover preview.
+var _cached_base_stats: Dictionary = {}
+
+## Color for stat bars showing a previewed upgrade boost.
+const PREVIEW_BOOST_COLOR: Color = Color(0.3, 0.8, 1.0)
+
+## Color for stat bars showing a previewed upgrade penalty.
+const PREVIEW_PENALTY_COLOR: Color = Color(1.0, 0.5, 0.2)
+
 ## Picker header label (created on demand).
 var _picker_header: Label
 ## Picker prompt label (created on demand).
@@ -96,6 +117,11 @@ func _ready() -> void:
 	upgrade_button_1.pressed.connect(func() -> void: _select_upgrade(0))
 	upgrade_button_2.pressed.connect(func() -> void: _select_upgrade(1))
 	upgrade_button_3.pressed.connect(func() -> void: _select_upgrade(2))
+
+	# Style upgrade/modifier pick buttons
+	_apply_upgrade_button_style(upgrade_button_1)
+	_apply_upgrade_button_style(upgrade_button_2)
+	_apply_upgrade_button_style(upgrade_button_3)
 
 	# Start with all buttons and optional labels hidden
 	hide_all_buttons()
@@ -188,8 +214,8 @@ func show_bust(reason: String) -> void:
 ## Show leg complete message with upgrade card choices.
 func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upgrades: Array[Dictionary]) -> void:
 	score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [leg, target, turns_used]
+	_preview_upgrades = upgrades
 
-	# Populate upgrade buttons with rarity, name, value, and tradeoff penalty
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
 		var upgrade: Dictionary = upgrades[i]
@@ -201,6 +227,14 @@ func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upg
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
 		buttons[i].tooltip_text = upgrade["description"]
 		buttons[i].visible = true
+
+		# Connect hover preview signals (disconnect any previous connections)
+		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
+			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
+		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
+			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
+		buttons[i].mouse_entered.connect(_on_upgrade_hover.bind(i))
+		buttons[i].mouse_exited.connect(_on_upgrade_unhover)
 
 	upgrade_container.visible = true
 	next_leg_button.visible = false
@@ -340,9 +374,107 @@ func update_stats(stats: Dictionary, base_stats: Dictionary) -> void:
 		val_label.text = str(roundi(current))
 
 
+## Cache current stats so hover preview can restore them.
+func cache_stats(stats: Dictionary, base_stats: Dictionary) -> void:
+	_cached_current_stats = stats.duplicate()
+	_cached_base_stats = base_stats.duplicate()
+
+
+## Show a preview of what stats would look like if an upgrade were picked.
+## Highlights the affected bar(s) in preview colors.
+func _show_stat_preview(upgrade: Dictionary) -> void:
+	if _cached_current_stats.is_empty():
+		return
+
+	var preview_stats: Dictionary = _cached_current_stats.duplicate()
+	var property: String = upgrade["property"]
+	var value: int = upgrade["value"]
+	var scale: String = upgrade["scale"]
+
+	# Apply the boost
+	if scale == "direct":
+		preview_stats[property] = minf(preview_stats[property] + float(value), 100.0)
+	elif scale == "speed":
+		var internal_boost: float = float(value) * (4.0 / 40.0)
+		preview_stats[property] = minf(preview_stats[property] + internal_boost, 5.0)
+
+	# Apply tradeoff penalty
+	if upgrade["tradeoff"]:
+		var penalty_prop: String = upgrade["penalty_property"]
+		var penalty_amount: int = upgrade["penalty_amount"]
+		preview_stats[penalty_prop] = preview_stats[penalty_prop] - float(penalty_amount)
+
+	# Update bars with preview coloring
+	for key: String in STAT_KEYS:
+		var current: float = preview_stats[key]
+		var base_val: float = _cached_current_stats[key]
+
+		if key == "horizontal_speed" or key == "vertical_speed":
+			current = float(_speed_to_display(current))
+			base_val = float(_speed_to_display(base_val))
+
+		var bar_fill: ColorRect = _stat_bars[key]
+		var val_label: Label = _stat_value_labels[key]
+		var bar_width: float = bar_fill.get_parent().size.x if bar_fill.get_parent().size.x > 0.0 else BAR_MAX_WIDTH
+
+		var fill_fraction: float = clampf(current / STAT_MAX_VALUE, 0.0, 1.0)
+		bar_fill.size = Vector2(bar_width * fill_fraction, BAR_HEIGHT)
+
+		if current > base_val:
+			bar_fill.color = PREVIEW_BOOST_COLOR
+		elif current < base_val:
+			bar_fill.color = PREVIEW_PENALTY_COLOR
+		else:
+			var cached_base: float = _cached_base_stats[key]
+			if key == "horizontal_speed" or key == "vertical_speed":
+				cached_base = float(_speed_to_display(cached_base))
+			if base_val > cached_base:
+				bar_fill.color = Color(0.3, 0.75, 0.4)
+			elif base_val < cached_base:
+				bar_fill.color = Color(0.75, 0.35, 0.3)
+			else:
+				bar_fill.color = Color(0.5, 0.5, 0.5)
+
+		val_label.text = str(roundi(current))
+
+
+## Called when the mouse enters an upgrade button — show stat preview.
+func _on_upgrade_hover(index: int) -> void:
+	if _modifier_mode or index >= _preview_upgrades.size():
+		return
+	_show_stat_preview(_preview_upgrades[index])
+
+
+## Called when the mouse exits an upgrade button — restore real stats.
+func _on_upgrade_unhover() -> void:
+	if _cached_current_stats.is_empty():
+		return
+	update_stats(_cached_current_stats, _cached_base_stats)
+
+
 ## Convert internal speed (1.0-5.0) to a display value (0-100).
 func _speed_to_display(speed: float) -> int:
 	return roundi((speed - 1.0) / 4.0 * 100.0)
+
+
+## Apply a StyleBoxFlat to an upgrade button for controllable opacity and corners.
+func _apply_upgrade_button_style(button: Button) -> void:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(0.15, 0.15, 0.2, upgrade_button_opacity)
+	style.set_corner_radius_all(int(upgrade_button_corner_radius))
+	style.set_content_margin_all(8)
+	style.border_color = Color(0.4, 0.4, 0.5, upgrade_button_opacity)
+	style.set_border_width_all(1)
+	button.add_theme_stylebox_override("normal", style)
+
+	var hover_style: StyleBoxFlat = style.duplicate()
+	hover_style.bg_color = Color(0.2, 0.2, 0.28, minf(upgrade_button_opacity + 0.1, 1.0))
+	hover_style.border_color = Color(0.5, 0.5, 0.6, minf(upgrade_button_opacity + 0.1, 1.0))
+	button.add_theme_stylebox_override("hover", hover_style)
+
+	var pressed_style: StyleBoxFlat = style.duplicate()
+	pressed_style.bg_color = Color(0.1, 0.1, 0.15, upgrade_button_opacity)
+	button.add_theme_stylebox_override("pressed", pressed_style)
 
 
 ## Create a Theme with opaque tooltip styling for readability.
@@ -532,36 +664,39 @@ func hide_target_tooltip() -> void:
 
 ## Highlight modifier squares whose modifiers triggered on the hovered segment.
 ## triggered_names: modifier_name strings that appeared in the modifications array.
+## Uses absolute rest/perked positions to avoid drift from overlapping tweens.
 func set_modifier_perkup(triggered_names: Array[String]) -> void:
 	for child: Node in modifier_panel.get_children():
-		if not child.has_meta("modifier"):
+		if not child.has_meta("modifier") or not child.has_meta("rest_y"):
 			continue
 		var modifier: Resource = child.get_meta("modifier")
+		var rest_y: float = child.get_meta("rest_y")
 		var should_perkup: bool = modifier.modifier_name in triggered_names
-		var is_perked: bool = child.has_meta("perked_up") and child.get_meta("perked_up")
+		var is_perked: bool = child.get_meta("perked_up")
 
 		if should_perkup and not is_perked:
 			child.set_meta("perked_up", true)
 			var tween: Tween = create_tween()
-			tween.tween_property(child, "position:y", child.position.y - perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-			# Brighten the square
+			tween.tween_property(child, "position:y", rest_y - perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 			child.modulate = Color(1.3, 1.3, 1.3, 1.0)
 		elif not should_perkup and is_perked:
 			child.set_meta("perked_up", false)
 			var tween: Tween = create_tween()
-			tween.tween_property(child, "position:y", child.position.y + perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-			# Restore original visual state
+			tween.tween_property(child, "position:y", rest_y, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
 			_update_modifier_square_visual(child as Panel)
 
 
 ## Clear all perk-up states on modifier squares.
 func clear_modifier_perkup() -> void:
 	for child: Node in modifier_panel.get_children():
-		if child.has_meta("perked_up") and child.get_meta("perked_up"):
-			child.set_meta("perked_up", false)
+		if not child.has_meta("perked_up") or not child.get_meta("perked_up"):
+			continue
+		child.set_meta("perked_up", false)
+		if child.has_meta("rest_y"):
+			var rest_y: float = child.get_meta("rest_y")
 			var tween: Tween = create_tween()
-			tween.tween_property(child, "position:y", child.position.y + perkup_lift_pixels, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-			_update_modifier_square_visual(child as Panel)
+			tween.tween_property(child, "position:y", rest_y, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		_update_modifier_square_visual(child as Panel)
 
 
 ## Add a modifier square to the panel. Called when a scoring modifier is acquired.
@@ -569,12 +704,15 @@ func add_modifier_to_panel(modifier: Resource) -> void:
 	var square: Panel = Panel.new()
 	square.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
 	square.set_meta("modifier", modifier)
+	square.set_meta("perked_up", false)
 	square.mouse_entered.connect(_on_modifier_hover.bind(square))
 	square.mouse_exited.connect(_on_modifier_unhover)
 	square.gui_input.connect(_on_modifier_clicked.bind(square))
 	square.mouse_filter = Control.MOUSE_FILTER_STOP
 	modifier_panel.add_child(square)
 	_update_modifier_square_visual(square)
+	# Store rest position after layout settles (deferred so container positions it first)
+	square.ready.connect(func() -> void: square.set_meta("rest_y", square.position.y))
 
 
 ## Remove a modifier square from the panel by matching the modifier reference.

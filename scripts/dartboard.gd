@@ -146,29 +146,48 @@ var _picker_selected_wedges: Array[int] = []
 @export var picker_selected_color: Color = Color(0.2, 1.0, 0.4, 0.3)
 @export var picker_border_color: Color = Color(0.2, 0.7, 1.0, 0.6)
 
-## Speed of the shop lit-spot pulse animation.
-@export var shop_pulse_speed: float = 2.5
+@export_group("Shop Spots — Shader")
 
-## Minimum opacity of the shop lit-spot pulse.
-@export var shop_pulse_min_alpha: float = 0.45
+## How fast the swirl pattern flows across lit spots.
+@export_range(0.1, 3.0, 0.05) var shop_swirl_speed: float = 0.6
 
-## Maximum opacity of the shop lit-spot pulse.
-@export var shop_pulse_max_alpha: float = 0.85
+## Scale of the noise pattern — lower = larger swirls, higher = finer detail.
+@export_range(1.0, 30.0, 0.5) var shop_noise_scale: float = 8.0
+
+## How much domain warping distorts the pattern (more = swirly-er).
+@export_range(0.0, 2.0, 0.05) var shop_distortion: float = 0.8
+
+## How much brightness varies across the swirl pattern.
+@export_range(0.0, 1.0, 0.05) var shop_contrast: float = 0.5
+
+## Extra glow intensity at bright spots in the pattern.
+@export_range(0.0, 2.0, 0.1) var shop_glow_strength: float = 0.8
+
+@export_group("Shop Spots — Colors")
+
+## Fill color for common lit spots.
+@export var shop_color_common: Color = Color(0.95, 0.88, 0.65, 0.8)
+
+## Fill color for uncommon lit spots.
+@export var shop_color_uncommon: Color = Color(0.3, 0.5, 1.0, 0.8)
+
+## Fill color for rare lit spots.
+@export var shop_color_rare: Color = Color(0.7, 0.3, 0.9, 0.8)
+
+## Base fill opacity for lit spot segments (before shader processing).
+@export_range(0.3, 1.0, 0.05) var shop_fill_alpha: float = 0.7
+
+## Border opacity for lit spot outlines.
+@export_range(0.3, 1.0, 0.05) var shop_border_alpha: float = 0.9
 
 ## Border thickness for shop lit-spot outlines.
 @export var shop_border_thickness: float = 2.5
 
+@export_group("")
+
 # Shop lit-spot state
 var _shop_spots: Array[Dictionary] = []
 var _shop_active: bool = false
-var _shop_pulse_time: float = 0.0
-
-## Rarity colors for shop lit spots.
-const SHOP_RARITY_COLORS: Dictionary = {
-	ScoringEnums.Rarity.COMMON: Color(0.85, 0.85, 0.85, 0.8),
-	ScoringEnums.Rarity.UNCOMMON: Color(0.3, 0.5, 1.0, 0.8),
-	ScoringEnums.Rarity.RARE: Color(0.7, 0.3, 0.9, 0.8),
-}
 
 ## Ring name to inner/outer normalized radii mapping for segment drawing.
 const RING_BOUNDS: Dictionary = {
@@ -177,6 +196,20 @@ const RING_BOUNDS: Dictionary = {
 	"Outer Single": [RING_TRIPLE_OUTER, RING_OUTER_SINGLE_OUTER],
 	"Double": [RING_OUTER_SINGLE_OUTER, RING_DOUBLE_OUTER],
 }
+
+## Child node for shop spot rendering — lets a shader apply to just the spots.
+var _shop_overlay: Node2D
+
+
+func _ready() -> void:
+	_shop_overlay = Node2D.new()
+	_shop_overlay.draw.connect(_draw_shop_overlay)
+	var shader: Shader = load("res://shaders/shop_spot.gdshader")
+	var mat: ShaderMaterial = ShaderMaterial.new()
+	mat.shader = shader
+	_sync_shop_shader(mat)
+	_shop_overlay.material = mat
+	add_child(_shop_overlay)
 
 
 func _draw() -> void:
@@ -251,9 +284,7 @@ func _draw() -> void:
 	if _checkout_pulse_active and _checkout_segments.size() > 0:
 		_draw_checkout_pulses()
 
-	# Draw shop lit spots
-	if _shop_active and _shop_spots.size() > 0:
-		_draw_shop_spots()
+	# Shop spots are drawn on the overlay child (shader handles animation)
 
 	# Draw wedge numbers around the board in the surround ring
 	# Uses effective_wedge_values if available, so modified values are shown
@@ -343,13 +374,9 @@ func _process(delta: float) -> void:
 		_checkout_pulse_time += delta
 		needs_redraw = true
 
-	if _shop_active:
-		_shop_pulse_time += delta
-		needs_redraw = true
-
 	if needs_redraw:
 		queue_redraw()
-	elif not _checkout_pulse_active and not _shop_active:
+	elif not _checkout_pulse_active:
 		set_process(false)
 
 
@@ -852,13 +879,35 @@ func _draw_checkout_pulses() -> void:
 			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, pulse_color, checkout_border_thickness)
 
 
+## Push exported shader values into the ShaderMaterial.
+func _sync_shop_shader(mat: ShaderMaterial) -> void:
+	mat.set_shader_parameter("board_radius", board_radius)
+	mat.set_shader_parameter("speed", shop_swirl_speed)
+	mat.set_shader_parameter("noise_scale", shop_noise_scale)
+	mat.set_shader_parameter("distortion", shop_distortion)
+	mat.set_shader_parameter("contrast", shop_contrast)
+	mat.set_shader_parameter("glow_strength", shop_glow_strength)
+
+
+## Look up the exported rarity color for a shop spot.
+func _get_shop_rarity_color(rarity: int) -> Color:
+	match rarity:
+		ScoringEnums.Rarity.UNCOMMON:
+			return shop_color_uncommon
+		ScoringEnums.Rarity.RARE:
+			return shop_color_rare
+		_:
+			return shop_color_common
+
+
 ## Set lit spots for the shop. Each entry: {wedge_index, ring_name, rarity, active}.
 func set_shop_spots(spots: Array[Dictionary]) -> void:
 	_shop_spots = spots
 	_shop_active = spots.size() > 0
-	_shop_pulse_time = 0.0
-	if _shop_active:
-		set_process(true)
+	# Re-sync shader params in case exports were tweaked in the inspector
+	if _shop_overlay.material is ShaderMaterial:
+		_sync_shop_shader(_shop_overlay.material as ShaderMaterial)
+	_shop_overlay.queue_redraw()
 	queue_redraw()
 
 
@@ -866,6 +915,7 @@ func set_shop_spots(spots: Array[Dictionary]) -> void:
 func clear_shop_spots() -> void:
 	_shop_spots.clear()
 	_shop_active = false
+	_shop_overlay.queue_redraw()
 	queue_redraw()
 
 
@@ -890,22 +940,19 @@ func check_shop_hit(global_hit_position: Vector2) -> int:
 func deactivate_shop_spot(index: int) -> void:
 	if index >= 0 and index < _shop_spots.size():
 		_shop_spots[index]["active"] = false
-		queue_redraw()
+		_shop_overlay.queue_redraw()
 
 
-## Draw pulsing filled overlays on all active shop lit spots.
-func _draw_shop_spots() -> void:
-	var t: float = sin(_shop_pulse_time * shop_pulse_speed)
-	var alpha: float = lerpf(shop_pulse_min_alpha, shop_pulse_max_alpha, (t + 1.0) / 2.0)
-
+## Draw shop spot segments on the overlay child (shader applies to this geometry).
+func _draw_shop_overlay() -> void:
 	for spot: Dictionary in _shop_spots:
 		if not spot.get("active", false):
 			continue
 
 		var rarity: int = spot.get("rarity", ScoringEnums.Rarity.COMMON)
-		var base_color: Color = SHOP_RARITY_COLORS.get(rarity, SHOP_RARITY_COLORS[ScoringEnums.Rarity.COMMON])
-		var fill_color: Color = Color(base_color.r, base_color.g, base_color.b, alpha)
-		var border_color: Color = Color(base_color.r, base_color.g, base_color.b, minf(alpha + 0.3, 1.0))
+		var base_color: Color = _get_shop_rarity_color(rarity)
+		var fill_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_fill_alpha)
+		var border_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_border_alpha)
 
 		var ring_name: String = spot["ring_name"]
 		var wedge_idx: int = spot["wedge_index"]
@@ -919,5 +966,53 @@ func _draw_shop_spots() -> void:
 		var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
 		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 
-		_draw_segment(start_deg, end_deg, outer_norm, inner_norm, fill_color)
-		_draw_segment_border(start_deg, end_deg, outer_norm, inner_norm, border_color, shop_border_thickness)
+		# Build segment polygon and draw on the overlay
+		var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
+		_shop_overlay.draw_colored_polygon(points, fill_color)
+
+		# Border
+		var border_points: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
+		_shop_overlay.draw_polyline(border_points, border_color, shop_border_thickness)
+
+
+## Build a segment polygon (same geometry as _draw_segment but returns points).
+func _build_segment_points(start_deg: float, end_deg: float, outer_norm: float, inner_norm: float) -> PackedVector2Array:
+	var points: PackedVector2Array = PackedVector2Array()
+	var outer_r: float = board_radius * outer_norm
+	var inner_r: float = board_radius * inner_norm
+
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var angle_rad: float = deg_to_rad(lerpf(start_deg, end_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(direction * outer_r)
+
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var angle_rad: float = deg_to_rad(lerpf(end_deg, start_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(direction * inner_r)
+
+	return points
+
+
+## Build a segment border polyline (closed loop).
+func _build_segment_border_points(start_deg: float, end_deg: float, outer_norm: float, inner_norm: float) -> PackedVector2Array:
+	var points: PackedVector2Array = PackedVector2Array()
+	var outer_r: float = board_radius * outer_norm
+	var inner_r: float = board_radius * inner_norm
+
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var angle_rad: float = deg_to_rad(lerpf(start_deg, end_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(direction * outer_r)
+
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var angle_rad: float = deg_to_rad(lerpf(end_deg, start_deg, t))
+		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
+		points.append(direction * inner_r)
+
+	points.append(points[0])
+	return points

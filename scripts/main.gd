@@ -376,6 +376,16 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Show per-dart score feedback
 	hud.show_score(result)
 
+	# Show what was hit in the instruction label
+	var ring_name: String = result["ring_name"]
+	if ring_name == "Off Board":
+		hud.show_instruction("Missed board!")
+	elif result.get("is_bull", false):
+		hud.show_instruction("Hit: %s" % ring_name)
+	else:
+		var face_value: int = result["face_value"]
+		hud.show_instruction("Hit: %s %d" % [ring_name, face_value])
+
 	# Process through X01 game logic (uses modified score)
 	var response: Dictionary = x01_game.process_throw(result)
 
@@ -398,7 +408,10 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	elif response["is_leg_won"]:
-		# Leg complete — wait for score animation, then show upgrades
+		# Leg complete — show golden 0, clear checkout highlights
+		hud.update_remaining(0)
+		hud.set_remaining_checkout_available(true)
+		dartboard.clear_checkout_segments()
 		_awaiting_next_leg = true
 		if score_tween != null and score_tween.is_valid():
 			score_tween.tween_callback(_show_leg_upgrades.bind(response))
@@ -443,6 +456,26 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 
 	_leg_phase = "accuracy_pick"
 	_current_upgrades = _generate_upgrades()
+
+	# Cache current stats so the HUD can preview upgrades on hover
+	var current_stats: Dictionary = {
+		"horizontal_range": throw_mechanic.horizontal_range,
+		"vertical_range": throw_mechanic.vertical_range,
+		"vertical_accuracy": throw_mechanic.vertical_accuracy,
+		"horizontal_accuracy": throw_mechanic.horizontal_accuracy,
+		"vertical_speed": throw_mechanic.vertical_speed,
+		"horizontal_speed": throw_mechanic.horizontal_speed,
+	}
+	var base_stats: Dictionary = {
+		"horizontal_range": _base_horizontal_range,
+		"vertical_range": _base_vertical_range,
+		"vertical_accuracy": _base_vertical_accuracy,
+		"horizontal_accuracy": _base_horizontal_accuracy,
+		"vertical_speed": _base_vertical_speed,
+		"horizontal_speed": _base_horizontal_speed,
+	}
+	hud.cache_stats(current_stats, base_stats)
+
 	hud.show_leg_complete_with_upgrades(
 		response["current_leg"],
 		response["target_score"],
@@ -898,6 +931,7 @@ func _on_modifier_selected(index: int) -> void:
 			_start_modifier_pending = false
 			_start_new_throw()
 		else:
+			hud.score_label.text = ""
 			hud.next_leg_button.visible = true
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
 		_pending_modifier = modifier
@@ -1258,6 +1292,7 @@ func _finish_picker() -> void:
 		_start_modifier_pending = false
 		_start_new_throw()
 	else:
+		hud.score_label.text = ""
 		hud.next_leg_button.visible = true
 
 
