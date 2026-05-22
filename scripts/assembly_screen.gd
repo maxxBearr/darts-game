@@ -5,6 +5,8 @@ extends Control
 ## and a dart preview. Emits run_confirmed when the player clicks Begin Run.
 
 signal run_confirmed
+signal play_tutorial_pressed
+signal rules_pressed
 
 var dart_build: DartBuild
 var registry: DartComponentRegistry
@@ -202,6 +204,30 @@ func _ready() -> void:
 	_begin_button.add_theme_font_size_override("font_size", begin_button_font_size)
 	_begin_button.pressed.connect(_on_begin_run)
 	add_child(_begin_button)
+
+	# Tutorial and Rules replay buttons (below Begin Run)
+	var help_row: HBoxContainer = HBoxContainer.new()
+	help_row.position = begin_button_position + Vector2(-20.0, begin_button_size.y + 12.0)
+	help_row.size = Vector2(begin_button_size.x + 40.0, 32.0)
+	help_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	help_row.add_theme_constant_override("separation", 12)
+	add_child(help_row)
+
+	var tutorial_btn: Button = Button.new()
+	tutorial_btn.text = "Play Tutorial"
+	tutorial_btn.add_theme_font_size_override("font_size", 13)
+	tutorial_btn.flat = true
+	tutorial_btn.add_theme_color_override("font_color", Color(0.5, 0.7, 1.0))
+	tutorial_btn.pressed.connect(func() -> void: play_tutorial_pressed.emit())
+	help_row.add_child(tutorial_btn)
+
+	var rules_btn: Button = Button.new()
+	rules_btn.text = "Rules of Darts"
+	rules_btn.add_theme_font_size_override("font_size", 13)
+	rules_btn.flat = true
+	rules_btn.add_theme_color_override("font_color", Color(0.8, 0.7, 0.4))
+	rules_btn.pressed.connect(func() -> void: rules_pressed.emit())
+	help_row.add_child(rules_btn)
 
 
 func _build_dart_preview() -> void:

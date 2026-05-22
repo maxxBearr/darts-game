@@ -9,6 +9,9 @@ extends Node2D
 ## before the first throw — same UI as the post-leg modifier pick.
 @export var debug_start_with_modifier: bool = false
 
+## When enabled, resets the first-run tutorial flag at startup for testing.
+@export var debug_reset_tutorial_seen: bool = false
+
 ## Seconds to wait after a dart lands before auto-starting the next throw.
 ## Only applies within a turn — turn boundaries still require a button press.
 @export var next_dart_delay: float = 0.8
@@ -22,6 +25,17 @@ extends Node2D
 @onready var dart_component_registry: DartComponentRegistry = $DartComponentRegistry
 @onready var dart_build: DartBuild = $DartBuild
 @onready var assembly_screen: AssemblyScreen = $HUD/AssemblyScreen
+
+# Tutorial system nodes — instantiated in _ready()
+var start_screen: StartScreen
+var welcome_modal: WelcomeModal
+var rules_slideshow: RulesSlideshow
+var tutorial_callout: TutorialCallout
+var tutorial_controller: TutorialController
+var ghost_dart_layer: GhostDartLayer
+
+## Whether the game is currently in tutorial sandbox mode.
+var _in_tutorial: bool = false
 
 # Upgrade type definitions — 4 pure buffs, 2 tradeoffs (consistency stats penalize each other)
 const UPGRADE_TYPES: Array[Dictionary] = [
@@ -201,6 +215,8 @@ func _ready() -> void:
 	assembly_screen.registry = dart_component_registry
 	assembly_screen.throw_mechanic = throw_mechanic
 	assembly_screen.run_confirmed.connect(_on_run_confirmed)
+	assembly_screen.play_tutorial_pressed.connect(_on_play_tutorial.bind("assembly"))
+	assembly_screen.rules_pressed.connect(_on_show_rules)
 
 	# Wire dartboard reference to throw_mechanic for target declaration
 	throw_mechanic.dartboard = dartboard
@@ -228,8 +244,20 @@ func _ready() -> void:
 		if modifier.timing != ScoringEnums.ModifierTiming.ON_ACQUIRE:
 			hud.add_modifier_to_panel(modifier)
 
-	# Show assembly screen instead of starting immediately
-	_show_assembly()
+	# --- Tutorial system setup ---
+	_setup_tutorial_system()
+
+	# Debug: reset tutorial seen flag for testing
+	if debug_reset_tutorial_seen:
+		SettingsStore.set_tutorial_seen(false)
+
+	# First-run check: show welcome modal or start screen
+	if not SettingsStore.get_tutorial_seen():
+		assembly_screen.visible = false
+		_hide_gameplay_hud()
+		welcome_modal.show_modal()
+	else:
+		_show_start_screen()
 
 
 func _process(_delta: float) -> void:
@@ -356,6 +384,10 @@ func _start_new_throw() -> void:
 
 ## Called when a dart lands — process through X01 logic and update state.
 func _on_throw_completed(hit_position: Vector2) -> void:
+	# Tutorial throws are handled by the tutorial controller — skip all game logic
+	if _in_tutorial:
+		return
+
 	# Shop throws bypass the normal scoring pipeline
 	if _in_shop:
 		_on_shop_throw_completed(hit_position)
@@ -586,7 +618,7 @@ func _on_new_run() -> void:
 		dartboard.set_picker_mode(false)
 	# Restore to raw stats (before any build) so the assembly screen starts fresh
 	_restore_raw_stats()
-	_show_assembly()
+	_show_start_screen()
 
 
 # --- Shop System ---
@@ -892,8 +924,178 @@ func _end_shop(response: Dictionary) -> void:
 	tween.tween_callback(_start_new_throw)
 
 
+# ── Tutorial system ───────────────────────────────────────────────────────
+
+## Create and wire all tutorial system nodes (called once in _ready).
+func _setup_tutorial_system() -> void:
+	# Ghost dart layer — sibling of DartContainer, draws under landed darts
+	ghost_dart_layer = GhostDartLayer.new()
+	ghost_dart_layer.name = "GhostDartLayer"
+	add_child(ghost_dart_layer)
+	move_child(ghost_dart_layer, dart_container.get_index())
+
+	# Tutorial controller — orchestrates the mechanics tutorial
+	tutorial_controller = TutorialController.new()
+	tutorial_controller.name = "TutorialController"
+	tutorial_controller.throw_mechanic = throw_mechanic
+	tutorial_controller.dartboard = dartboard
+	tutorial_controller.ghost_dart_layer = ghost_dart_layer
+	tutorial_controller.tutorial_finished.connect(_on_tutorial_finished)
+	add_child(tutorial_controller)
+
+	# Start screen — lives in the HUD canvas layer
+	start_screen = StartScreen.new()
+	start_screen.name = "StartScreen"
+	start_screen.start_game_pressed.connect(_on_start_game)
+	start_screen.play_tutorial_pressed.connect(_on_play_tutorial.bind("start_screen"))
+	start_screen.rules_pressed.connect(_on_show_rules)
+	start_screen.visible = false
+	hud.add_child(start_screen)
+
+	# Welcome modal — lives in the HUD canvas layer
+	welcome_modal = WelcomeModal.new()
+	welcome_modal.name = "WelcomeModal"
+	welcome_modal.tutorial_chosen.connect(_on_play_tutorial.bind("start_screen"))
+	welcome_modal.skip_chosen.connect(_on_welcome_skipped)
+	welcome_modal.visible = false
+	hud.add_child(welcome_modal)
+
+	# Rules slideshow — lives in the HUD canvas layer
+	rules_slideshow = RulesSlideshow.new()
+	rules_slideshow.name = "RulesSlideshow"
+	rules_slideshow.dartboard = dartboard
+	rules_slideshow.slideshow_closed.connect(_on_rules_closed)
+	rules_slideshow.visible = false
+	hud.add_child(rules_slideshow)
+
+	# Tutorial callout — lives in the HUD canvas layer
+	tutorial_callout = TutorialCallout.new()
+	tutorial_callout.name = "TutorialCalloutLayer"
+	tutorial_callout.visible = false
+	hud.add_child(tutorial_callout)
+
+	# Wire the callout to the controller
+	tutorial_controller.callout = tutorial_callout
+
+
+## Show the start screen, hiding other overlays.
+func _show_start_screen() -> void:
+	assembly_screen.visible = false
+	start_screen.visible = true
+	welcome_modal.visible = false
+	rules_slideshow.visible = false
+	_hide_gameplay_hud()
+
+
+## Hide gameplay-specific HUD elements (score, turn, dart labels etc).
+func _hide_gameplay_hud() -> void:
+	hud.score_label.visible = false
+	hud.instruction_label.visible = false
+	hud.remaining_label.visible = false
+	hud.turn_label.visible = false
+	hud.dart_label.visible = false
+	hud.leg_label.visible = false
+	hud.bust_label.visible = false
+	hud.turn_score_label.visible = false
+	hud.stats_container.visible = false
+	hud.modifier_panel.visible = false
+	hud.dart_indicator.visible = false
+	hud.hide_all_buttons()
+	hud.upgrade_container.visible = false
+	hud.hide_checkout_helper()
+
+
+## Restore gameplay HUD elements after tutorial/start screen.
+func _show_gameplay_hud() -> void:
+	hud.score_label.visible = true
+	hud.instruction_label.visible = true
+	hud.remaining_label.visible = true
+	hud.turn_label.visible = true
+	hud.dart_label.visible = true
+	hud.leg_label.visible = true
+	hud.turn_score_label.visible = true
+	hud.stats_container.visible = true
+	hud.modifier_panel.visible = true
+	hud.dart_indicator.visible = true
+
+
+## Called when "Start Game" is pressed on the start screen.
+func _on_start_game() -> void:
+	start_screen.visible = false
+	_show_assembly()
+
+
+## Called when "Play Tutorial" is pressed from start screen or assembly.
+func _on_play_tutorial(source: String) -> void:
+	start_screen.visible = false
+	assembly_screen.visible = false
+	welcome_modal.visible = false
+	_in_tutorial = true
+	_hide_gameplay_hud()
+
+	# Show an exit button during the tutorial
+	_show_exit_tutorial_button()
+
+	tutorial_controller.start_mechanics_tutorial(source)
+
+
+## Called when the tutorial finishes (player chose "Play a real game" or "Back to start").
+func _on_tutorial_finished(destination: String) -> void:
+	_in_tutorial = false
+	_clear_darts()
+	_hide_exit_tutorial_button()
+	dartboard.clear_declared_target()
+
+	if destination == "assembly":
+		_show_assembly()
+	else:
+		_show_start_screen()
+
+
+## Called when "Rules of Darts" is pressed.
+func _on_show_rules() -> void:
+	rules_slideshow.show_slideshow()
+
+
+## Called when the rules slideshow is closed.
+func _on_rules_closed() -> void:
+	dartboard.clear_tutorial_highlight()
+
+
+## Called when the welcome modal "No thanks" is chosen.
+func _on_welcome_skipped() -> void:
+	_show_start_screen()
+
+
+## Show the "Exit Tutorial" button during tutorial sandbox.
+var _exit_tutorial_button: Button = null
+
+func _show_exit_tutorial_button() -> void:
+	if _exit_tutorial_button != null:
+		_exit_tutorial_button.visible = true
+		return
+	_exit_tutorial_button = Button.new()
+	_exit_tutorial_button.text = "Exit Tutorial"
+	_exit_tutorial_button.add_theme_font_size_override("font_size", 14)
+	_exit_tutorial_button.position = Vector2(1140.0, 16.0)
+	_exit_tutorial_button.custom_minimum_size = Vector2(120.0, 32.0)
+	_exit_tutorial_button.pressed.connect(func() -> void:
+		tutorial_controller.stop_tutorial()
+		_on_tutorial_finished("start_screen" if tutorial_controller.entry_source == "start_screen" else "assembly")
+	)
+	hud.add_child(_exit_tutorial_button)
+
+
+## Hide the "Exit Tutorial" button.
+func _hide_exit_tutorial_button() -> void:
+	if _exit_tutorial_button != null:
+		_exit_tutorial_button.visible = false
+
+
 ## Show the dart assembly screen before starting a run.
 func _show_assembly() -> void:
+	start_screen.visible = false
+	_show_gameplay_hud()
 	assembly_screen.show_assembly(_raw_stats)
 
 
@@ -1290,6 +1492,10 @@ func _place_dart(position: Vector2) -> void:
 
 
 func _on_throw_state_changed(new_state: int) -> void:
+	# Tutorial manages its own UI — skip normal state change handling
+	if _in_tutorial:
+		return
+
 	match new_state:
 		throw_mechanic.ThrowState.AIMING:
 			_enable_hover()

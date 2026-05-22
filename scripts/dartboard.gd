@@ -146,6 +146,17 @@ var _picker_selected_wedges: Array[int] = []
 @export var picker_selected_color: Color = Color(0.2, 1.0, 0.4, 0.3)
 @export var picker_border_color: Color = Color(0.2, 0.7, 1.0, 0.6)
 
+@export_group("Tutorial Highlights")
+
+## Fill color for tutorial-highlighted segments. Bright yellow to distinguish from other highlights.
+@export var tutorial_highlight_color: Color = Color(1.0, 0.85, 0.2, 0.4)
+
+## Border color for tutorial-highlighted segments.
+@export var tutorial_highlight_border_color: Color = Color(1.0, 1.0, 1.0, 0.7)
+
+## Border thickness for tutorial highlight outlines in pixels.
+@export var tutorial_highlight_thickness: float = 2.5
+
 @export_group("Shop Spots — Shader")
 
 ## How fast the swirl pattern flows across lit spots.
@@ -184,6 +195,10 @@ var _picker_selected_wedges: Array[int] = []
 @export var shop_border_thickness: float = 2.5
 
 @export_group("")
+
+# Tutorial highlight state — segments to highlight during rules slideshow
+var _tutorial_highlights: Array[Dictionary] = []
+var _tutorial_highlight_active: bool = false
 
 # Shop lit-spot state
 var _shop_spots: Array[Dictionary] = []
@@ -283,6 +298,10 @@ func _draw() -> void:
 	# Draw checkout pulse on valid finishing double segments
 	if _checkout_pulse_active and _checkout_segments.size() > 0:
 		_draw_checkout_pulses()
+
+	# Draw tutorial highlights (rules slideshow / tutorial callouts)
+	if _tutorial_highlight_active:
+		_draw_tutorial_highlights()
 
 	# Shop spots are drawn on the overlay child (shader handles animation)
 
@@ -877,6 +896,67 @@ func _draw_checkout_pulses() -> void:
 			var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, pulse_color, checkout_border_thickness)
+
+
+# ── Tutorial highlight API ──────────────────────────────────────────────────
+
+## Set tutorial highlight segments. Each entry specifies a highlight type:
+## {type: "all_wedges_ring", ring_name: "Triple"} — highlight that ring on every wedge.
+## {type: "single_wedge_all", wedge_index: 0} — highlight every ring of a single wedge.
+## {type: "single_segment", wedge_index: 0, ring_name: "Triple"} — highlight one segment.
+## {type: "bullseye", which: "inner"|"outer"|"both"} — highlight bullseye region(s).
+func set_tutorial_highlight(highlights: Array[Dictionary]) -> void:
+	_tutorial_highlights = highlights
+	_tutorial_highlight_active = highlights.size() > 0
+	queue_redraw()
+
+
+## Clear all tutorial highlights.
+func clear_tutorial_highlight() -> void:
+	_tutorial_highlights.clear()
+	_tutorial_highlight_active = false
+	queue_redraw()
+
+
+## Draw all active tutorial highlights.
+func _draw_tutorial_highlights() -> void:
+	for spec: Dictionary in _tutorial_highlights:
+		var highlight_type: String = spec.get("type", "")
+		match highlight_type:
+			"all_wedges_ring":
+				var ring_name: String = spec.get("ring_name", "")
+				if RING_BOUNDS.has(ring_name):
+					var bounds: Array = RING_BOUNDS[ring_name]
+					for wedge_idx: int in range(20):
+						var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+						var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+						_draw_segment(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_color)
+						_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
+
+			"single_wedge_all":
+				var wedge_idx: int = spec.get("wedge_index", 0)
+				_draw_full_wedge_highlight(wedge_idx, tutorial_highlight_color, tutorial_highlight_border_color)
+
+			"single_segment":
+				var wedge_idx: int = spec.get("wedge_index", 0)
+				var ring_name: String = spec.get("ring_name", "")
+				if RING_BOUNDS.has(ring_name):
+					var bounds: Array = RING_BOUNDS[ring_name]
+					var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+					var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+					_draw_segment(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_color)
+					_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
+
+			"bullseye":
+				var which: String = spec.get("which", "both")
+				if which == "inner" or which == "both":
+					draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, tutorial_highlight_color)
+					var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+					draw_polyline(inner_points, tutorial_highlight_border_color, tutorial_highlight_thickness)
+				if which == "outer" or which == "both":
+					draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, tutorial_highlight_color)
+					var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
+					draw_polyline(outer_points, tutorial_highlight_border_color, tutorial_highlight_thickness)
 
 
 ## Push exported shader values into the ShaderMaterial.
