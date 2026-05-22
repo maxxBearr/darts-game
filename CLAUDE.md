@@ -1,115 +1,160 @@
-# Active Spec: HUD / Assembly Polish Pass
+# Active Spec: Shop System
 
 **Spec date:** 2026-05-21
 **Status:** Designed, ready for implementation
-**Scope:** Quality-of-life and clarity improvements to the in-game HUD and the assembly screen. Four surgical changes across existing UI; no new systems. The follow-up Shop spec will live on its own branch and will assume this work has shipped.
+**Scope:** New post-leg system. Every three legs, the player enters a "shop" that uses the dart board itself as the shop interface — they throw their accumulated spare darts at lit-up spots on the board to earn upgrades. Builds on the [HUD / Assembly Polish Pass](specs/2026-05-21-hud-assembly-polish.md): the parity slot system and the shared checkout-detection function are assumed to be in place.
 
 ## Summary
 
-Four discrete UX improvements bundled into one pass:
+Replace the leg-end pick screen on every third leg with a "shop round." The player throws a number of darts equal to the spare darts they saved across the preceding three legs. Spots on the board light up with rarity indicators (common, uncommon, rare). Hitting a lit spot reveals two random upgrades of that rarity, of which the player picks one. Hit nothing, get nothing.
 
-1. Balance bar becomes a smooth gradient with two new transition sub-zones that apply mild gameplay effects.
-2. Score readout turns gold whenever a single-dart checkout exists on the board.
-3. Target tooltip relocates to directly above the crosshair, simplifies its readout, and a new perk-up hover state lifts modifier icons off the items line when they apply to the hovered target.
-4. Parity streak items split into distinct Even Streak and Odd Streak variants sharing a single slot.
+Five parts to the spec:
 
----
-
-## 1. Balance Bar Gradient
-
-The balance bar currently shows three named zones (green / orange / red) with hard cliffs between them. Convert the bar's *visual* to a smooth color gradient across the full range, and introduce two transition sub-zones with mild gameplay effects:
-
-- **Green→Orange transition:** slight stat boost applied to throws.
-- **Orange→Red transition:** slight skew applied to throws.
-
-The three named zones still drive the dominant gameplay states. The transitions are softer in-between regions that reward landing close to ideal balance and punish drifting toward red before the player is fully in it. The "imbalance can be correct" design principle still applies — transitions are a small flavor on top of the existing zone-driven system.
-
-**Tuning:** Start the transition magnitudes small (suggested 10–20% of the corresponding full-zone effect) and tune in playtest. Both magnitudes — and the width of each transition sub-zone along the bar — should be exposed as exported variables with hover descriptions.
-
-**Why:** Smooths the cliff-edge feel between zones and enables more nuanced build decisions during assembly. Not a fix for an observed playtest problem — a deliberate refinement to deepen the precision available to the player when tuning a build.
+1. Cadence — when shops happen, how they interact with the existing per-leg upgrade pick.
+2. Spare-dart math — how many darts the player gets at the shop.
+3. Board setup — how many spots light up, what rarities, where they sit.
+4. Throw resolution — what happens on hit, miss, and total whiff.
+5. Visuals — the "swirly shader" treatment for lit spots and the zero-dart fallback.
 
 ---
 
-## 2. Gold Score Indicator
+## 1. Cadence and Flow
 
-When the player's current score has at least one single-dart finish available on the board, render the score number in gold. Otherwise render it in its default color.
+Shops fire after every third leg. The run flow becomes:
 
-**Definition of "single-dart finish":** there exists a board spot that, if hit, would bring the player to exactly 0 *and* satisfies the leg's finish rule (typically double-out).
+Leg 1 → 2 upgrade picks → Leg 2 → 2 upgrade picks → Leg 3 → **Shop** → Leg 4 → 2 upgrade picks → Leg 5 → 2 upgrade picks → Leg 6 → **Shop** → ...
 
-**Behavior:**
-- Updates per-dart (live during a turn), not per-turn.
-- Must respect active scoring modifiers. If a ×3 Red modifier is active and the player is at 60, single 20 on a red wedge now finishes the leg, so the score should be gold.
-- Tied to the same checkout logic that drives the board's existing gold checkout highlights — score-gold and board-gold should always agree.
+The shop replaces the post-leg pick screen on shop legs (3, 6, 9, ...) entirely. On non-shop legs, the existing 2-upgrade pick continues unchanged.
 
-**Why:** Reduces mental arithmetic load during play, especially when unusual checkouts become viable through active modifiers. The board already highlights the specific finishing spots; the score turning gold is the redundant glanceable signal so the player doesn't have to scan the board to know "yes, I can win right now."
+The shop is not itself a leg. It does not consume a leg slot, advance run scaling, or accrue any leg-side state. It is a screen that runs between the end of one leg and the start of the next.
 
-**Deferred:** A multi-dart checkout helper (e.g., "from 110 with 3 darts left in the turn, here's a route") is explicitly out of scope. Gold means *single-dart kill exists*. Multi-dart route assistance is a future feature that will build on this one.
+**Why per-leg picks continue:** the game is currently hard. The shop is additive — a richer reward on milestone legs — not a replacement for the steady drip of upgrades that keeps non-shop legs feeling worthwhile. Not the moment to scale player power down.
 
 ---
 
-## 3. Target Tooltip + Perk-Up Hover
+## 2. Spare-Dart Math
 
-Two coordinated changes to where modifier feedback lives during aiming.
+Each leg has a finite dart budget. Saving darts means finishing the leg before exhausting that budget.
 
-### 3a. Tooltip relocation
+**Formula:**
+- At leg start: `total_darts_in_leg = max_turns * darts_per_turn` (currently 5 × 3 = 15).
+- Each throw during the leg: `used_darts += 1`.
+- On a bust: the remaining darts in the busted turn count toward `used_darts` (busting on dart 1 of a turn burns the full 3-dart turn).
+- On a leg win: `saved_darts_this_leg = total_darts_in_leg - used_darts`.
 
-The target preview tooltip moves from its current position to **directly above the crosshair**. It draws over the board ellipse if necessary for readability — use a semi-transparent background or similar treatment so the board stays visible underneath.
+**Across the shop window:** `shop_darts = saved_darts from leg N-2 + saved_darts from leg N-1 + saved_darts from leg N`, where leg N is the leg that just ended.
 
-**Simplified format:** `Target: D7 ×3 = 35`, with the multiplier rendered in green to make modifier presence pop. When no modifier applies to the hovered target, the readout collapses to the base form (`Target: D7 = 14`).
+The formula is intentionally written in terms of `max_turns` and `darts_per_turn` because future modifiers may alter either value. The math stays correct regardless.
 
-**Behavior:**
-- Tooltip appears on hover, before the player commits to the target.
-- Tooltip disappears once the player commits to the throw, so it doesn't occlude during the actual aim and release.
-- Existing streak tooltip logic (which already only shows when relevant) is preserved unchanged. It continues to appear in its existing location near the crosshair.
-
-**Why:** The current tooltip lives outside the player's field of focus during aiming, which means the modifier feedback the player needs is effectively invisible at the moment it matters. Crosshair-adjacent placement puts the readout where the eyes already are.
-
-### 3b. Perk-up hover state for items line
-
-When the player hovers over a board element that a specific modifier in the items line applies to, that modifier's icon **perks up** — lifts off the line and gets highlighted. When the hovered target does not match a modifier, that modifier's icon stays in its default state.
-
-**Example:** Player has a ×3 Red modifier and a +5 Odd modifier active. They hover over D7 (red, odd). Both modifier icons perk up. They hover over D8 (black, even). Neither perks up.
-
-The *persistent* on-board modifier indicator (whatever currently shows "this wedge has a modifier" before any hover) stays exactly as it is. Perk-up is purely an additive focused state on hover — not a replacement for the static board-side indication. Players already trained on the existing static indicators don't lose anything; hover adds clarity in the moment of decision.
-
-**Why:** Gives modifier feedback a tight per-target read without burdening the persistent board state. Keeps board scouting fast (static indicators) and decision-making clear (perk-up on hover).
-
-**Deferred:** Static board-wide visual changes when modifiers are active — e.g., all red spots getting an artistic treatment when a red modifier is equipped — are deferred until the broader stylized art direction is more settled.
+The accumulator resets to 0 once the shop concludes — the next window begins from the next leg.
 
 ---
 
-## 4. Parity Streak Differentiation
+## 3. Board Setup
 
-The current "Parity Streak" upgrade is replaced by two distinct items: **Even Streak** and **Odd Streak**.
+When the shop opens, a number of board spots light up with rarity indicators. The player will throw `shop_darts` darts at this board.
 
-**Slot behavior:**
-- The two items share a single slot, `parity_streak`.
-- Picking either item while the other is equipped triggers the existing streak conflict / replace warning — same logic and same UI as color and wedge streaks.
-- All three streak categories (color, wedge, parity) now follow the same one-slot-per-category rule.
+### 3a. Lit-spot count
 
-**Data model:** Parity items declare `streak_slot: "parity"` and a sub-field (e.g., `parity_target: "even" | "odd"`) indicating which parity they track. The conflict resolution logic already present for color and wedge requires no changes — it sees two items competing for the same slot and triggers the replace flow.
+`lit_spots = shop_darts + 3`
 
-**Why:** The current implementation surfaces "Parity Streak" as a single ambiguous item, but the underlying mechanic actually tracks either evens or odds (not both). Differentiating the items makes the choice explicit at the pick screen and forces the player to commit to a parity orientation, matching how color and wedge streaks already work. Aligns the three streak categories under a single coherent rule.
+The flat +3 slack gives the player consistent breathing room — always a few more targets than darts, so the player gets meaningful choice in *which* targets to prioritize. This holds across the range: 3 darts → 6 spots, 9 darts → 12 spots, 15 darts → 18 spots.
+
+### 3b. Rarity distribution
+
+Within the lit spots:
+
+- `rares = max(1, floor(lit_spots / 6))` — at least one rare guaranteed.
+- `uncommons = floor(lit_spots / 3)`.
+- `commons = lit_spots - rares - uncommons`.
+
+The "at least one rare" floor means a shop is never just commons. There is always a high-stakes target on the board.
+
+### 3c. Placement rules
+
+Rarity governs which board regions a spot can land on:
+
+- **Commons** fill the larger single regions of wedges.
+- **Uncommons and rares** fill the smaller double and triple rings.
+
+Within those constraints, placement is random. Which specific wedge a common occupies, and which specific double/triple a rare occupies, is rolled per shop.
+
+**Emergent strategy:** because doubles and triples are physically adjacent to their corresponding singles, missing a hard rare often clips into the related single. If that single happens to be lit as a common, the player has an organic near-miss reward — the geometry creates the safety net, not a separate consolation mechanic. The player who reads the lit-spot clusters before throwing will outperform the one who yolos at rares. This is one of the three interacting systems the game wants the player calculating every throw (board RNG read + skill/confidence + stat-driven hit probability).
+
+---
+
+## 4. Throw Resolution
+
+### 4a. Hitting a lit spot
+
+When a dart lands on a lit spot:
+
+1. The spot's rarity tier determines which pool the items roll from (common / uncommon / rare).
+2. Two items of that rarity are rolled and shown to the player.
+3. The player picks one. The picked item is added to the loadout. The other is discarded.
+4. Any existing slot-conflict rules apply (see 4d).
+5. The spot deactivates — no longer lit — for the rest of the shop.
+
+The 2-of-2 pick is narrower than the regular leg-end 2-of-3 pick. Intentional: the throw itself is already a meaningful choice (which spot to target), so the post-hit menu stays small.
+
+The shop draws from the same item pool the per-leg picks use, weighted by the rarity tier of the hit spot. Stat upgrades and modifiers can both appear in the shop — they are not segregated by source.
+
+### 4b. Hitting an unlit area
+
+The dart lands normally on the board (or misses the board entirely), no reward triggers, the dart is spent. The next dart is thrown.
+
+### 4c. Whiffing the entire shop
+
+If the player throws every dart without landing on a single lit spot: hit nothing, get nothing. No consolation upgrade, no reroll. The shop ends with no rewards.
+
+Intentional. The spare-dart system already rewards play quality; softening misses dilutes that signal.
+
+### 4d. Streak slot interactions
+
+The shop does not score throws — no scoring modifiers apply, no streak counters update. Streak items still respect their slot conflict rules at the pick step: if a player picks a streak item from the 2-of-2 menu and they already have an item in that streak slot equipped (color, wedge, or parity), the existing replace warning fires. Same logic and UI as the leg-end pick. No duplicates.
+
+---
+
+## 5. Visuals
+
+### 5a. Lit-spot treatment
+
+Lit spots are rendered with a swirly, animated shader-style fill. Visual reference: the Balatro main menu background, or the moving curved pattern of a stylized zebra. The shader animates continuously so the lit spots read as alive.
+
+Rarity is encoded by color:
+
+- **Common:** white / light grey.
+- **Uncommon:** blue.
+- **Rare:** purple.
+
+The shader pattern is the same across rarities; only the color palette differs. This keeps the shop visually coherent and lets the player parse rarity at a glance from across the board.
+
+### 5b. Zero-dart shop ("oh dear")
+
+If the player saved zero darts across the three preceding legs (`shop_darts == 0`), the shop screen still appears. The board has no lit spots. A brief humorous acknowledgment plays — something tonal along the lines of *"oh dear, you didn't save ANY darts... oh well"* — then the shop closes and the next leg begins.
+
+The point is to make the consequence of poor play visible rather than silently skipping the shop. Brief, in-character, no extra dialogue.
 
 ---
 
 ## Deferred / Out of Scope
 
-Captured here so future passes don't have to dig through chat history:
-
-- **Multi-dart checkout helper.** Future feature once single-dart gold lands.
-- **Static on-board modifier visuals.** Art treatment on wedges or color regions when a relevant modifier is active. Deferred until stylized art direction is more settled — heavily art-driven.
-- **Changes to the persistent on-board modifier indicator.** Out of scope for this pass. Only the new hover state is being added; the persistent indicator stays as-is.
-- **Shop system.** Separate spec, separate branch, after this work merges.
+- **Reroll mechanics** for either lit-spot generation or the post-hit 2-of-2 options. Could land later as a stat upgrade or a shop-specific modifier.
+- **Shop variants** (themed shops, boss shops, alternate layouts). One shop type for now.
+- **Item-specific shop interactions** (e.g., a modifier that biases shop rolls or alters lit-spot placement). Future hook.
+- **Run-end interaction.** If a shop would fire after the final leg of a run, behavior is undefined for now. Resolve in implementation, or wait until run structure firms up (this depends on the unresolved meta-progression / run-length question).
+- **Static on-board modifier visuals.** Still deferred from the HUD pass — art-direction-dependent.
 
 ---
 
 ## Implementation Notes
 
-- All new tunable values — transition zone magnitudes and widths, gold-trigger response, tooltip vertical offset above crosshair, perk-up animation magnitude and timing — should be exposed as exported variables on their owning scripts, with hover descriptions per project conventions.
+- All tunable values — the `lit_spots` slack constant (currently +3), the rarity floor formulas, shader animation speed, the zero-dart acknowledgment duration — exposed as exported variables with hover descriptions per project conventions.
 - Static typing throughout per project conventions.
-- Reuse the existing streak conflict logic for the parity slot. Do not duplicate it.
-- The gold-score check and the board's gold checkout highlight should call the same underlying "is this score checkoutable in one dart" function. Single source of truth — they must never disagree.
+- Reuse the streak conflict logic established by the HUD pass for the parity slot. The shop pick step calls the same conflict-check function the leg-end pick uses. Do not duplicate.
+- The shop's item pool must be the same data source the per-leg picks use. Rarity weighting is determined by the spot's rarity tier, not a separate shop-specific pool.
+- `shop_darts` accounting must persist across legs within the run. Counter resets to 0 immediately after a shop concludes (success, whiff, or zero-dart all reset).
+- A shop is its own screen / state, not a modal on top of a leg. Clean transition between leg-end and leg-start.
 
 ---
 

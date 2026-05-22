@@ -34,7 +34,7 @@ var _flight_component: DartComponent
 
 ## Update how many darts are remaining and refresh display.
 func set_darts_remaining(count: int) -> void:
-	_darts_remaining = clampi(count, 0, 3)
+	_darts_remaining = maxi(count, 0)
 	if _using_textures:
 		_update_dart_modulate()
 	else:
@@ -109,6 +109,62 @@ func _update_dart_modulate() -> void:
 	for i: int in range(_dart_containers.size()):
 		var alpha: float = 1.0 if i < _darts_remaining else 0.3
 		_dart_containers[i].modulate = Color(1.0, 1.0, 1.0, alpha)
+
+
+## Set the indicator to shop mode showing a custom dart count.
+## Shrinks darts when count > 3 to fit. All darts start active.
+func set_shop_darts(total: int, remaining: int) -> void:
+	# Rebuild with the right number of darts
+	for container: HBoxContainer in _dart_containers:
+		container.queue_free()
+	_dart_containers.clear()
+
+	var count: int = maxi(total, 1)
+	# Shrink height when many darts
+	var dart_h: float = mini_dart_height
+	var dart_sp: float = mini_dart_spacing
+	if count > 6:
+		dart_h = mini_dart_height * 0.6
+		dart_sp = mini_dart_spacing * 0.4
+	elif count > 3:
+		dart_h = mini_dart_height * 0.8
+		dart_sp = mini_dart_spacing * 0.6
+
+	for i: int in range(count):
+		var dart_row: HBoxContainer = HBoxContainer.new()
+		dart_row.position = Vector2(0.0, float(i) * (dart_h + dart_sp))
+		dart_row.add_theme_constant_override("separation", -2)
+		add_child(dart_row)
+		_dart_containers.append(dart_row)
+
+		_add_mini_part_sized(dart_row, _barrel_component, dart_h)
+		_add_mini_part_sized(dart_row, _shaft_component, dart_h)
+		_add_mini_part_sized(dart_row, _flight_component, dart_h)
+
+	_darts_remaining = remaining
+	_using_textures = true
+	_update_dart_modulate()
+
+
+func _add_mini_part_sized(container: HBoxContainer, component: DartComponent, height: float) -> void:
+	var tex_rect: TextureRect = TextureRect.new()
+	tex_rect.custom_minimum_size = Vector2(height * 1.5, height)
+	tex_rect.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
+	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	if component and component.texture:
+		tex_rect.texture = component.texture
+	else:
+		tex_rect.self_modulate = Color(0.5, 0.5, 0.5, 0.5)
+	container.add_child(tex_rect)
+
+
+## Restore the normal 3-dart display after shop mode.
+func restore_normal_darts() -> void:
+	for container: HBoxContainer in _dart_containers:
+		container.queue_free()
+	_dart_containers.clear()
+	_using_textures = false
+	set_dart_components(_barrel_component, _shaft_component, _flight_component)
 
 
 func _draw() -> void:

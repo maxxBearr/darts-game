@@ -6,12 +6,12 @@
 [resource]
 script = ExtResource("1")
 component_name = "Long Carbon"
-description = "Great for balancing heave darts, never sails down, but has some wobble"
+description = "Great for balancing heavy darts. Flies straight, but has been seen wobbling"
 component_type = 1
 weight = 0.55
 texture = ExtResource("2_p84gr")
-h_range_bonus = -1.0
-v_range_bonus = 10.0
-v_speed_bonus = 5.0
+h_range_bonus = -2.0
+v_range_bonus = 19.0
+v_speed_bonus = 7.0
 h_accuracy_bonus = -1.0
-v_accuracy_bonus = 12.0
+v_accuracy_bonus = 16.0

@@ -197,13 +197,11 @@ func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upg
 		if upgrade["tradeoff"]:
 			button_text += "\n-%d %s" % [upgrade["penalty_amount"], upgrade["penalty_name"]]
 		buttons[i].text = button_text
-		# Tint button to rarity color at full opacity so it stays readable
 		var color: Color = upgrade["color"]
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
-		# Tooltip description on hover
 		buttons[i].tooltip_text = upgrade["description"]
+		buttons[i].visible = true
 
-	# Show upgrade container, hide NextLegButton until they pick
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 
@@ -670,6 +668,7 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 		var color: Color = modifier.rarity_color
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
 		buttons[i].tooltip_text = modifier.description
+		buttons[i].visible = true
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 
@@ -716,3 +715,118 @@ func hide_picker() -> void:
 		_picker_header.visible = false
 	if _picker_prompt != null:
 		_picker_prompt.visible = false
+
+
+# --- Shop UI ---
+
+## Enter shop mode — hide leg-specific HUD elements, show shop dart indicator.
+func enter_shop_mode(saved_darts: int) -> void:
+	remaining_label.visible = false
+	turn_label.visible = false
+	turn_score_label.visible = false
+	leg_label.visible = false
+	bust_label.visible = false
+	dart_label.text = "Saved: %d dart%s" % [saved_darts, "" if saved_darts == 1 else "s"]
+	dart_indicator.set_shop_darts(saved_darts, saved_darts)
+
+
+## Exit shop mode — restore leg-specific HUD elements and normal dart display.
+func exit_shop_mode() -> void:
+	remaining_label.visible = true
+	turn_label.visible = true
+	turn_score_label.visible = true
+	leg_label.visible = true
+	remaining_label.modulate = Color(1.0, 1.0, 1.0)
+	dart_indicator.restore_normal_darts()
+	reset_next_leg_button()
+
+
+## Show the shop entry screen after completing a shop leg.
+func show_shop_entry(leg: int, target: int, turns_used: int, saved_darts: int) -> void:
+	score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [leg, target, turns_used]
+	upgrade_container.visible = false
+	next_leg_button.text = "Enter Shop (%d dart%s saved)" % [saved_darts, "" if saved_darts == 1 else "s"]
+	next_leg_button.visible = true
+
+
+## Show the shop header with remaining dart count and update indicator.
+func show_shop_header(darts_remaining: int) -> void:
+	upgrade_container.visible = false
+	next_leg_button.visible = false
+	dart_label.text = "%d dart%s left" % [darts_remaining, "" if darts_remaining == 1 else "s"]
+	dart_indicator.set_darts_remaining(darts_remaining)
+	if darts_remaining > 0:
+		score_label.text = "SHOP — Throw at the lit spots!"
+	else:
+		score_label.text = "SHOP — No darts left!"
+
+
+## Show the zero-dart shop acknowledgment.
+func show_shop_zero_darts() -> void:
+	upgrade_container.visible = false
+	next_leg_button.visible = false
+	score_label.text = "Oh dear... you didn't save any darts. Oh well!"
+
+
+## Show the shop's 2-of-2 mixed item pick (modifiers and/or accuracy upgrades).
+## items is an Array[Dictionary] with {type: "modifier"|"upgrade", data: ...}.
+func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int) -> void:
+	_modifier_mode = true
+	score_label.text = "You hit a spot! Pick one (%d dart%s left)" % [darts_remaining, "" if darts_remaining == 1 else "s"]
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
+	for i: int in range(mini(items.size(), 2)):
+		var item: Dictionary = items[i]
+		var button_text: String
+		var button_color: Color
+
+		if item["type"] == "modifier":
+			var modifier: Resource = item["data"]
+			button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+			button_color = modifier.rarity_color
+			buttons[i].tooltip_text = modifier.description
+		else:
+			var upgrade: Dictionary = item["data"]
+			button_text = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
+			if upgrade["tradeoff"]:
+				button_text += "\n-%d %s" % [upgrade["penalty_amount"], upgrade["penalty_name"]]
+			button_color = upgrade["color"]
+			buttons[i].tooltip_text = upgrade["description"]
+
+		buttons[i].text = button_text
+		buttons[i].self_modulate = Color(button_color.r, button_color.g, button_color.b, 1.0)
+		buttons[i].visible = true
+	# Hide the third button for 2-of-2 pick
+	buttons[2].visible = false
+	upgrade_container.visible = true
+	next_leg_button.visible = false
+
+
+## Show the shop hover tooltip above the crosshair with rarity info.
+func show_shop_hover_tooltip(rarity_text: String, screen_pos: Vector2) -> void:
+	hover_tooltip.text = "Target: %s" % rarity_text
+	hover_tooltip.visible = true
+	if rarity_text == "Nothing":
+		hover_tooltip.modulate = Color(0.6, 0.6, 0.6)
+	elif "Rare" in rarity_text:
+		hover_tooltip.modulate = Color(0.7, 0.3, 0.9)
+	elif "Uncommon" in rarity_text:
+		hover_tooltip.modulate = Color(0.3, 0.5, 1.0)
+	else:
+		hover_tooltip.modulate = Color(1.0, 1.0, 1.0)
+	hover_tooltip.position = Vector2(
+		screen_pos.x - hover_tooltip.size.x / 2.0,
+		screen_pos.y - hover_tooltip_offset_y - hover_tooltip.size.y
+	)
+
+
+## Show the shop complete message with a button to advance.
+func show_shop_complete() -> void:
+	upgrade_container.visible = false
+	score_label.text = "Shop complete!"
+	next_leg_button.text = "Next Leg"
+	next_leg_button.visible = true
+
+
+## Reset the next leg button text to default.
+func reset_next_leg_button() -> void:
+	next_leg_button.text = "Next Leg"

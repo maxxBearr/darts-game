@@ -146,6 +146,38 @@ var _picker_selected_wedges: Array[int] = []
 @export var picker_selected_color: Color = Color(0.2, 1.0, 0.4, 0.3)
 @export var picker_border_color: Color = Color(0.2, 0.7, 1.0, 0.6)
 
+## Speed of the shop lit-spot pulse animation.
+@export var shop_pulse_speed: float = 2.5
+
+## Minimum opacity of the shop lit-spot pulse.
+@export var shop_pulse_min_alpha: float = 0.45
+
+## Maximum opacity of the shop lit-spot pulse.
+@export var shop_pulse_max_alpha: float = 0.85
+
+## Border thickness for shop lit-spot outlines.
+@export var shop_border_thickness: float = 2.5
+
+# Shop lit-spot state
+var _shop_spots: Array[Dictionary] = []
+var _shop_active: bool = false
+var _shop_pulse_time: float = 0.0
+
+## Rarity colors for shop lit spots.
+const SHOP_RARITY_COLORS: Dictionary = {
+	ScoringEnums.Rarity.COMMON: Color(0.85, 0.85, 0.85, 0.8),
+	ScoringEnums.Rarity.UNCOMMON: Color(0.3, 0.5, 1.0, 0.8),
+	ScoringEnums.Rarity.RARE: Color(0.7, 0.3, 0.9, 0.8),
+}
+
+## Ring name to inner/outer normalized radii mapping for segment drawing.
+const RING_BOUNDS: Dictionary = {
+	"Inner Single": [RING_SINGLE_BULL_OUTER, RING_INNER_SINGLE_OUTER],
+	"Triple": [RING_INNER_SINGLE_OUTER, RING_TRIPLE_OUTER],
+	"Outer Single": [RING_TRIPLE_OUTER, RING_OUTER_SINGLE_OUTER],
+	"Double": [RING_OUTER_SINGLE_OUTER, RING_DOUBLE_OUTER],
+}
+
 
 func _draw() -> void:
 	# Draw surround ring (off-board area)
@@ -218,6 +250,10 @@ func _draw() -> void:
 	# Draw checkout pulse on valid finishing double segments
 	if _checkout_pulse_active and _checkout_segments.size() > 0:
 		_draw_checkout_pulses()
+
+	# Draw shop lit spots
+	if _shop_active and _shop_spots.size() > 0:
+		_draw_shop_spots()
 
 	# Draw wedge numbers around the board in the surround ring
 	# Uses effective_wedge_values if available, so modified values are shown
@@ -307,9 +343,13 @@ func _process(delta: float) -> void:
 		_checkout_pulse_time += delta
 		needs_redraw = true
 
+	if _shop_active:
+		_shop_pulse_time += delta
+		needs_redraw = true
+
 	if needs_redraw:
 		queue_redraw()
-	elif not _checkout_pulse_active:
+	elif not _checkout_pulse_active and not _shop_active:
 		set_process(false)
 
 
@@ -810,3 +850,74 @@ func _draw_checkout_pulses() -> void:
 			var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, pulse_color, checkout_border_thickness)
+
+
+## Set lit spots for the shop. Each entry: {wedge_index, ring_name, rarity, active}.
+func set_shop_spots(spots: Array[Dictionary]) -> void:
+	_shop_spots = spots
+	_shop_active = spots.size() > 0
+	_shop_pulse_time = 0.0
+	if _shop_active:
+		set_process(true)
+	queue_redraw()
+
+
+## Clear all shop lit spots.
+func clear_shop_spots() -> void:
+	_shop_spots.clear()
+	_shop_active = false
+	queue_redraw()
+
+
+## Check if a hit position lands on an active shop spot.
+## Returns the spot index if hit, or -1 if no active spot was hit.
+func check_shop_hit(global_hit_position: Vector2) -> int:
+	var result: Dictionary = calculate_score(global_hit_position)
+	var ring_name: String = result.get("ring_name", "")
+	var wedge_index: int = result.get("wedge_index", -1)
+
+	for i: int in range(_shop_spots.size()):
+		var spot: Dictionary = _shop_spots[i]
+		if not spot.get("active", false):
+			continue
+		if spot["wedge_index"] == wedge_index and spot["ring_name"] == ring_name:
+			return i
+
+	return -1
+
+
+## Deactivate a shop spot after it's been hit.
+func deactivate_shop_spot(index: int) -> void:
+	if index >= 0 and index < _shop_spots.size():
+		_shop_spots[index]["active"] = false
+		queue_redraw()
+
+
+## Draw pulsing filled overlays on all active shop lit spots.
+func _draw_shop_spots() -> void:
+	var t: float = sin(_shop_pulse_time * shop_pulse_speed)
+	var alpha: float = lerpf(shop_pulse_min_alpha, shop_pulse_max_alpha, (t + 1.0) / 2.0)
+
+	for spot: Dictionary in _shop_spots:
+		if not spot.get("active", false):
+			continue
+
+		var rarity: int = spot.get("rarity", ScoringEnums.Rarity.COMMON)
+		var base_color: Color = SHOP_RARITY_COLORS.get(rarity, SHOP_RARITY_COLORS[ScoringEnums.Rarity.COMMON])
+		var fill_color: Color = Color(base_color.r, base_color.g, base_color.b, alpha)
+		var border_color: Color = Color(base_color.r, base_color.g, base_color.b, minf(alpha + 0.3, 1.0))
+
+		var ring_name: String = spot["ring_name"]
+		var wedge_idx: int = spot["wedge_index"]
+
+		if not RING_BOUNDS.has(ring_name):
+			continue
+
+		var bounds: Array = RING_BOUNDS[ring_name]
+		var inner_norm: float = bounds[0]
+		var outer_norm: float = bounds[1]
+		var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+
+		_draw_segment(start_deg, end_deg, outer_norm, inner_norm, fill_color)
+		_draw_segment_border(start_deg, end_deg, outer_norm, inner_norm, border_color, shop_border_thickness)

@@ -20,6 +20,10 @@ var current_turn: int = 1
 var darts_this_turn: int = 0
 var score_at_turn_start: int = 101
 
+## Total darts consumed in the current leg (including bust waste).
+## Used to calculate spare darts for the shop system.
+var darts_used_in_leg: int = 0
+
 
 ## Reset everything and begin a fresh run from leg 1.
 func start_run() -> void:
@@ -32,6 +36,7 @@ func start_run() -> void:
 func start_leg() -> void:
 	remaining_score = target_score
 	current_turn = 1
+	darts_used_in_leg = 0
 	start_turn()
 
 
@@ -53,6 +58,7 @@ func advance_leg() -> void:
 ## face_value, multiplier, total_score, ring_name.
 func process_throw(result: Dictionary) -> Dictionary:
 	darts_this_turn += 1
+	darts_used_in_leg += 1
 
 	# Calculate what the new remaining score would be
 	var points: int = result["total_score"]
@@ -92,6 +98,8 @@ func process_throw(result: Dictionary) -> Dictionary:
 	var darts_remaining: int = 3 - darts_this_turn
 	# Bust or win ends the turn immediately regardless of darts left
 	if is_bust:
+		# Remaining darts in the busted turn are wasted
+		darts_used_in_leg += darts_remaining
 		darts_remaining = 0
 
 	# Determine if the turn is over
@@ -114,6 +122,12 @@ func process_throw(result: Dictionary) -> Dictionary:
 		"target_score": target_score,
 		"reverted_score": score_at_turn_start if is_bust else -1
 	}
+
+
+## How many darts the player saved this leg (total budget minus consumed).
+func get_saved_darts() -> int:
+	var total: int = max_turns * 3
+	return maxi(total - darts_used_in_leg, 0)
 
 
 ## Advance the turn counter. Call when main is ready to move to the next turn.

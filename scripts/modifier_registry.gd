@@ -98,6 +98,40 @@ static func generate_distinct(count: int) -> Array[ScoringModifier]:
 	return results
 
 
+## Generate N distinct modifiers all at a forced rarity tier.
+## Used by the shop system where the hit spot's rarity determines the tier.
+static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity) -> Array[ScoringModifier]:
+	var results: Array[ScoringModifier] = []
+
+	var available_indices: Array[int] = []
+	for i: int in range(MODIFIER_TYPES.size()):
+		available_indices.append(i)
+
+	for _n: int in range(mini(count, available_indices.size())):
+		var total_weight: int = 0
+		var weights: Array[int] = []
+		for idx: int in available_indices:
+			var weight: int = MODIFIER_TYPES[idx].get_pool_weight()
+			weights.append(weight)
+			total_weight += weight
+
+		var roll: int = randi_range(1, total_weight)
+		var cumulative: int = 0
+		var chosen_local: int = 0
+		for i: int in range(weights.size()):
+			cumulative += weights[i]
+			if roll <= cumulative:
+				chosen_local = i
+				break
+
+		var chosen_global_idx: int = available_indices[chosen_local]
+		var chosen_type = MODIFIER_TYPES[chosen_global_idx]
+		results.append(chosen_type.generate(rarity))
+		available_indices.remove_at(chosen_local)
+
+	return results
+
+
 ## Get the total number of modifier types in the pool.
 static func get_type_count() -> int:
 	return MODIFIER_TYPES.size()

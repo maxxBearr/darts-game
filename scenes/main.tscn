@@ -46,8 +46,8 @@ outline_color = Color(0, 0, 0, 1)
 
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
-debug_start_with_modifier = true
 next_dart_delay = 0.2
+shop_cadence = 2
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
 script = ExtResource("2_dartboard")
@@ -66,8 +66,8 @@ flash_duration = 0.4
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
-vertical_speed = 2.0
-horizontal_speed = 2.0
+vertical_speed = 2.1
+horizontal_speed = 2.1
 marker_size = 6.0
 marker_outline_thickness = 1.3
 resolve_preview_duration = 0.6
@@ -157,40 +157,44 @@ horizontal_alignment = 1
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -180.0
+offset_left = -244.0
 offset_top = 120.0
-offset_right = -20.0
+offset_right = -84.0
 offset_bottom = 160.0
+grow_horizontal = 0
 text = "Next Dart"
 
 [node name="NextTurnButton" type="Button" parent="HUD" unique_id=1391135062]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -180.0
+offset_left = -244.0
 offset_top = 120.0
-offset_right = -20.0
+offset_right = -84.0
 offset_bottom = 160.0
+grow_horizontal = 0
 text = "Next Turn"
 
 [node name="NextLegButton" type="Button" parent="HUD" unique_id=1727416231]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -180.0
+offset_left = -244.0
 offset_top = 120.0
-offset_right = -20.0
+offset_right = -84.0
 offset_bottom = 160.0
+grow_horizontal = 0
 text = "Next Leg"
 
 [node name="NewRunButton" type="Button" parent="HUD" unique_id=1036766083]
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -180.0
+offset_left = -244.0
 offset_top = 120.0
-offset_right = -20.0
+offset_right = -84.0
 offset_bottom = 160.0
+grow_horizontal = 0
 text = "New Run"
 
 [node name="DartIndicator" type="Control" parent="HUD" unique_id=1514473938]

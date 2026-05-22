@@ -152,6 +152,36 @@ var _trigger_anim_active: bool = false
 # Whether the current modifier pick is the debug start-of-game pick.
 var _start_modifier_pending: bool = false
 
+# --- Shop system state ---
+
+## Saved darts accumulated across the current 3-leg window.
+var _saved_darts_accumulator: int = 0
+
+## Whether the game is currently in the shop phase.
+var _in_shop: bool = false
+
+## Shop darts remaining to throw.
+var _shop_darts_remaining: int = 0
+
+## Lit spots on the board for the current shop.
+var _shop_lit_spots: Array[Dictionary] = []
+
+## The 2 item choices generated when a lit spot is hit.
+## Each entry: {type: "modifier"|"upgrade", data: ScoringModifier|Dictionary}
+var _shop_pick_items: Array[Dictionary] = []
+
+## Extra lit spots beyond the dart count (breathing room for target choice).
+@export var shop_spot_slack: int = 3
+
+## Duration of the zero-dart shop acknowledgment in seconds.
+@export var shop_zero_dart_duration: float = 2.5
+
+## How often shops occur (every N legs).
+@export var shop_cadence: int = 3
+
+## Duration of the board slide transition into/out of shop in seconds.
+@export var shop_transition_duration: float = 0.5
+
 
 func _ready() -> void:
 	# Connect throw mechanic signals
@@ -214,6 +244,20 @@ func _process(_delta: float) -> void:
 	# Feed the current mouse position to the dartboard for hover detection
 	var mouse_pos: Vector2 = get_global_mouse_position()
 	var hover_result: Dictionary = dartboard.update_hover(mouse_pos)
+
+	# Shop-specific hover: show rarity of lit spots
+	if _in_shop and _leg_phase == "shop":
+		if hover_result.is_empty():
+			hud.show_shop_hover_tooltip("Nothing", mouse_pos)
+		else:
+			var spot_idx: int = dartboard.check_shop_hit(mouse_pos)
+			if spot_idx >= 0:
+				var spot: Dictionary = _shop_lit_spots[spot_idx]
+				var rarity_name: String = ScoringEnums.RARITY_DATA[spot["rarity"]]["name"]
+				hud.show_shop_hover_tooltip("%s Upgrade" % rarity_name, mouse_pos)
+			else:
+				hud.show_shop_hover_tooltip("Nothing", mouse_pos)
+		return
 
 	# Update the hover tooltip on the HUD (suppress during trigger animations)
 	if _trigger_anim_active or hover_result.is_empty():
@@ -298,6 +342,11 @@ func _start_new_throw() -> void:
 
 ## Called when a dart lands — process through X01 logic and update state.
 func _on_throw_completed(hit_position: Vector2) -> void:
+	# Shop throws bypass the normal scoring pipeline
+	if _in_shop:
+		_on_shop_throw_completed(hit_position)
+		return
+
 	# Clear target highlight and tooltip
 	dartboard.clear_declared_target()
 	hud.hide_target_tooltip()
@@ -380,8 +429,18 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	_update_checkout_highlights()
 
 
-## Show the leg-complete upgrade UI. Called after the score animation finishes.
+## Show the leg-complete upgrade UI or shop entry. Called after the score animation finishes.
 func _show_leg_upgrades(response: Dictionary) -> void:
+	# Accumulate saved darts for the shop window
+	_saved_darts_accumulator += x01_game.get_saved_darts()
+
+	# Check if this is a shop leg (every Nth leg)
+	if response["current_leg"] % shop_cadence == 0:
+		_leg_phase = "shop_enter"
+		var saved: int = _saved_darts_accumulator
+		hud.show_shop_entry(response["current_leg"], response["target_score"], response["current_turn"], saved)
+		return
+
 	_leg_phase = "accuracy_pick"
 	_current_upgrades = _generate_upgrades()
 	hud.show_leg_complete_with_upgrades(
@@ -422,8 +481,24 @@ func _on_next_turn() -> void:
 	_update_checkout_highlights()
 
 
-## Player presses "Next Leg" — advance to next leg after picking an upgrade.
+## Player presses "Next Leg" — advance to next leg, enter shop, or leave shop.
 func _on_next_leg() -> void:
+	if _leg_phase == "shop_enter":
+		var response: Dictionary = {
+			"current_leg": x01_game.current_leg,
+			"target_score": x01_game.target_score,
+		}
+		_start_shop(response)
+		return
+
+	if _leg_phase == "shop_complete":
+		var response: Dictionary = {
+			"current_leg": x01_game.current_leg,
+			"target_score": x01_game.target_score,
+		}
+		_end_shop(response)
+		return
+
 	_awaiting_next_leg = false
 	_turn_score = 0
 	_leg_phase = ""
@@ -441,11 +516,14 @@ func _on_new_run() -> void:
 	_run_over = false
 	_turn_score = 0
 	_leg_phase = ""
+	_in_shop = false
+	_saved_darts_accumulator = 0
 	_start_modifier_pending = false
 	hud.update_turn_score(0)
 	hud.hide_picker()
 	hud.hide_target_tooltip()
 	dartboard.clear_declared_target()
+	dartboard.clear_shop_spots()
 	scoring_modifier_manager.reset_for_run()
 	hud.clear_modifier_panel()
 	hud.clear_modifier_status()
@@ -456,6 +534,277 @@ func _on_new_run() -> void:
 	# Restore to raw stats (before any build) so the assembly screen starts fresh
 	_restore_raw_stats()
 	_show_assembly()
+
+
+# --- Shop System ---
+
+## Start the shop phase. Called instead of normal upgrade picks on shop legs.
+func _start_shop(response: Dictionary) -> void:
+	_in_shop = true
+	_shop_darts_remaining = _saved_darts_accumulator
+	_leg_phase = "shop"
+	_clear_darts()
+	dartboard.clear_checkout_segments()
+	hud.enter_shop_mode(_shop_darts_remaining)
+
+	# Slide board off to the left, then back from the right with shop spots
+	var viewport_size: Vector2 = get_viewport_rect().size
+	var center: Vector2 = viewport_size / 2.0
+	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
+	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(dartboard, "position", off_left, shop_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(_setup_shop_board.bind(response, off_right, center))
+
+
+## Set up the shop board and slide it in from the right.
+func _setup_shop_board(response: Dictionary, from_pos: Vector2, to_pos: Vector2) -> void:
+	dartboard.position = from_pos
+
+	if _shop_darts_remaining <= 0:
+		# Zero-dart shop — slide in empty board with message
+		var tween: Tween = create_tween()
+		tween.tween_property(dartboard, "position", to_pos, shop_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		tween.tween_callback(func() -> void:
+			hud.show_shop_zero_darts()
+			get_tree().create_timer(shop_zero_dart_duration).timeout.connect(_end_shop.bind(response))
+		)
+		return
+
+	# Generate and place lit spots
+	_shop_lit_spots = _generate_shop_spots(_shop_darts_remaining)
+	dartboard.set_shop_spots(_shop_lit_spots)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(dartboard, "position", to_pos, shop_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(func() -> void:
+		hud.show_shop_header(_shop_darts_remaining)
+		_start_new_throw()
+	)
+
+
+## Generate lit spot layout for the shop.
+func _generate_shop_spots(shop_darts: int) -> Array[Dictionary]:
+	var lit_count: int = shop_darts + shop_spot_slack
+	var rares: int = maxi(1, lit_count / 6)
+	var uncommons: int = lit_count / 3
+	var commons: int = lit_count - rares - uncommons
+
+	var spots: Array[Dictionary] = []
+	var used_segments: Array[String] = []
+
+	# Rares and uncommons go on doubles/triples
+	for _i: int in range(rares):
+		spots.append(_random_shop_spot(ScoringEnums.Rarity.RARE, true, used_segments))
+	for _i: int in range(uncommons):
+		spots.append(_random_shop_spot(ScoringEnums.Rarity.UNCOMMON, true, used_segments))
+	# Commons go on singles
+	for _i: int in range(commons):
+		spots.append(_random_shop_spot(ScoringEnums.Rarity.COMMON, false, used_segments))
+
+	return spots
+
+
+## Generate a single random shop spot, avoiding duplicates.
+func _random_shop_spot(rarity: ScoringEnums.Rarity, multi_ring: bool, used: Array[String]) -> Dictionary:
+	var ring_options: Array[String]
+	if multi_ring:
+		ring_options = ["Double", "Triple"]
+	else:
+		ring_options = ["Inner Single", "Outer Single"]
+
+	# Try to place on a unique segment
+	for _attempt: int in range(40):
+		var wedge_idx: int = randi_range(0, 19)
+		var ring: String = ring_options[randi_range(0, ring_options.size() - 1)]
+		var key: String = "%d_%s" % [wedge_idx, ring]
+		if key not in used:
+			used.append(key)
+			return {"wedge_index": wedge_idx, "ring_name": ring, "rarity": rarity, "active": true}
+
+	# Fallback — place anyway (board may be crowded)
+	var wedge_idx: int = randi_range(0, 19)
+	var ring: String = ring_options[0]
+	return {"wedge_index": wedge_idx, "ring_name": ring, "rarity": rarity, "active": true}
+
+
+## Handle a throw during the shop phase.
+func _on_shop_throw_completed(hit_position: Vector2) -> void:
+	dartboard.clear_declared_target()
+	hud.hide_target_tooltip()
+
+	# Revert temp bonuses from throw modifiers
+	_revert_temp_bonuses()
+	_update_stats_display()
+	var no_modifiers: Array[String] = []
+	hud.update_modifier_status(no_modifiers)
+
+	# Place dart marker
+	_place_dart(hit_position)
+	AuidoManager.play_dart_thunk()
+	dartboard.flash_segment(hit_position)
+
+	_shop_darts_remaining -= 1
+
+	# Check if a lit spot was hit
+	var spot_idx: int = dartboard.check_shop_hit(hit_position)
+
+	if spot_idx >= 0:
+		# Hit a lit spot — deactivate it and generate 2 mixed picks
+		var spot: Dictionary = _shop_lit_spots[spot_idx]
+		dartboard.deactivate_shop_spot(spot_idx)
+		var rarity: ScoringEnums.Rarity = spot["rarity"] as ScoringEnums.Rarity
+		_shop_pick_items = _generate_shop_picks(rarity)
+		_leg_phase = "shop_pick"
+		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining)
+	else:
+		# Miss — continue or end
+		hud.show_shop_header(_shop_darts_remaining)
+		if _shop_darts_remaining <= 0:
+			_end_shop_delayed()
+		else:
+			_enable_hover()
+			_awaiting_next_dart = true
+			_start_next_dart_timer()
+
+
+## Generate 2 mixed shop picks (accuracy upgrades or modifiers) at a given rarity.
+func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
+	var picks: Array[Dictionary] = []
+
+	for _i: int in range(2):
+		# 50/50 chance of accuracy upgrade vs modifier
+		if randi_range(0, 1) == 0:
+			picks.append(_generate_shop_accuracy_pick(rarity))
+		else:
+			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity)
+			if mods.size() > 0:
+				picks.append({"type": "modifier", "data": mods[0]})
+			else:
+				picks.append(_generate_shop_accuracy_pick(rarity))
+
+	return picks
+
+
+## Generate a single accuracy upgrade pick at a given rarity tier.
+func _generate_shop_accuracy_pick(rarity: ScoringEnums.Rarity) -> Dictionary:
+	var type_idx: int = randi_range(0, UPGRADE_TYPES.size() - 1)
+	var upgrade_type: Dictionary = UPGRADE_TYPES[type_idx]
+
+	var rarity_table: Array[Dictionary]
+	if upgrade_type["tradeoff"]:
+		rarity_table = CONSISTENCY_RARITY_TABLE
+	elif upgrade_type["scale"] == "speed":
+		rarity_table = SPEED_RARITY_TABLE
+	else:
+		rarity_table = STANDARD_RARITY_TABLE
+
+	# Map ScoringEnums.Rarity to the rarity table entry
+	var rarity_idx: int = clampi(rarity, 0, 2)
+	var rarity_entry: Dictionary = rarity_table[rarity_idx]
+	var value: int = randi_range(rarity_entry["min_value"], rarity_entry["max_value"])
+
+	var upgrade: Dictionary = {
+		"name": upgrade_type["name"],
+		"property": upgrade_type["property"],
+		"scale": upgrade_type["scale"],
+		"description": upgrade_type["description"],
+		"rarity": rarity_entry["name"],
+		"color": rarity_entry["color"],
+		"value": value,
+		"tradeoff": upgrade_type["tradeoff"],
+		"penalty_property": upgrade_type.get("penalty_property", ""),
+		"penalty_name": upgrade_type.get("penalty_name", ""),
+		"penalty_amount": upgrade_type.get("penalty_amount", 0),
+	}
+
+	return {"type": "upgrade", "data": upgrade}
+
+
+## Player picks an item from the shop's 2-of-2 menu.
+func _on_shop_pick_selected(index: int) -> void:
+	var item: Dictionary = _shop_pick_items[index]
+
+	if item["type"] == "upgrade":
+		_apply_upgrade(item["data"])
+		_update_stats_display()
+		_continue_shop_after_pick()
+		return
+
+	# Modifier pick
+	var modifier: ScoringModifier = item["data"] as ScoringModifier
+
+	if modifier.config_type == ScoringEnums.ConfigType.NONE:
+		add_scoring_modifier(modifier, {})
+	elif modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
+		_pending_modifier = modifier
+		_leg_phase = "wedge_picker"
+		_picker_selected_wedge = -1
+		dartboard.set_picker_mode(true)
+		if modifier is ColorFlipModifier:
+			hud.show_picker_header("Flip a wedge's colors")
+		else:
+			hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		hud.show_picker_prompt("Hover over a wedge and click to select")
+		return
+	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
+		_pending_modifier = modifier
+		_leg_phase = "wedge_picker"
+		_picker_selected_wedge = -1
+		dartboard.set_picker_mode(true)
+		hud.show_picker_header("Swap two wedges")
+		hud.show_picker_prompt("Click to select the first wedge")
+		return
+
+	_continue_shop_after_pick()
+
+
+## Continue the shop after a pick is resolved (including wedge picker).
+func _continue_shop_after_pick() -> void:
+	_leg_phase = "shop"
+	if _shop_darts_remaining <= 0:
+		_end_shop_delayed()
+	else:
+		hud.show_shop_header(_shop_darts_remaining)
+		_start_new_throw()
+
+
+## Show shop complete screen with a button to advance.
+func _end_shop_delayed() -> void:
+	_leg_phase = "shop_complete"
+	hud.show_shop_complete()
+
+
+## Finalize the shop and advance to the next leg with a slide transition.
+func _end_shop(response: Dictionary) -> void:
+	_in_shop = false
+	_saved_darts_accumulator = 0
+	_shop_lit_spots.clear()
+	_leg_phase = ""
+	_clear_darts()
+	hud.exit_shop_mode()
+
+	# Slide board off to the right, clear shop, slide back from the left
+	var viewport_size: Vector2 = get_viewport_rect().size
+	var center: Vector2 = viewport_size / 2.0
+	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
+	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(dartboard, "position", off_right, shop_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(func() -> void:
+		dartboard.clear_shop_spots()
+		dartboard.position = off_left
+		_awaiting_next_leg = false
+		scoring_modifier_manager.reset_for_leg()
+		x01_game.advance_leg()
+		_update_all_hud()
+		_sync_board_state()
+		_update_checkout_highlights()
+	)
+	tween.tween_property(dartboard, "position", center, shop_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(_start_new_throw)
 
 
 ## Show the dart assembly screen before starting a run.
@@ -535,6 +884,11 @@ func _on_upgrade_selected(index: int) -> void:
 
 ## Player picks a scoring modifier card.
 func _on_modifier_selected(index: int) -> void:
+	# Shop pick uses its own modifier array (2-of-2)
+	if _in_shop:
+		_on_shop_pick_selected(index)
+		return
+
 	var modifier: ScoringModifier = _current_modifiers[index]
 
 	if modifier.config_type == ScoringEnums.ConfigType.NONE:
@@ -872,6 +1226,12 @@ func _cancel_picker() -> void:
 	hud.hide_picker()
 	_pending_modifier = null
 	_picker_selected_wedge = -1
+
+	if _in_shop:
+		_leg_phase = "shop_pick"
+		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining)
+		return
+
 	_leg_phase = "modifier_pick"
 
 	# Rebuild replacement info when returning to modifier pick
@@ -890,6 +1250,9 @@ func _finish_picker() -> void:
 	hud.hide_picker()
 	_pending_modifier = null
 	_picker_selected_wedge = -1
+	if _in_shop:
+		_continue_shop_after_pick()
+		return
 	_leg_phase = ""
 	if _start_modifier_pending:
 		_start_modifier_pending = false

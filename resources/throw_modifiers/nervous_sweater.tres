@@ -4,8 +4,8 @@
 
 [resource]
 script = ExtResource("1")
-active_color = Color(1.0, 0.35, 0.3, 1)
 modifier_name = "Nervous Sweater"
-description = "+10 accuracy while score is above 50. Sweats under pressure, bonus does not apply when under 50"
-h_accuracy_bonus = 10.0
-v_accuracy_bonus = 10.0
+description = "+12 accuracy while score is above 50. Sweats under pressure, bonus does not apply when under 50"
+active_color = Color(1, 0.35, 0.3, 1)
+h_accuracy_bonus = 12.0
+v_accuracy_bonus = 12.0
