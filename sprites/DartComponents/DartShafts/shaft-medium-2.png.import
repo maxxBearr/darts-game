@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ms8q7de5l5oi"
-path="res://.godot/imported/shaft-medium.png-ddf46da91718705359b67e48e27033fe.ctex"
+uid="uid://b71wdfvbyqlxv"
+path="res://.godot/imported/shaft-medium-2.png-3031fc79caad2e276982cf6f5db7be47.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://sprites/DartComponents/DartShafts/shaft-medium.png"
-dest_files=["res://.godot/imported/shaft-medium.png-ddf46da91718705359b67e48e27033fe.ctex"]
+source_file="res://sprites/DartComponents/DartShafts/shaft-medium-2.png"
+dest_files=["res://.godot/imported/shaft-medium-2.png-3031fc79caad2e276982cf6f5db7be47.ctex"]
 
 [params]
 

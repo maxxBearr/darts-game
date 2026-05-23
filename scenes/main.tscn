@@ -69,14 +69,16 @@ shop_border_thickness = 2.2
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
-horizontal_range = 14.0
-vertical_range = 14.0
-vertical_speed = 2.3
-horizontal_speed = 2.3
+horizontal_range = 11.0
+vertical_range = 11.0
+vertical_speed = 2.15
+horizontal_speed = 2.15
 marker_size = 6.0
 marker_outline_thickness = 1.3
 resolve_preview_duration = 0.6
 resolve_preview_color = Color(1, 0.9019608, 0.2, 0.34901962)
+gaussian_spread = 0.38
+green_zone_threshold = 0.3
 accuracy_green_color = Color(0.2, 0.8509804, 0.3019608, 0.15294118)
 accuracy_neutral_color = Color(1, 0.9019608, 0.2, 0.17254902)
 accuracy_red_color = Color(0.9019608, 0.2, 0.14901961, 0.12941177)

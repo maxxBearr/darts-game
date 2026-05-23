@@ -1,7 +1,7 @@
 [gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://deni7pnn3rbeo"]
 
 [ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
-[ext_resource type="Texture2D" uid="uid://ms8q7de5l5oi" path="res://sprites/DartComponents/DartShafts/shaft-medium.png" id="2_h0803"]
+[ext_resource type="Texture2D" uid="uid://ck71essdsak1h" path="res://sprites/DartComponents/DartShafts/shaft-medium-1.png" id="2_h0803"]
 
 [resource]
 script = ExtResource("1")

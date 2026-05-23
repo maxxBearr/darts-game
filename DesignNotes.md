@@ -1,12 +1,16 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-22 after the Tutorial & Help System pass shipped.*
+*Canonical design doc. Last refreshed 2026-05-23 after the Modifier Icons & Streak Section pass shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
 ## Status snapshot
+
+**Shipped 2026-05-23 (Modifier Visual Language pass):**
+
+- **Modifier Icon Language, Streak Section, & Color Streak Split** (`specs/2026-05-23-modifier-icons-and-streak-section.md`). Replaced the flat rarity-tinted modifier squares with a category-aware shape language (`scripts/modifier_icon.gd`): circles for color, squares for even, triangles for odd, sectors for wedge. New `StreakSection` in the HUD shows owned streak modifiers as `[Icon] [Name] [(per scope)] : xN` lines, dimmed at idle (x0). Introduced explicit `ModifierKind` enum (RELIC / BOARD_MUTATION) — Wedge Value, Wedge Swap, and Color Flip are now BOARD_MUTATION and don't appear in the modifier panel (the board itself is their receipt). Color Streak split into four per-color variants (Red / Green / Black / White Streak) sharing the COLOR slot; uniform 1/4 weighting. Wedge Streak dropped its leniency axis — always WHOLE_WEDGE; rarity drives scope only; streak section displays the dynamic streaked-wedge value (`20 Wedge Streak` → `5 Wedge Streak` when the player switches). Added `bonus_per_hit` exported var on all three streak types (color/parity default 1, wedge default 2 — grouping is harder).
 
 **Shipped 2026-05-22 (Tutorial pass):**
 
@@ -175,7 +179,8 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 - Leg complete message with upgrade choices (3 buttons, rarity-colored).
 - Game over / run over display.
 - Hover tooltip for board segments (shows effective score, modified indicator).
-- Modifier panel (relic bar) — horizontal row of placeholder squares for active scoring modifiers, tinted by rarity, with tooltip on hover.
+- Modifier panel (relic bar) — horizontal row of `ModifierIcon` Controls for active RELIC scoring modifiers (BOARD_MUTATION modifiers don't appear here). Each icon is custom-drawn by category shape with rarity outline and optional category outline. Lock/unlock indicator overlaid as a small label (O = toggleable, X = locked). Tooltip on hover.
+- Streak section — runtime status display for owned streak modifiers (added 2026-05-23). One line per streak (max 3, gated by one-per-category slot rule): `[Icon] [Name] (per scope) : xN`. Wedge Streak name interpolates the current streaked-wedge face value from `effective_wedge_values`. Lines dim to `streak_idle_opacity` at x0 and to `streak_disabled_opacity` when an unlocked modifier is toggled off. `update_streak_section(streak_modifiers, effective_wedge_values)` is called from `main.gd` after every throw and on modifier acquire/toggle/reset events.
 
 ### `dart_marker.gd` — Visual marker for landed darts.
 
@@ -186,7 +191,9 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 
 - `class_name ScoringEnums` — globally accessible.
 - `SegmentColor { RED, GREEN, BLACK, WHITE }` — the four segment colors on a standard dartboard.
-- `ModifierTiming { ON_ACQUIRE, PER_DART }` — when a modifier fires.
+- `ModifierTiming { ON_ACQUIRE, PER_DART }` — when a modifier fires in the scoring pipeline.
+- `ModifierKind { RELIC, BOARD_MUTATION }` — whether the modifier persists in the inventory (relic panel) or is a one-time board change with no panel presence. Drives `hud.gd::add_modifier_to_panel()` early-return.
+- `IconShape { NONE, COLOR_CIRCLE, EVEN_SQUARE, ODD_TRIANGLE, WEDGE_SECTOR }` — visual category for `ModifierIcon` shape dispatch. Only RELIC modifiers override it.
 - `StreakScope { NONE, WITHIN_TURN, WITHIN_LEG, WITHIN_RUN }` — how long streak history persists.
 - `StreakCategory { NONE, WEDGE, COLOR, PARITY }` — slot category for streak modifiers (one-per-category restriction).
 - `ConfigType { NONE, PICK_WEDGE, PICK_TWO_WEDGES }` — whether the player must configure the modifier.
@@ -224,22 +231,41 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 ### `scoring_modifier.gd` — Base Resource class for all scoring modifiers.
 
 - `class_name ScoringModifier extends Resource`
-- Exports: `modifier_name`, `description`, `timing`, `streak_scope`, `streak_category`, `config_type`, `rarity_tier`. Derived getters expose `rarity` (display name) and `rarity_color` from the rarity tier.
+- Exports: `modifier_name`, `description`, `timing`, `kind` (RELIC by default), `streak_scope`, `streak_category`, `config_type`, `rarity_tier`. Derived getters expose `rarity` (display name) and `rarity_color` from the rarity tier.
 - Runtime state: `enabled: bool` (true by default; toggled off when the player clicks an unlocked modifier) and `toggleable: bool` (rolled at generation via `roll_toggleable()`).
 - Virtual method `apply(result, context) -> Dictionary` — override in subclasses.
+- Virtual method `get_icon_shape() -> ScoringEnums.IconShape` — returns `NONE` by default. RELIC subclasses override to declare their shape; BOARD_MUTATION subclasses don't override (they never render).
 - Virtual methods `get_streak_count()` and `get_streak_display()` for streak modifier tooltip integration.
 - Virtual methods `save_streak_state()` / `restore_streak_state_from(snapshot)` — overridden by streak subclasses to support speculative simulation by the checkout solver. Non-streak modifiers return empty dicts and are no-ops.
 - Helper `_track_modification()` for recording changes to the result.
 - Lock/unlock system: `UNLOCK_CHANCE: int = 35` (constant). `roll_toggleable()` rolls a d100 against this — 35% land toggleable, 65% locked. Called from each subclass's `generate()` after rarity is set.
 
+### `modifier_icon.gd` — Custom-drawn icon Control for RELIC modifiers (added 2026-05-23).
+
+- `class_name ModifierIcon extends Control`. Used by the HUD modifier panel (40px relic squares) and the new streak section (20px inline icons). Same renderer, different sizes — exported via `streak_icon_size` on `hud.gd` for the small variant.
+- `_draw()` dispatches on `modifier.get_icon_shape()`. Shape helpers: `_draw_circle()`, `_draw_square()`, `_draw_triangle()`, `_draw_sector()`. All draw inside the Control's `size` minus `draw_inset`.
+- Color modifiers: filled with the target SegmentColor. Outline = rarity. One outline.
+- Parity modifiers: neutral dark fill. Inner outline = category color (red for even, green for odd). Outer outline = rarity. Two outlines.
+- Wedge Streak: neutral dark fill. Outline = rarity. One outline.
+- BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) keep the default `IconShape.NONE` and never render — they have no panel presence.
+- Exports for inspector tuning: `rarity_outline_width`, `category_outline_width`, `outline_gap`, `draw_inset`, `neutral_fill_color`, plus per-color overrides for the four SegmentColor fills.
+- **Deferred:** if visual identity needs to push past this geometric base, the next pass is hand-drawn art per modifier (not exported font glyphs).
+
 ### Modifier Subclasses (in `res://scripts/modifiers/`)
 
-- **`wedge_value_modifier.gd`** (`WedgeValueModifier`) — ON_ACQUIRE, PICK_WEDGE config. Adds `bonus_value` to a selected wedge's effective face value.
-- **`color_bonus_modifier.gd`** (`ColorBonusModifier`) — PER_DART. Adds `bonus_multiplier` to darts landing on segments of a specific `target_color`.
-- **`streak_bonus_modifier.gd`** (`StreakBonusModifier`) — PER_DART, streak_category WEDGE. Awards cumulative +1x per consecutive qualifying hit on the same wedge. Leniency tiers: SAME_RING, ADJACENT_SECTIONS, WHOLE_WEDGE.
-- **`color_streak_modifier.gd`** (`ColorStreakModifier`) — PER_DART, streak_category COLOR. Awards cumulative +1x per consecutive same-color hit.
-- **`parity_streak_modifier.gd`** (`ParityStreakModifier`) — base resource for parity streak behavior. After the HUD pass (2026-05-21), parity is split into two distinct items: **`even_streak_modifier.gd`** and **`odd_streak_modifier.gd`**, both declaring `streak_category PARITY` and sharing the single parity slot under the standard one-per-category rule. PER_DART. Awards cumulative +1x per consecutive same-parity hit (evens-only or odds-only depending on which item is equipped).
-- **`odd_even_bonus_modifier.gd`** (`OddEvenBonusModifier`) — PER_DART. Bonus on odd or even face values.
+All modifiers declare a `kind` (RELIC or BOARD_MUTATION). RELIC modifiers persist in the modifier panel and contribute to scoring per dart. BOARD_MUTATION modifiers fire once at acquisition, mutate the board, and disappear from the inventory — the board is their visible record.
+
+**RELIC modifiers:**
+
+- **`color_bonus_modifier.gd`** (`ColorBonusModifier`) — PER_DART. Adds `bonus_multiplier` to darts landing on segments of a specific `target_color`. Icon: COLOR_CIRCLE.
+- **`streak_bonus_modifier.gd`** (`StreakBonusModifier`, "Wedge Streak") — PER_DART, streak_category WEDGE. Awards `bonus_per_hit × (count - 1)` cumulative multiplier per consecutive same-wedge hit. Always WHOLE_WEDGE matching (any ring on the same numbered wedge counts) — leniency axis was removed 2026-05-23. Rarity drives scope (turn/leg/run) only. Default `bonus_per_hit = 2` because grouping is significantly harder than color/parity streaks. Icon: WEDGE_SECTOR.
+- **`color_streak_modifier.gd`** (`ColorStreakModifier`) — PER_DART, streak_category COLOR. Single class with `target_color` rolled at generation: instances appear as Red Streak / Green Streak / Black Streak / White Streak. Awards `bonus_per_hit × (count - 1)` per consecutive hit on the target color. Default `bonus_per_hit = 1`. Pool weight `4` per flavor (so the four together approximate the original combined rate); color is rolled uniformly within the color-streak pool. Icon: COLOR_CIRCLE.
+- **`parity_streak_modifier.gd`** (`ParityStreakModifier`) — base resource for parity streak behavior. Split into two distinct items (2026-05-21): **`even_streak_modifier.gd`** and **`odd_streak_modifier.gd`**, both declaring `streak_category PARITY` and sharing the single parity slot under the standard one-per-category rule. PER_DART. Awards `bonus_per_hit × (count - 1)` per consecutive same-parity hit. Default `bonus_per_hit = 1`. Icon: EVEN_SQUARE / ODD_TRIANGLE.
+- **`odd_even_bonus_modifier.gd`** (`OddEvenBonusModifier`) — PER_DART. Bonus multiplier on odd OR even face values, picked at generation. Icon: ODD_TRIANGLE or EVEN_SQUARE depending on `target_odd`.
+
+**BOARD_MUTATION modifiers** (no panel presence, no icon):
+
+- **`wedge_value_modifier.gd`** (`WedgeValueModifier`) — ON_ACQUIRE, PICK_WEDGE config. Adds `bonus_value` to a selected wedge's effective face value. The board renders the new number.
 - **`wedge_swap_modifier.gd`** (`WedgeSwapModifier`) — ON_ACQUIRE, PICK_TWO_WEDGES config. Swaps two wedges' positions on the board.
 - **`color_flip_modifier.gd`** (`ColorFlipModifier`) — ON_ACQUIRE. Flips segment colors.
 
@@ -302,7 +328,7 @@ Key properties per component:
 
 ### Assembly Screen (Visual Design)
 
-- HBoxContainer with three TextureRect children (barrel, shaft, flight) with separation = -2 to -5 for seamless visual connection.
+- HBoxContainer with three TextureRect children (barrel, shaft, flight) with separation = -2 to -5 for seamless visual connection. A purely-decorative point sprite (added 2026-05-23) renders to the left of the barrel for visual completeness — it is **not** a customizable component, the customization system remains three slots (barrel/shaft/flight). Position controlled by exported `point_preview_size`, `point_preview_h_offset`, `point_preview_v_offset` vars on `assembly_screen.gd`.
 - Gradient balance bar at the bottom: left = red/warm (front-heavy), center = green (balanced), right = blue/cool (back-heavy). Needle/marker shows current balance value, slides in real time as parts are swapped.
 - Part art: each type has consistent canvas height, variable width. Connection edges mate cleanly at fixed Y positions. Barrels are cropped tight to art width so HBox auto-adjusts positioning.
 
@@ -580,6 +606,7 @@ Slides cover: board orientation, singles, doubles, triples, bullseye, x01 scorin
 ### Phase 6.5 — Checkout Helper — COMPLETE (shipped 2026-05-22 on `checkout-helper` branch). Solver-driven text panel for valid checkout paths and setup recommendations. Lives in `scoring_modifier_manager.gd` + `hud.gd`.
 ### Phase 6.6 — Locked/Unlocked Modifier Status — COMPLETE (shipped 2026-05-22 on `checkout-helper` branch). 65/35 lock-rate roll at modifier generation. Toggle interaction in HUD modifier panel.
 ### Phase 6.7 — Tutorial & Help System — COMPLETE (shipped 2026-05-22). Start Screen, 3-throw sandbox mechanics tutorial with in-context stat reveals and three interactive slider demos, rules slideshow + interactive doubles drill, first-run welcome modal with `user://settings.cfg` persistence, ghost-dart scatter visualization (also exposed as opt-in always-on preview). Spec at `specs/2026-05-22-tutorial-and-help-system.md`. Assembly Tutorial and persistent Stats Reference deferred — playtest showed in-context teaching makes them lower priority.
+### Phase 6.8 — Modifier Visual Language & Streak Section — COMPLETE (shipped 2026-05-23). Spec at `specs/2026-05-23-modifier-icons-and-streak-section.md`. `ModifierIcon` shape language for the relic bar and streak section, dedicated runtime streak status strip, Color Streak split into four per-color variants, Wedge Streak simplified (leniency dropped), explicit RELIC vs BOARD_MUTATION classification. Pick-card icons, streak entry animations, broken-streak feedback, and the shared geometry helper refactor deferred.
 ### Phase 7 — More Modifiers & Items — PLANNED. Includes the **rule-modifier category** (turn-count buffs, rethrows, see-extra-options-at-shop, etc.) as a deferred-but-discussed expansion.
 ### Phase 8 — Form System — PLANNED
 ### Phase 9+ — Polish & Beyond — FUTURE
@@ -625,3 +652,7 @@ Slides cover: board orientation, singles, doubles, triples, bullseye, x01 scorin
 - **Soft hints over active suggestions.** "Try toggling a modifier" instead of "disable Color Streak to enable T20-T20-Bull." Active suggestions feel like the helper is playing for the player; passive nudges teach the verb without commandeering the decision. Applies to all future helper-style features.
 - **Locked/unlocked is a 65/35 generation roll with no compensating buff for locked.** Rarity is the power axis, not lock status. Locked is a *constraint* (can't toggle off) at the same statline as unlocked. The interesting decision lives at the rarity boundary (locked-rare vs unlocked-uncommon), not within a single rarity.
 - **Modifier commits are leg-scale, not run-scale.** Locked items can be swapped at the next shop or post-leg pick. Long enough for commits to feel real; short enough to not feel punishing.
+- **Modifiers come in two kinds: RELIC and BOARD_MUTATION.** RELIC modifiers persist in the modifier panel, contribute to scoring per dart, and have icons. BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) fire once at acquisition, mutate the dartboard, and then disappear from the inventory entirely — the board itself is their visible record. Two different player-mental-model questions: "what's actively scoring for me?" (panel) vs. "what does the board look like?" (the board). The distinction prevents inventory noise from one-time effects.
+- **Modifier visual language is shape + color + outline.** Shape encodes category (circle = color, square = even, triangle = odd, sector = wedge). Fill carries the within-category specifics (target color) where applicable; otherwise neutral fill. Outlines layer rarity-color outside category-color (parity modifiers) or rarity-color alone (color and wedge modifiers). Bonus vs Streak within a category is **not** distinguished by icon — they live in different UI surfaces (relic bar vs streak section), and location does the disambiguation. If visual identity needs more weight than geometry can carry, the next step is hand-drawn art per modifier, not exported font glyphs.
+- **Color streaks are per-color modifiers, not a single generic streak.** Four flavors (Red / Green / Black / White Streak) share the COLOR slot. Uniform 1/4 roll within the color-streak pool — black/white score less per hit but are easier to streak; red/green score more but require doubles/triples/bullseye. Rarity scope (turn/leg/run), lock/unlock status, and build synergy already provide enough variation axes that flat color weighting is the right v1.
+- **Wedge Streak is always WHOLE_WEDGE — leniency dropped.** Any ring on the same numbered wedge counts (D20 → S20 → T20 streaks). Rarity drives scope only, like the other streak modifiers. Default `bonus_per_hit = 2` (vs 1 for color/parity) because consecutive-same-wedge throws are significantly harder than consecutive-color or consecutive-parity throws. All three streak types' `bonus_per_hit` are exported for inspector tuning.

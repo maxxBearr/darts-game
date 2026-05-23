@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://q6dqvvrvq51m"
-path="res://.godot/imported/barrel-long.png-d03870c66af2d988e7c7188f35c5f04f.ctex"
+uid="uid://cmf2i6270asyr"
+path="res://.godot/imported/barrel-long-2.png-dfdc80a6ee3a99c6b26e855d8814eea7.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://sprites/DartComponents/DartBarrels/barrel-long.png"
-dest_files=["res://.godot/imported/barrel-long.png-d03870c66af2d988e7c7188f35c5f04f.ctex"]
+source_file="res://sprites/DartComponents/DartBarrels/barrel-long-2.png"
+dest_files=["res://.godot/imported/barrel-long-2.png-dfdc80a6ee3a99c6b26e855d8814eea7.ctex"]
 
 [params]
 

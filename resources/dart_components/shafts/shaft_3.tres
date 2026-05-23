@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://c05dmcsckt3nc"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_1fuax"]
+[ext_resource type="Texture2D" uid="uid://b71wdfvbyqlxv" path="res://sprites/DartComponents/DartShafts/shaft-medium-2.png" id="2_w4dbx"]
+
+[resource]
+script = ExtResource("1_1fuax")
+component_name = "Medium"
+texture = ExtResource("2_w4dbx")
+metadata/_custom_type_script = "uid://bqjgrqhnbb5uv"
