@@ -145,6 +145,10 @@ var _scripted_mode: bool = false
 ## When true, _process() returns early entirely — markers frozen, no input accepted.
 var _paused: bool = false
 
+## When true, the meter keeps bouncing but clicks/keys don't commit. Used by the
+## H Speed tutorial demo so the player can see speed changes without locking.
+var _input_blocked: bool = false
+
 ## Emitted every _process tick during VERTICAL_RELEASE / HORIZONTAL_RELEASE with the current
 ## normalized bounce_t so the tutorial controller can detect when meters reach freeze points.
 signal meter_position_changed(state: ThrowState, normalized_t: float)
@@ -412,8 +416,8 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Block all input while paused or in scripted mode
-	if _paused or _scripted_mode:
+	# Block all input while paused, scripted, or input-blocked
+	if _paused or _scripted_mode or _input_blocked:
 		return
 
 	# Detect WASD/arrow presses to switch away from mouse control
@@ -819,6 +823,20 @@ func _get_pulse_values() -> Dictionary:
 ## Set paused state — when paused, _process returns early and no input is accepted.
 func set_paused(paused: bool) -> void:
 	_paused = paused
+
+
+## Block/unblock player input without stopping the meter animation.
+## Used by the H Speed demo so the marker keeps bouncing but clicks don't commit.
+func set_input_blocked(blocked: bool) -> void:
+	_input_blocked = blocked
+
+
+## Recompute the cached aim ellipse dimensions from the current range stats.
+## Called by the tutorial Range slider demo so the ellipse visually resizes live.
+func recompute_aim_dimensions() -> void:
+	_aim_half_width = _get_aim_half_width()
+	_aim_half_height = _get_aim_half_height()
+	queue_redraw()
 
 
 ## Enable or disable scripted mode. When scripted, _process skips bounce_t updates

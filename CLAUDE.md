@@ -1,462 +1,242 @@
-# Tutorial & Help System
+# Tutorial & Help System — Phase A Shipped, Phase B Additions
 
-**Spec date:** 2026-05-22
-**Status:** Designed, ready for implementation
-**Scope:** First-time-player onboarding + persistent help reference. Adds a Start Screen ahead of Assembly, a sandbox Mechanics Tutorial (3-throw guided walkthrough using freeze-and-explain at the three accuracy zones, with ghost-dart scatter previews), an Assembly Tutorial (guided walkthrough of the assembly UI), a persistent Stats Reference, a persistent Rules of Darts reference (slideshow + interactive doubles-checkout drill), and a first-run welcome prompt. Replays available via buttons in Assembly. Designed so Max can hand the game to friends — including friends who've never thrown a dart — without sitting next to them to explain.
-
-## Summary
-
-Three-pronged problem:
-
-1. **Darts mechanics** (V meter, H meter, accuracy zone, scatter) — the game's *signature interaction* that no other dart game does. Requires demonstration.
-2. **x01 rules** (wedge layout, scoring, doubles checkout, bust) — the rules of *darts itself*. Required for anyone who hasn't played the pub game. Some friends will already know these; many will not.
-3. **Build/assembly literacy** (components, stats, balance, modifier lock state) — the *roguelike* layer. Required for anyone playing more than one leg.
-
-These three concerns are deliberately kept as separate flows. Darts vets skip the rules. Returning players skip the mechanics tutorial. The Assembly Tutorial only matters once the player understands throwing and rules. Mixing them is cognitive overload — and tracking them separately means each can be rebuilt independently if playtesting reveals one is unclear.
-
-Eight parts to the spec:
-
-1. The Start Screen (new entry point ahead of Assembly).
-2. The Mechanics Tutorial — sandbox mode with 3-throw walkthrough using freeze-and-explain at each accuracy zone.
-3. The Ghost-Dart Scatter Preview — reusable visualization, used in the tutorial and optionally always-on.
-4. Meter Zone Bands — colored regions on the H meter showing the green/neutral/red zones.
-5. The Assembly Tutorial — guided walkthrough of the assembly screen.
-6. The Stats Reference — persistent expandable panel.
-7. The Rules of Darts — persistent slideshow + interactive doubles-checkout drill.
-8. First-Run Trigger + Settings Persistence.
-
-A phasing recommendation appears at the end — if all eight pieces are too much for one Claude Code pass, parts 1, 2, 7, and 8 are the MVP "ship to friends" cut.
+**Spec date:** 2026-05-22 (original) | revised 2026-05-22 (Phase B additions)
+**Status:** Phase A shipped via Claude Code; Phase B additions designed, ready for implementation.
+**Scope of this pass:** Fold stat education into the existing mechanics tutorial via progressive bar reveals and three interactive slider demos, a "real stats" requirement that ties the tutorial throws to the player's actual build, and a side-by-side mini-dartboard rework of the rules slideshow (because the current implementation's highlights are obscured by the modal scrim). Leaves Assembly Tutorial (Section 5) and Stats Reference (Section 6) as smaller follow-ons.
 
 ---
 
-## 1. The Start Screen
+## Already Shipped (do NOT rebuild)
 
-New entry point. Currently `main.gd::_ready()` jumps directly to `_show_assembly()`. The start screen sits ahead of that.
+The first Claude Code pass shipped the bulk of the original spec. Before adding anything, read the relevant files to understand the current shape — Phase B plugs *into* this code, not alongside it.
 
-### 1a. Layout
+| Spec section | Status | Lives in |
+|---|---|---|
+| 1. Start Screen | Shipped | `scripts/start_screen.gd`; wired in `main.gd` (signals: `start_game_pressed`, `play_tutorial_pressed`, `rules_pressed`, `stats_reference_pressed`). `stats_reference_pressed` is emitted but not yet handled — see Section 6 below. |
+| 2. Mechanics Tutorial | Shipped | `scripts/tutorial_controller.gd` (448 lines, full 3-throw walkthrough). Captions live in the exported `tutorial_strings: Dictionary`. Throw 1 beats are split across named functions: `_throw1_place_aim`, `_throw1_explain_ideal`, `_throw1_lock_vertical`, `_throw1_start_h_freezes`, `_throw1_show_h_freeze`, `_throw1_next_h_freeze`, `_throw1_resume_h`. Throw 2 is `_start_throw_2_guided` → `_on_throw_2_completed`. Throw 3 is `_start_throw_3_free` → `_on_throw_3_completed` → `_build_end_buttons`. |
+| 2c. Throw mechanic hooks | Shipped | `throw_mechanic.gd`: `set_paused`, `set_scripted_mode`, `set_bounce_t`, `set_horizontal_bounce_t`, `force_lock_aim`, `force_lock_vertical`, `force_lock_horizontal`, `meter_position_changed` signal, `get_zone_boundary_h_positions`. |
+| 2e. Callout overlay | Shipped | `scripts/tutorial_callout.gd`. |
+| 3. Ghost-Dart Scatter Preview | Shipped | `scripts/ghost_dart_layer.gd`; sampler is `throw_mechanic.sample_scatter_points(...)`; opt-in live preview exposed via `live_scatter_preview: bool` and `live_scatter_sample_count: int` on throw_mechanic. |
+| 4. Meter Zone Bands | Shipped | `throw_mechanic.gd::show_h_meter_zone_bands: bool` toggles them; rendered alongside the H meter using existing `accuracy_*_color` exports. |
+| 7. Rules of Darts | Shipped | `scripts/rules_slideshow.gd` (405 lines, slideshow + doubles drill). Dartboard highlight via `dartboard.set_tutorial_highlight(...)` / `clear_tutorial_highlight()`. Slide content lives in exported `rules_slides: Array[Dictionary]`. |
+| 8. First-Run Trigger | Shipped | `scripts/settings_store.gd` (static singleton over `ConfigFile` at `user://settings.cfg`). `scripts/welcome_modal.gd` is the soft prompt. `main.gd::_ready` checks `SettingsStore.get_tutorial_seen()` and routes accordingly. `debug_reset_tutorial_seen` export on main.gd lets Max reset the flag from the inspector. |
 
-Full-screen `Control` overlay, same canvas layer as the HUD. Three buttons stacked vertically:
-
-- **Start Game** — proceeds to the Assembly screen (current default behavior).
-- **Play Tutorial** — enters the Mechanics Tutorial sandbox (Section 2).
-- **Rules of Darts** — opens the Rules slideshow (Section 7).
-
-A small "?" or text button for **Stats Reference** is visible but secondary — it's most useful in-game, but accessible here for completeness.
-
-### 1b. Implementation
-
-- New scene/script: `scripts/start_screen.gd` extending `Control` with `class_name StartScreen`.
-- Lives at `$HUD/StartScreen` in the main scene tree.
-- Signals: `start_game_pressed`, `play_tutorial_pressed`, `rules_pressed`, `stats_reference_pressed`.
-- `main.gd::_ready()` shows the StartScreen first; only after `start_game_pressed` does `_show_assembly()` fire.
-- StartScreen visibility is exclusive with AssemblyScreen — when one is visible the other is hidden.
-- All button positions, sizes, fonts, and colors exported with hover descriptions.
-
-### 1c. Replay buttons (in Assembly)
-
-The Assembly screen gains two new buttons (in addition to the existing Begin Run flow):
-
-- **Play Tutorial** — re-enters the Mechanics Tutorial sandbox. Same destination as the Start Screen button.
-- **Assembly Tutorial** — enters the Assembly Tutorial overlay (Section 5).
-
-Both also accessible later via a top-bar "?" menu or similar (out of scope for this spec — for now, Assembly is the central re-entry point because that's where the player sits between legs).
+**Reminder for the next pass:** if a section in this spec contradicts what's in the code, treat the *code* as the current truth and adapt the spec changes to it (Phase A may have made small variations during implementation). Don't restructure shipped code unless the spec explicitly calls for it.
 
 ---
 
-## 2. The Mechanics Tutorial (Sandbox)
+## Phase B — New Work
 
-The signature flow of this spec. Walks a brand-new player through the throw mechanic in three throws: demo → guided → free. No score pressure, no x01 game logic, no dart budget.
+Five changes. B1–B4 are all folded into the existing mechanics tutorial — the goal there is to **teach stats in context**, where each stat is revealed and explained next to the throw stage it controls, rather than as a separate Stats Reference flow. B5 is independent — a layout/visual fix to the already-shipped rules slideshow.
 
-### 2a. Sandbox mode
+### B1. Real stats throughout the tutorial
 
-A new game phase, distinct from a real x01 run. Owned by `main.gd` via a new `_in_tutorial: bool` flag plus a small `tutorial_controller.gd` (new file) that orchestrates the beats.
+The tutorial sandbox should use the player's *actual* build stats — not arbitrary tutorial-friendly defaults — so the throws in tutorial throw 3 feel exactly like the throws in their first real leg.
 
-- The dartboard renders normally.
-- The throw mechanic runs normally — except where the tutorial pauses or scripts it (Section 2c).
-- `x01_game.gd` is NOT involved. No remaining-score countdown, no busts, no leg/turn counters. The HUD hides score-related labels during tutorial.
-- `scoring_modifier_manager.gd` runs in a clean state (no active modifiers) so the scoring is vanilla — the tutorial is teaching base mechanics, not modifier interactions.
-- Dart markers from previous throws stay on the board until the tutorial exits.
-- An "Exit Tutorial" button is visible at all times (top-right). Clicking it returns to the Start Screen if entered from there, or to Assembly if entered from there.
+**Behavior:**
 
-### 2b. The three-throw structure
+- When tutorial is entered from the **Start Screen on first run**, the player has no equipped build yet, so the throw_mechanic is on its default exported values. That's fine — use them as-is. Don't seed special tutorial values.
+- When tutorial is entered from **Assembly** (replay), the player has an equipped build. The throw_mechanic stats reflect that build (per `dart_build.apply_to_throw_mechanic(...)` in main.gd's `_on_run_confirmed`). Use those values. This becomes an emergent "feel my current build" tool for returning players.
+- When the **live slider demos** (B3) temporarily mutate a stat, the original value must be snapshotted before the demo and restored after. Pattern to follow: `main.gd::_snapshot_base_stats` / `_restore_raw_stats`. Wrap each demo in a save/restore.
 
-**Throw 1 — Demo (autopilot with freeze-and-explain).** The tutorial drives the throw with the player as observer. Beats:
+**Implementation:**
 
-1. Show the dartboard with a callout pointing at a chosen target wedge (default: outer single 20 — fat, easy to see). Caption: "We'll throw at the 20."
-2. Auto-place the aim ellipse at the target. Show a labeled callout on the ellipse: "This is your **aim ellipse**. Where your dart can possibly end up after the meters resolve. Bigger ellipse = wider range of outcomes." Pause for a "Next" click.
-3. Highlight the target wedge centroid with a small marker (the "ideal aim point"). Caption: "The center of your target is the ideal spot. Time the meters to land as close to it as possible."
-4. Auto-progress to VERTICAL_RELEASE. Marker bounces. Auto-stop at a roughly-center vertical position (within the green zone band for the V axis). Caption: "First you lock your **vertical** position." Pause for "Next".
-5. Auto-progress to HORIZONTAL_RELEASE. Marker bounces, but the tutorial scripts the H meter (Section 2c) so that it auto-pauses at three predetermined points:
-   - **First pause (green zone).** Caption: "Locked here — close to the centroid — your scatter shrinks." Show the Ghost-Dart Scatter Preview (Section 3) at this candidate locked position: a tight cluster of ~10 ghost darts.
-   - **Second pause (orange/neutral zone).** Caption: "Here — neutral. No bonus, no penalty. Default scatter." Ghost-dart preview shows a wider cluster.
-   - **Third pause (red zone).** Caption: "Far from the centroid — your dart sprays wider." Ghost-dart preview shows a loose, scattered pattern.
-6. Resume and let the H meter complete at its natural moment (tutorial picks one — recommend the orange zone for an honest neutral outcome). The throw resolves normally. Dart lands. Caption: "That's the full throw. The colored zones on the H meter (Section 4) show you where green / orange / red are."
+- Add a small helper on `tutorial_controller.gd`: `_snapshot_stat(stat_name: String) -> float` and `_restore_stat(stat_name: String, value: float) -> void`. The snapshot stores the throw_mechanic property by name; restore writes it back. Called before/after each B3 demo.
+- No new public API on `throw_mechanic.gd` — the controller reads/writes the existing exported vars directly.
+- Document in the controller's class comment that the tutorial assumes throw_mechanic stats are pre-configured by main.gd before the tutorial starts. No re-initialization inside the controller.
 
-**Throw 2 — Guided.** Normal-speed throw. The tutorial places a banner: "Try to lock the H meter in the **green** zone." No forced click, no scripted pause — the player times it themselves. After the throw, the tutorial shows a post-throw caption naming which zone they landed in ("Green zone — your dart clustered tight" / "Orange zone — neutral scatter" / "Red zone — your dart sprayed"). No reward, no penalty, no judgment — just observation.
+### B2. Progressive stat-bar reveal
 
-**Throw 3 — Free.** No banner, no prompts. The player throws normally. After the throw, a final caption: "That's it. The same loop runs every throw of a real game. Ready to play?" with two buttons: "Play a real game" (→ Assembly) and "Back to start" (→ Start Screen).
+The six stat bars (currently rendered by `hud.gd::_build_stat_bars` into the `StatsContainer`) start **hidden** when the tutorial begins. As each relevant stage is explained, the corresponding bars fade in and a callout names them. By the end of throw 1, all six are visible. They remain visible for throws 2 and 3.
 
-### 2c. Throw mechanic pause/scripting hooks
+**Reveal mapping (which stat appears at which beat):**
 
-The tutorial needs the throw mechanic to support being paused mid-state and having its meter advanced programmatically. Additions to `throw_mechanic.gd`:
+| Tutorial beat (existing function) | Stats revealed | Caption (new `tutorial_strings` key) |
+|---|---|---|
+| `_throw1_place_aim` — aim ellipse shown | H Range, V Range | `"reveal_range"`: "These two stats — **H Range** and **V Range** — control the size of your aim ellipse. Higher Range = smaller ellipse = more precise aim." |
+| `_throw1_lock_vertical` — V meter active | V Speed | `"reveal_v_speed"`: "**V Speed** controls how fast the vertical marker bounces. Higher = slower = easier to time." |
+| `_throw1_start_h_freezes` — H meter active | H Speed | `"reveal_h_speed"`: "**H Speed** is the same idea for the horizontal marker." |
+| `_throw1_show_h_freeze` at the green-zone beat | H Accuracy, V Accuracy | `"reveal_accuracy"`: "**H Accuracy** and **V Accuracy** set your base scatter size. Where you lock on the meters then modifies it — closer to the centroid shrinks the scatter, farther bloats it." |
 
-- **`var _scripted_mode: bool = false`** — when true, `_process()` skips its own update of `_bounce_t` and `_horizontal_bounce_t`. The tutorial advances them itself by calling `set_bounce_t(value: float)` and `set_horizontal_bounce_t(value: float)`.
-- **`func set_paused(paused: bool) -> void`** — orthogonal to scripted mode. When paused, `_process()` returns early entirely (markers frozen exactly where they are, no input accepted). Used for "freeze and show callout" beats.
-- **`func force_lock_aim(global_pos: Vector2, target: Dictionary) -> void`** — programmatically locks the AIM stage with a given center and declared target, bypassing the player's mouse click. Tutorial uses this to auto-place the aim ellipse on Throw 1.
-- **`func force_lock_vertical(t: float) -> void`** — locks VERTICAL_RELEASE at the given bounce-t value (0–1). Skips player input.
-- **`func force_lock_horizontal(t: float) -> void`** — locks HORIZONTAL_RELEASE at the given bounce-t value. Triggers resolve normally.
-- **Signal: `meter_position_changed(state: ThrowState, normalized_t: float)`** — emitted on each `_process` tick during VERTICAL_RELEASE / HORIZONTAL_RELEASE. Lets the tutorial controller know when the meter has reached predetermined freeze points.
+**Implementation:**
 
-All of these are no-ops outside scripted mode — they don't change normal-gameplay behavior.
+- The HUD already builds the stat rows. Add a method `hud.set_stat_bar_visibility(stat_keys: Array[String], visible: bool)` that toggles `visible` on the matching rows in `stats_container`. Stat keys use the existing `STAT_KEYS` constant.
+- Tutorial controller starts by calling `hud.set_stat_bar_visibility(STAT_KEYS, false)` and the stats title (the "— Stats —" label) also hidden. Then at each reveal beat it un-hides the named subset.
+- Fade in via a short `create_tween()` on each row's `modulate.a` from 0 → 1. Duration exported on `tutorial_controller.gd` as `@export var stat_reveal_fade_duration: float = 0.4`.
+- After the tutorial finishes (`_finish_to_assembly` or `_finish_to_start`), re-show all stat bars regardless of state, so normal gameplay isn't affected.
+- The reveal beats are inserted *into the existing throw 1 flow* — they're not their own throws. Each reveal piggybacks on a callout already happening at that stage (e.g., the aim-ellipse callout grows to include the range-stat reveal). Or, if cleaner, add a new sequential callout immediately following the existing one. Either is fine; pick whichever flows better in playtest.
 
-### 2d. Computing zone-boundary positions on the H meter
+### B3. Three live-slider demos (Range, Speed, Accuracy)
 
-For Throw 1's three freeze points, the tutorial needs to know what H meter positions correspond to the green / orange / red zone *boundaries*, given the current locked V position and target centroid. This is the same math the meter zone bands (Section 4) use:
+After the stat reveal at each stage, a small interactive demo lets the player drag a slider on the *horizontal* stat (H Range, H Speed, H Accuracy) and watch the visual update live. Three demos total; the player gets the cause-effect once per category and generalizes to the vertical counterpart.
 
-- For each possible H position along the meter, compute `normalized_distance` (existing `_get_target_distance_normalized_at(Vector2(h_x, locked_y))`).
-- Find the H values where normalized_distance crosses `green_zone_threshold` and `penalty_zone_threshold`.
-- The freeze positions are picked roughly in the middle of each zone: green-midpoint, orange-midpoint, red-midpoint.
+**Demo 1 — H Range (after aim-ellipse + reveal_range callout):**
 
-Surface this as a helper on `throw_mechanic.gd`: `func get_zone_boundary_h_positions(locked_y: float) -> Dictionary` returning `{"green_min": x, "green_max": x, "orange_max": x, "red_max": x}`. Reused by both the tutorial and the zone bands.
+- Pauses the throw mechanic in AIMING with the aim ellipse placed (the tutorial already auto-places it via `force_lock_aim`).
+- Shows a slider widget at a tutorial-controlled screen position, labeled "H Range" with the current value displayed.
+- Slider min/max derived from the H Range gameplay range — recommend `(20, 90)` to bracket the visible-difference window. Pull from new exports `@export var demo_h_range_min: float = 20.0` and `@export var demo_h_range_max: float = 90.0`.
+- On slider drag, write the value to `throw_mechanic.horizontal_range` and call `throw_mechanic.queue_redraw()`. The aim ellipse half-width recomputes (the throw mechanic already redraws the ellipse from the current `horizontal_range` value).
+- Caption: `"demo_range"`: "Try it — drag the slider and watch the ellipse change. **V Range** works the same way for the vertical axis."
+- A "Got it" button next to the slider continues the tutorial. On click: restore the original `horizontal_range` value, remove the slider widget, advance to the next beat.
 
-### 2e. Callout overlay
+**Demo 2 — H Speed (after H meter starts + reveal_h_speed callout):**
 
-Tutorial captions and pointer arrows need a reusable overlay widget. New script: `scripts/tutorial_callout.gd` extending `Control`.
+- Pauses the H meter only briefly to set up, then resumes with the marker free-running. The marker keeps bouncing left/right at whatever speed the slider currently dictates. Player clicks are *blocked* during the demo (no commit).
+- Slider on `throw_mechanic.horizontal_speed`. Min/max `(1.0, 5.0)` covering the documented gameplay range.
+- On slider drag, write to `throw_mechanic.horizontal_speed`. The bounce loop already reads this value each frame — no extra redraw call needed.
+- Caption: `"demo_speed"`: "Drag to feel the difference. Slower meter = more time to react. **V Speed** is the same for the vertical meter."
+- "Got it" → restore, remove slider, *unblock H meter input*, continue.
+- **Implementation note:** the controller already has `set_scripted_mode(true)` for throw 1. Add an explicit `set_input_blocked(blocked: bool)` flag on throw_mechanic (or reuse `set_paused` carefully) so the marker keeps moving but clicks don't commit during the demo. Cleanest is a new internal flag, since `_paused` halts `_process` entirely.
 
-- A callout is `{text: String, anchor_pos: Vector2 (optional), arrow_target: Vector2 (optional)}`.
-- Renders a semi-transparent rounded panel containing the text, with an optional arrow pointing from the panel to a screen position.
-- "Next" button at the bottom advances to the next beat. "Skip Tutorial" button at the top-right.
-- Position, sizing, colors, fonts, arrow style — all exported with hover descriptions per project conventions.
-- The TutorialController owns a stack of beats and advances on "Next" clicks.
+**Demo 3 — H Accuracy (after the H freeze beats, just before resume to throw resolution):**
 
-### 2f. Tutorial controller
+- Pauses in HORIZONTAL_RELEASE with a representative locked position (the orange-zone freeze position from the existing `_throw1_show_h_freeze` sequence is a good baseline — neutral, no zone bonus or penalty).
+- Shows ghost-dart cluster via `ghost_dart_layer.show_scatter(sample_scatter_points(..., rng_seed=<fixed>))`. **Fixed seed is essential** so the cluster pattern stays consistent and the player perceives shrink/grow rather than "shuffle."
+- Slider on `throw_mechanic.horizontal_accuracy`. Min/max `(20, 80)`.
+- On slider drag: write the new value, then re-sample with the same seed, then call `ghost_dart_layer.show_scatter(new_points)`. Cluster shrinks/grows visibly.
+- Caption: `"demo_accuracy"`: "Watch the scatter shrink and grow. Tighter accuracy = your darts land closer together. **V Accuracy** does the same for vertical spread."
+- "Got it" → restore, clear scatter, remove slider, continue to `_throw1_resume_h`.
 
-New file: `scripts/tutorial_controller.gd` extending `Node`, instantiated as a child of `Main`.
+**Slider widget:**
 
-- Owns the beat sequence as an `Array[Dictionary]` of `{type, ...args}` entries: `{type: "callout", text, anchor, arrow_target}`, `{type: "auto_lock_aim", target_wedge, target_ring}`, `{type: "auto_lock_v"}`, `{type: "h_meter_freeze_at", zone: "green"|"orange"|"red"}`, `{type: "show_scatter_preview"}`, `{type: "wait_for_throw_completed"}`, `{type: "end_tutorial"}`, etc.
-- Beats are declared in a single function `_build_mechanics_tutorial_beats() -> Array[Dictionary]` so the entire walkthrough script lives in one readable place. Captions and parameters tweakable without restructuring code.
-- The controller subscribes to `throw_mechanic.state_changed` and `throw_mechanic.meter_position_changed` to drive the beat progression.
-- All beat text exported as a `@export var tutorial_strings: Dictionary` so wording can be tuned in the inspector without code changes (key per beat).
+- New file: `scripts/tutorial_slider.gd` extending `Control`. Small VBox: label (stat name + current value), HSlider, "Got it" button.
+- Signals: `value_changed(value: float)`, `dismissed`.
+- Position, size, fonts, colors all exported with hover descriptions per project conventions.
+- Lives transiently — instantiated by tutorial_controller for the demo, freed when dismissed.
 
----
+**New beat ordering inside throw 1:**
 
-## 3. The Ghost-Dart Scatter Preview
+The existing throw 1 sequence has beats roughly: intro → place aim → explain ideal → lock vertical → start H freezes → show H freeze ×3 → resume H → throw completed. The new beats slot in as:
 
-A reusable visualization that samples N candidate dart landing positions from the current accuracy zone and renders them as ghost markers. Communicates "here's where your dart will probably land" in a way that maps directly to player intuition (much more so than a heatmap shader, per the design discussion that fed this spec).
+1. intro
+2. place aim
+3. **reveal H/V Range bars + caption** (B2)
+4. **H Range slider demo** (B3 demo 1)
+5. explain ideal
+6. lock vertical
+7. **reveal V Speed bar + caption** (B2)
+8. start H freezes
+9. **reveal H Speed bar + caption + H Speed slider demo** (B2 + B3 demo 2 — the demo runs *before* the freeze sequence so the player isn't pulled out mid-freeze)
+10. show H freeze (green)
+11. **reveal H/V Accuracy bars + caption** (B2) — anchored to the green-zone freeze since that's where scatter is most visibly tight
+12. show H freeze (orange)
+13. show H freeze (red)
+14. **H Accuracy slider demo** (B3 demo 3) — after all three freezes have established what zone-driven scatter changes look like
+15. resume H
+16. throw completed
 
-### 3a. Sampler
+Beats 10-13 are unchanged from current code. The new beats (3, 4, 7, 9, 11, 14) plug in around them.
 
-New helper, ideally on `throw_mechanic.gd` (already owns the gaussian + accuracy zone math):
+### B4. Skip-tutorial behavior under the new beats
 
-```
-func sample_scatter_points(
-    locked_release_pos: Vector2,
-    sample_count: int = 10,
-    rng_seed: int = -1
-) -> Array[Vector2]
-```
+The existing tutorial already has a Skip Tutorial path. The new demos add interactive widgets that need cleanup on skip. The cleanest pattern: any active demo registers a teardown callback with the tutorial controller; the skip handler walks the teardown stack before exiting. This avoids leaked sliders or mutated stats when a player skips mid-demo.
 
-- Computes the effective accuracy zone size at the candidate `locked_release_pos` using the same `_get_accuracy_multiplier` and accuracy-half functions the live throw uses.
-- Samples `sample_count` 2D gaussian draws scaled by the accuracy zone half-dimensions and offset by `accuracy_skew_v`.
-- If `rng_seed >= 0`, uses a deterministic RNG seeded with that value — important for the tutorial so the same "green zone" demonstration always shows the same cluster pattern. (-1 = use global RNG, for production always-on previews.)
+### B5. Rules Slideshow — mini dartboard + side-by-side layout
 
-### 3b. Renderer
+The shipped rules slideshow (`scripts/rules_slideshow.gd`) routes highlight calls to the **main dartboard**, but the dartboard sits behind a 0.75-opacity modal scrim while the slideshow is open — so the highlights technically fire but are nearly invisible. Fix: add a dedicated mini dartboard *inside* the slide panel, and restructure the panel layout side-by-side (text left, board right).
 
-New scene/script: `scripts/ghost_dart_layer.gd` extending `Node2D`, instantiated as a sibling of `DartContainer` so it draws under landed darts but over the board.
+**Behavior:**
 
-- Takes an `Array[Vector2]` of positions and renders each as a small semi-transparent dart marker.
-- Exported visual params: ghost marker color, alpha, size, outline. Match the real dart marker style at ~30–40% opacity.
-- `show_scatter(points: Array[Vector2]) -> void` and `clear_scatter() -> void`.
-- Auto-fades on a timer if `auto_fade_duration > 0.0` (exported), or stays visible until explicitly cleared.
+- Modal panel widens (current `panel_width: 520.0` → ~720). The panel splits into two columns: left column holds title, body, slide counter, prev/next/close buttons (current single-column layout, just narrower); right column holds a small label ("The Board") above a mini dartboard.
+- The mini dartboard is **always visible** while the slideshow is open, even on slides whose `highlight` array is empty. Acts as a spatial reference the player can glance at throughout.
+- Slides whose `highlight` array is non-empty render those highlights on the **mini board only** — never on the main board. The main dartboard stays clean and unhighlighted for the slideshow's entire lifetime.
 
-### 3c. Tutorial usage
+**Implementation — model after the assembly screen's zone preview:**
 
-During the Throw 1 H-meter freeze beats (Section 2b), the tutorial calls:
+The pattern to copy is `scripts/assembly_screen.gd::_build_zone_preview()` and `_draw_preview_dartboard(center)` (around lines 841–966). That's a custom-drawn `Control` with its own simplified `_draw_board_segment(...)` and `_draw_board_ring(...)` helpers that draw arc-based wedges and concentric rings at a given center — **not** a Dartboard node instance. Lightweight, self-contained, and already proven in production. The same ring threshold constants (0.032, 0.08, 0.48, 0.53, 0.76, 0.83) used by both the assembly preview and the main dartboard mean the mini board's geometry matches the real board.
 
-```
-var points = throw_mechanic.sample_scatter_points(
-    Vector2(zone_boundary_x, locked_y),
-    sample_count=10,
-    rng_seed=42 + zone_index  # green=42, orange=43, red=44
-)
-ghost_dart_layer.show_scatter(points)
-```
+Add to `rules_slideshow.gd`:
 
-Cleared between freeze beats so each zone's scatter is shown alone (less visually busy than three overlapping clusters).
+1. **Mini-board widget construction.** A `Control` child of the slide panel, positioned in the right column. Connect its `draw` signal to a new `_draw_mini_board()` method that mirrors `assembly_screen.gd::_draw_preview_dartboard(center)`. Copy the segment/ring helpers verbatim (or extract them to a shared utility if Max prefers — see note below). All visual constants (background color, segment colors, wire color) exported with hover descriptions.
+2. **Highlight overlay.** After drawing the base board, draw any active highlights on top. Port the four highlight-type handlers from `dartboard.gd::set_tutorial_highlight` (`all_wedges_ring`, `single_wedge_all`, `single_segment`, `bullseye`) into the mini board's draw method. Highlights are stored in a small `_active_highlights: Array[Dictionary]` field on the slideshow, set per-slide in `_display_current_slide()` and `queue_redraw()` triggered on the mini board.
+3. **Stop passing highlights to the main dartboard.** Remove the `dartboard.set_tutorial_highlight(slide["highlight"])` call (currently in `_display_current_slide`). The existing `dartboard: Node2D` field can be kept solely for the open/close cleanup below, or removed entirely if the slideshow no longer needs any reference to the main board.
+4. **Cleanup pass for stale main-board highlights.** `show_slideshow()` should call `dartboard.clear_tutorial_highlight()` on open (currently only called on close, which means a slideshow opened immediately after a previous one closed could briefly inherit stale highlights from elsewhere — defensive cleanup is cheap). After this pass, the main board's tutorial-highlight system is touched ONLY by the rules slideshow on open/close, and never set during slideshow play.
 
-### 3d. Always-on preview (optional, exported)
+**New exports (with hover descriptions per project conventions):**
 
-A small additional behavior: `@export var live_scatter_preview: bool = false` on `throw_mechanic.gd`. When true, during the brief RESOLVING preview stage (the existing `resolve_preview_duration` window), the same ghost-dart sampler runs with the *actual* locked release position and renders the scatter alongside the existing variance-rectangle overlay. Off by default — opt-in player-facing visualization. Sample count tuned via `@export var live_scatter_sample_count: int = 10`.
+- `mini_board_radius: float` (default ~100.0) — pixel radius of the mini board. Pulled from the same scaling logic the assembly preview uses (`preview_ratio = mini_board_radius / 300.0`).
+- `mini_board_column_width: float` (default ~200.0) — width of the right column inside the panel.
+- `text_column_width: float` (default ~480.0) — width of the left column. Old `body_label` width binds to this.
+- `mini_board_label_text: String` (default "The Board") — title above the mini board.
+- `mini_board_label_font_size: int` (default 14).
+- Per-color exports for the mini board's background, segment colors, wire color, and highlight overlay (highlight color can default to the same `Color(1.0, 0.85, 0.2, 0.4)` value as the main dartboard's `tutorial_highlight_color`).
+- `panel_width` already exists — update default from 520 to ~720 (or whatever fits two columns cleanly).
 
-This costs almost nothing to add given the sampler exists, and gives the player a permanent "show me the spread" toggle that some will love and others will turn off for vibes.
+**Note on factoring the segment/ring drawing helpers:**
 
----
+The mini-board draw code in `assembly_screen.gd` is ~60 lines of arc/polygon math. It's already duplicated (the main `dartboard.gd::_draw_segment` does the same thing at a different scale). After this change there'd be three copies. If Max wants to clean that up:
 
-## 4. Meter Zone Bands
+- Extract a `class_name DartboardGeometry extends RefCounted` (or similar) with static helpers `draw_segment(canvas, center, start_deg, end_deg, outer_r, inner_r, color)` and `draw_ring(canvas, center, radius, color)`.
+- Both `dartboard.gd` and `assembly_screen.gd` and the new rules-slideshow mini board call into it.
 
-Colored bands drawn on the H meter showing where the green / orange / red zones are, before the player commits the click. This is the missing visual that connects "I see the meter moving" to "I know where I want to click."
+This is a small refactor and not strictly required for B5 to ship. Flag it as a follow-up cleanup if Max wants it.
 
-### 4a. Where they appear
+**Skip-tutorial / close behavior:**
 
-Only on the H meter. The V meter does have a vertical-accuracy zone too, but the tutorial's main teaching axis is the H meter freeze beats, and adding V bands risks visual clutter on a smaller axis. If playtest shows V bands are needed, add them in a follow-up.
-
-### 4b. Computation
-
-At the start of HORIZONTAL_RELEASE (when the V is locked), call the new `get_zone_boundary_h_positions(locked_y)` helper from Section 2d to get the screen-space H positions of each zone boundary. Draw three filled rectangles along the H meter axis at those positions:
-
-- Green band: from `green_min` to `green_max`, filled with the existing `accuracy_green_color` at lower alpha.
-- Orange band: from `green_max` to `orange_max`, filled with `accuracy_neutral_color` at lower alpha.
-- Red band: from `orange_max` to `red_max` (and mirrored for symmetric H meter), filled with `accuracy_red_color` at lower alpha.
-
-The bands hug the H meter visually — same thickness as the meter line, drawn just behind it.
-
-### 4c. Toggle
-
-`@export var show_h_meter_zone_bands: bool = true` on `throw_mechanic.gd`. Default on. Players who want a pure-skill feel can turn off; tutorial players see it on by default.
-
-### 4d. Update on V re-lock
-
-The bands depend on the locked V position. If V is re-locked (which doesn't happen in normal gameplay, but might during tutorial scripting), the bands recompute. In practice this means computing once at HORIZONTAL_RELEASE entry and caching for the duration of that state.
+- Close button or scrim-click: hide slideshow, mini-board widget stays as a child of the panel (no need to destroy/recreate), main dartboard's highlights stay clear.
+- Re-opening the slideshow: re-runs `show_slideshow()` from slide 0, which calls `dartboard.clear_tutorial_highlight()` defensively, and the mini board re-draws based on the new active slide.
 
 ---
 
-## 5. The Assembly Tutorial
+## Pending from Original Spec (still applicable, lower priority)
 
-A guided walkthrough of the assembly screen. Conceptually similar to the Mechanics Tutorial but for a static screen — no scripted throw beats, just callouts pointing at UI elements with explanations.
+### Section 5 — Assembly Tutorial (trimmed)
 
-### 5a. Scope decision
+Now that Phase B teaches stats in context during the mechanics tutorial, the Assembly Tutorial becomes a lighter walkthrough focused on the *assembly screen itself*, not stat fundamentals. New scope:
 
-**Single combined flow**, not split into Components + Modifiers. The assembly screen as it stands doesn't yet have heavy modifier UI — locking visualization happens in the modifier panel in the active game HUD, not on the assembly screen. Until that changes, one walkthrough covers the assembly screen end-to-end.
+1. Callout pointing at the dart preview: "Your dart — barrel + shaft + flight."
+2. Callout pointing at slot arrows: "Cycle through your owned components on each slot."
+3. Callout pointing at stat bars: "Watch the bars change as you swap parts." (No re-teaching of what each stat means — that lived in the mechanics tutorial.)
+4. Callout pointing at the balance bar: "Component weights sum to a balance value. Green = bonus, drifting into orange/red = penalties. Sometimes worth it for the raw stats."
+5. Callout pointing at the zone preview (bottom-left): "Live preview of your aim ellipse and accuracy zone at current stats."
+6. Callout pointing at Begin Run: "Hit this when you're happy with the build."
+7. End message.
 
-If a future spec adds significant modifier UX to the assembly screen (e.g., a modifier loadout panel), revisit this — split into "Components" and "Modifiers" tutorials at that point.
+**Implementation:**
 
-### 5b. Beat sequence
+- Add `_build_assembly_tutorial_beats() -> Array[Dictionary]` to `tutorial_controller.gd`. Reuses the existing `tutorial_callout.gd` infrastructure.
+- Wire to a new "Assembly Tutorial" button in `assembly_screen.gd` (separate from the existing "Play Tutorial" button, which re-enters the mechanics tutorial). New signal: `assembly_tutorial_pressed`.
+- `main.gd` connects the new signal to a handler that calls `tutorial_controller.start_assembly_tutorial()`.
+- Arrow targets read from the AssemblyScreen's existing exported layout vars (e.g., `dart_preview_position`, `barrel_slot_position`, `zone_preview_position`) so callouts move when Max retunes UI positions in the inspector.
 
-Reuses the same `tutorial_callout.gd` infrastructure as Section 2 (callouts, Next buttons, Skip button).
+### Section 6 — Stats Reference (deferred / nice-to-have)
 
-1. Callout pointing at the dart preview area: "This is your dart. Three components: barrel, shaft, flight. Click left/right arrows on each slot to cycle through your owned components."
-2. Callout pointing at the stat bars: "Your dart parts give you stat bonuses across three categories: **Range** (smaller aim ellipse), **Speed** (slower meter, easier to time), **Accuracy** (tighter dart scatter)." Each stat name in the caption links to the persistent Stats Reference (Section 6) — clicking opens the reference panel inline.
-3. Callout pointing at the balance bar: "This is your **balance**. Component weights sum to a balance value. Stay in the green zone for a stat bonus, drift into orange/red for penalties — but sometimes the trade is worth it."
-4. Callout pointing at the zone preview (bottom-left): "This preview shows your dart's aim ellipse and accuracy zone at current stats. Watch it change as you swap parts."
-5. Callout pointing at the Begin Run button: "When you're happy with your build, hit Begin Run."
-6. End: a small message "That's the assembly screen. You'll come back here between legs to swap parts." with an "OK" button that closes the overlay.
+With stats taught in-context, the persistent Stats Reference shifts from *teaching tool* to *reference tool* — "I forgot what V Accuracy does, let me look it up." Still useful, but no longer mission-critical for first-time comprehension.
 
-### 5c. Implementation
+If shipped:
 
-- New beat-set in `tutorial_controller.gd`: `_build_assembly_tutorial_beats() -> Array[Dictionary]`.
-- Entered when the Assembly Tutorial button (Section 1c) is pressed.
-- The TutorialController handles assembly beats the same way it handles mechanics beats — callouts pointing at UI elements (using `arrow_target` positions read from the AssemblyScreen's exported layout vars so the callouts move when Max retunes UI positions in the inspector).
-- All beat strings exported in `tutorial_strings` so wording is tunable.
+- Create `scripts/stat_descriptions.gd` (RefCounted, static dictionaries for `SHORT`, `LONG`, `DISPLAY_NAMES`, `STAGE`). Migrate `hud.gd::STAT_DESCRIPTIONS` and `STAT_DISPLAY_NAMES` to reference these so there's a single source of truth.
+- Create `scripts/stats_reference_panel.gd` (modal Control overlay listing all six stats grouped by stage).
+- Wire `start_screen.stats_reference_pressed` (already emits, just not handled) to show the panel.
+- Add a "Stats" button to the Assembly Screen that also opens it.
 
-### 5d. Stat description hover-link
-
-When a stat name appears in a callout (e.g., "Range", "Speed", "Accuracy"), allow the player to click it to open the Stats Reference overlay (Section 6) inline. This is a small "click-through" interaction inside the callout text. If RichTextLabel doesn't support arbitrary click handlers cleanly, fall back to a small "?" button next to each stat name in the callout.
-
----
-
-## 6. The Stats Reference
-
-A persistent, anywhere-accessible expanded description of all six throw stats. Same content as the existing `STAT_DESCRIPTIONS` const in `hud.gd`, but expanded and presented in a dedicated panel.
-
-### 6a. Single source of truth
-
-Move stat descriptions out of `hud.gd` and into a new dedicated source: `scripts/stat_descriptions.gd` (singleton or static class).
-
-```gdscript
-class_name StatDescriptions
-extends RefCounted
-
-# Short descriptions (for hover tooltips) — same as current STAT_DESCRIPTIONS
-const SHORT: Dictionary = { ... }
-
-# Long descriptions (for the Stats Reference panel) — multi-paragraph
-const LONG: Dictionary = { ... }
-
-# Display names — same as current STAT_DISPLAY_NAMES
-const DISPLAY_NAMES: Dictionary = { ... }
-
-# Throw stage each stat affects (for grouping in the reference)
-const STAGE: Dictionary = {
-    "horizontal_range": "Aim (Stage 1)",
-    "vertical_range": "Aim (Stage 1)",
-    "vertical_speed": "Vertical Release (Stage 2)",
-    "horizontal_speed": "Horizontal Release (Stage 3)",
-    "vertical_accuracy": "Resolve (Stage 4)",
-    "horizontal_accuracy": "Resolve (Stage 4)",
-}
-```
-
-`hud.gd::STAT_DESCRIPTIONS` and `STAT_DISPLAY_NAMES` become references to `StatDescriptions.SHORT` and `StatDescriptions.DISPLAY_NAMES`. The Assembly Tutorial (Section 5) and Stats Reference panel both pull from this same source. Tune in one place, propagates everywhere.
-
-### 6b. The reference panel
-
-New script: `scripts/stats_reference_panel.gd` extending `Control`.
-
-- Modal overlay (full-screen scrim with centered panel).
-- Lists all six stats grouped by throw stage.
-- Each stat shows: display name, short description (one-liner), long description (multi-paragraph).
-- Close button (top-right) and click-outside-to-close on the scrim.
-- Position, sizing, colors, fonts — all exported with hover descriptions.
-
-### 6c. Where it's accessible
-
-- A "?" or "Stats Reference" button on the Start Screen (Section 1a) — secondary affordance.
-- A "?" or "Stats" button on the Assembly Screen — primary location for this reference (Max sits here between legs).
-- Click-through from the Assembly Tutorial callouts (Section 5d).
-- Optional: a "?" button on the in-game HUD next to the stat bars. Defer this to playtest — depends on whether the in-game stat tooltips are enough.
-
----
-
-## 7. The Rules of Darts
-
-A persistent slideshow walking through x01 rules + dartboard layout. Built as a hybrid: slideshow-primary for the bulk of the content, with one interactive moment for the doubles checkout rule (the most counterintuitive rule for newcomers).
-
-### 7a. Slideshow structure
-
-New script: `scripts/rules_slideshow.gd` extending `Control`.
-
-- Modal overlay, similar shape to the Stats Reference.
-- Slides advance with Next / Previous buttons or arrow keys.
-- "Skip to end" link in the corner for vets.
-- Each slide has: title, body text, optional illustration, optional **board highlight** (triggers the dartboard's tutorial highlight mode — Section 7c).
-
-### 7b. Slide sequence (draft)
-
-1. **The board.** Show the dartboard. Caption: "20 wedges, numbered 1-20, arranged in this specific order to punish missing your target. Standard around the world."
-2. **Wedges and rings.** Highlight one wedge end-to-end (e.g., the 20 wedge from bullseye outward). Caption: "Each wedge has the same number value, but different rings on it score differently."
-3. **Singles.** Highlight the inner and outer single regions of all wedges. Caption: "The big body of a wedge is a single — face value × 1. A single 20 = 20 points."
-4. **Doubles.** Highlight the outer thin ring of all wedges. Caption: "The thin outer ring is the double — face value × 2. A double 20 = 40 points. **Important — you'll need this in a moment.**"
-5. **Triples.** Highlight the inner thin ring of all wedges. Caption: "The thin inner ring is the triple — face value × 3. A triple 20 = 60 points. **The highest single-dart score is triple 20.**"
-6. **The bullseye.** Highlight the bullseye. Caption: "Outer bull = 25 points. Inner bull (double bull) = 50 points. **Double bull counts as a double** for checkout purposes."
-7. **x01 scoring.** Caption: "You start each leg at a target score (101, 201, 301, etc.). Every dart subtracts its score from your remaining. Get to exactly 0 to win the leg."
-8. **The doubles rule.** Caption: "There's a catch — your **last dart** has to land on a **double** (or the double bull). Hitting 0 with anything else = **bust**. Going below 0 = **bust**. Leaving 1 remaining = **bust** (because no double sums to 1)." Bold the bust conditions.
-9. **The doubles drill (interactive — Section 7d).** "Try it: you have 32 remaining. Which dart wins the leg?" — three buttons: "Double 16", "Single 16", "Triple 10 + Double 1". Click the correct one (Double 16 = 32) for a green confirmation. Click wrong for a brief "Not quite — remember the dart must be a double" with explanation.
-10. **End.** "That's the basics. The game throws scoring modifiers and dart customization on top, but the throwing and counting always work this way." Close button.
-
-All slide text exported via `@export var rules_slides: Array[Dictionary]` so Max can edit slide content in the inspector. Each slide entry: `{title, body, illustration_path (optional), board_highlight: Dictionary (optional)}`.
-
-### 7c. Dartboard tutorial highlight mode
-
-Reuses the existing `set_picker_mode` infrastructure conceptually but adds a new method specifically for tutorial highlighting that doesn't activate click handlers. New methods on `dartboard.gd`:
-
-- `func set_tutorial_highlight(highlights: Array[Dictionary]) -> void` — takes a list of highlight specs:
-  - `{type: "all_wedges_ring", ring_name: "Triple"}` — highlight that ring on every wedge.
-  - `{type: "single_wedge_all", wedge_index: 0}` — highlight every ring of a single wedge.
-  - `{type: "single_segment", wedge_index: 0, ring_name: "Triple"}` — highlight one specific segment.
-  - `{type: "bullseye", which: "inner"|"outer"|"both"}` — highlight bullseye region(s).
-- `func clear_tutorial_highlight() -> void` — removes all tutorial highlights.
-- Drawing logic reuses the existing `_draw_segment` and `_draw_full_wedge_highlight` helpers with a new color: `@export var tutorial_highlight_color: Color = Color(1.0, 0.85, 0.2, 0.4)` and `@export var tutorial_highlight_border_color: Color = Color(1.0, 1.0, 1.0, 0.7)`. Bright and distinct from hover/picker highlights so it's unmistakable as "the slideshow is pointing at this."
-
-### 7d. The doubles drill
-
-Implemented as a special slide type — `{type: "drill", question, options, correct_index}`. Renders as a panel with the question text and three buttons. Click the correct → green checkmark + "Correct! 32 = double 16. Next slide →." Click wrong → red border on the wrong button + a small explanation appears, but the player must click the correct answer to advance. No high score, no consequence — this is a comprehension check, not a quiz.
-
-V1 ships with one drill (the 32 = D16 question). Future expansions could add more drill slides (busting scenarios, harder checkouts).
-
-### 7e. Where it's accessible
-
-- A "Rules of Darts" button on the Start Screen (Section 1a).
-- A "Rules" button on the Assembly Screen.
-- Optional: in-game HUD "?" menu. Defer.
-
----
-
-## 8. First-Run Trigger + Settings Persistence
-
-A soft prompt on first launch: "Welcome — looks like this is your first time. Want a walkthrough?" with two buttons: "Yes, show me" (→ Mechanics Tutorial) and "No thanks, I'll figure it out" (→ Start Screen).
-
-### 8a. Persistence
-
-A small settings file persisted to `user://settings.cfg` via Godot's `ConfigFile` API.
-
-- `[tutorial]` section with `has_seen_welcome: bool` (default false).
-- Helper script: `scripts/settings_store.gd` (singleton via `class_name SettingsStore extends RefCounted` plus a static accessor, or registered as an autoload).
-- `SettingsStore.get_tutorial_seen() -> bool` and `SettingsStore.set_tutorial_seen(value: bool) -> void`.
-
-Future settings (audio levels, control prefs, the H meter zone bands toggle, the live scatter preview toggle) live in the same file.
-
-### 8b. Welcome prompt
-
-On launch, after `main.gd::_ready()` initializes everything but before showing the Start Screen, check `SettingsStore.get_tutorial_seen()`:
-
-- If false → show the Welcome modal. Player picks. Either choice sets `has_seen_welcome = true`. "Yes" routes to Mechanics Tutorial; "No" routes to Start Screen.
-- If true → show Start Screen directly.
-
-Welcome modal is its own small `Control` overlay (`scripts/welcome_modal.gd`). All text and colors exported.
-
-### 8c. Manual reset for testing
-
-`@export var debug_reset_tutorial_seen: bool = false` on `main.gd`. When true, resets the flag at startup so Max can re-test the first-run experience. (Toggleable from the inspector — typical Max workflow.)
+Defer unless playtest shows the in-context teaching alone is insufficient.
 
 ---
 
 ## Implementation Notes
 
-- **Static typing throughout** per project conventions. Every `var`, every function parameter, every return.
-- **Frequent commenting** per project conventions — especially on the tutorial beat sequence builders (the captions and beat order are themselves the design, and should be readable to non-coders).
-- **All tunable values exported with `##` hover descriptions** per project conventions. This spec calls out exports per section, but the rule is universal — UI positions, colors, fonts, font sizes, animation durations, callout dimensions, all of it.
-- **Beat strings as exported `Dictionary` of keyed entries** rather than inline string literals. Max edits captions in the inspector without code changes — same pattern as the existing checkout helper's `checkout_toggle_hint`.
-- **No new scoring, no new game logic.** This spec is pure UX/onboarding. The throw mechanic gets new *hooks* (pause, force-lock, signal) but no behavior changes outside tutorial mode. The dartboard gets new *highlight modes* but no scoring changes. `x01_game.gd` and `scoring_modifier_manager.gd` are untouched.
-- **Sandbox tutorial does not initialize `x01_game`.** A clean separation so the tutorial can't accidentally affect run state.
-- **Scene tree additions:**
-  - `Main/HUD/StartScreen` — new (`start_screen.gd`).
-  - `Main/HUD/WelcomeModal` — new (`welcome_modal.gd`).
-  - `Main/HUD/StatsReferencePanel` — new (`stats_reference_panel.gd`).
-  - `Main/HUD/RulesSlideshow` — new (`rules_slideshow.gd`).
-  - `Main/HUD/TutorialCalloutLayer` — new (`tutorial_callout.gd`), parent of active callouts during tutorial.
-  - `Main/TutorialController` — new (`tutorial_controller.gd`), Node.
-  - `Main/GhostDartLayer` — new (`ghost_dart_layer.gd`), Node2D, sibling of DartContainer.
-- **No new dependencies on external libraries.** Pure Godot 4 GDScript.
-- **The TutorialController owns the active tutorial state** (which beat is current, which sub-tutorial is running). `main.gd` queries it via `tutorial_controller.is_active()` to decide whether to show normal HUD elements or hide them.
-
----
-
-## Phasing Recommendation
-
-If one Claude Code pass is too large, the suggested MVP cut for "ship to friends" is:
-
-**Phase A (MVP — required to ship to friends):**
-
-- Section 1 (Start Screen)
-- Section 2 (Mechanics Tutorial)
-- Section 3 (Ghost-Dart Scatter Preview — at minimum the tutorial-triggered version; the always-on toggle can defer)
-- Section 7 (Rules of Darts)
-- Section 8 (First-Run Trigger)
-
-**Phase B (polish — can ship slightly later):**
-
-- Section 4 (Meter Zone Bands) — nice-to-have, but the Mechanics Tutorial teaches the zones implicitly via freeze beats. Bands are a permanent visual aid for repeat play, not strictly required for first-time comprehension.
-- Section 5 (Assembly Tutorial) — friends doing a one-leg demo may not need the assembly walkthrough; defaulting to a sensible pre-built dart and skipping assembly initially is a viable workaround if needed.
-- Section 6 (Stats Reference) — useful but the existing hover tooltips (`STAT_DESCRIPTIONS` in `hud.gd`) are a sufficient stopgap. Promote to the dedicated panel once playtest confirms they're not enough.
-
-If shipping all eight at once, the build order should still start with the new infrastructure (StartScreen, SettingsStore, TutorialCallout, GhostDartLayer, throw_mechanic hooks) before the content layers (beat sequences, slideshow slides) — those are easier to iterate on once the scaffolding works.
-
----
-
-## Deferred / Out of Scope
-
-- **Form / throw-style tutorial.** Form system isn't implemented yet (Phase 8). When it ships, it'll need its own tutorial beat — likely a small addition to the Mechanics Tutorial, or a new sub-tutorial entered from the Form select screen.
-- **Modifier mechanics tutorial.** No dedicated walkthrough for what scoring modifiers do, how locking works, how the checkout helper reads modifier state. The first time the player picks a modifier post-leg, the existing modifier tooltips and the checkout helper's behavior should suffice. Add a dedicated walkthrough if playtest shows new players are bouncing off modifier complexity.
-- **Shop tutorial.** Same logic — the shop has its own UI affordances (lit spots, hover tooltips). If new players don't get it, add a small one-time popover on first shop entry. Out of scope for this pass.
-- **Always-on V meter zone bands.** Section 4 ships H-only by default. Add V bands if playtest shows they help.
-- **Multi-question rules drills.** Section 7 ships one drill (32 = D16). More drills (bust scenarios, awkward remainders) are easy to add later via the same `{type: "drill"}` slide format.
-- **Tutorial localization.** All strings are English-only for now, but the export-everything pattern means a future localization pass can swap dictionaries cleanly.
-- **Accessibility (text size, colorblind palette, controller input).** All separate concerns. The export-everything pattern keeps the door open; no in-spec work required now.
-- **In-game "?" menu** — a contextual help button on the active-game HUD that surfaces Stats Reference / Rules of Darts mid-run. Could be added later; for now those references are accessible from Assembly between legs.
+- **Static typing throughout** per project conventions. Every `var`, every parameter, every return.
+- **Frequent commenting** — especially on the new beat ordering inside throw 1. Note in the controller's class comment which beats are "shipped Phase A" vs "added Phase B" so future readers can trace the design history.
+- **All tunable values exported with `##` hover descriptions** per project conventions: slider widget position/size/colors, slider min/max for each demo, stat reveal fade duration, the demo captions (new `tutorial_strings` keys).
+- **Snapshot/restore around every demo.** Critical — a tutorial that leaves the player's stats mutated would be a bug players never notice but always feel as "the dart doesn't behave like it did in the tutorial."
+- **No changes to scoring, game logic, or modifier systems.** Phase B is pure tutorial enhancement.
+- **Scene tree additions (Phase B only):**
+  - `scripts/tutorial_slider.gd` — new transient widget, instantiated by tutorial_controller as needed.
+  - Possibly a `set_input_blocked(blocked: bool)` on `throw_mechanic.gd` if the existing `_paused` flag isn't right for the H Speed demo (marker keeps bouncing, clicks ignored).
+- **HUD changes:** add `set_stat_bar_visibility(stat_keys: Array[String], visible: bool)` to `hud.gd`. Pair it with a "show all" convenience caller that the tutorial uses on exit.
 
 ---
 
 ## Key Design Decisions (for the archive)
 
-- **Three concerns kept separate**: mechanics tutorial, rules of darts, assembly tutorial. Mixing them was rejected — different players need different subsets, and cognitive load on a "full" tutorial would be too high.
-- **3-throw demo → guided → free structure** for the Mechanics Tutorial. Shorter (1 throw) is "look at this" not "you did this." Longer (5+ throws) overstays welcome. Three is the sweet spot: demonstrate, attempt, internalize.
-- **Sandbox mode, not first-leg-of-real-game.** No score pressure during learning. Tutorial can let the player flub a throw without consequences. Cleaner mental model — tutorial throws are tutorial throws, real throws are real throws.
-- **Ghost-dart scatter over heatmap shader** for the accuracy zone visualization. Players don't think in probability density; they think "where will my darts probably land." A scatter of 10 ghost darts says that intuitively.
-- **Freeze-and-explain at three accuracy zones rather than forced-click-now prompts.** Show-then-do is gentler and more respectful of the learner than railroading their inputs. Plus you can only commit H once per throw, so a "click now in each zone" approach would require three separate throws.
-- **Hybrid slideshow + one drill** for rules of darts. Pure slideshow risks zoning out on the doubles rule (the most counterintuitive part of x01). Interactive moment specifically there cements the rule via doing.
-- **Single source of truth for stat descriptions** (`stat_descriptions.gd`). Assembly Tutorial, Stats Reference, and the existing in-game hover tooltips all pull from one place. Avoids three-way drift when Max tunes wording.
-- **First-run soft prompt, not forced tutorial.** Respect that some friends will be game-mechanics-literate even if they're new to *this* game. "Want a walkthrough?" with an honest "no thanks" path.
-- **Tutorial state lives in a dedicated controller, not main.gd.** `main.gd` is already orchestrating x01, modifiers, shop, assembly, upgrade picks. Adding tutorial state would push it past readability. The TutorialController is a small, self-contained node that main.gd queries when relevant.
+- **Stats taught in-context during mechanics tutorial, not as a separate Stats Reference flow.** Realized post-Phase-A playtest: a separated reference is less effective than showing the stat next to the thing it controls. The Stats Reference becomes a "look it up later" tool rather than a primary teaching surface.
+- **Three live demos, one per category (Range, Speed, Accuracy), horizontal axis only.** Six demos would balloon the tutorial; one per category teaches the cause-effect once and the player generalizes to the V counterpart. Horizontal axis is the visually larger one for each category, so the slider delta is more striking.
+- **Real stats throughout the tutorial.** No "easy mode" tutorial values that diverge from real gameplay. Tutorial throw 3 must feel exactly like the first throw of the first real leg, or the player feels lied to. Side benefit: replaying the tutorial from Assembly with an upgraded build becomes a "feel my current dart" tool for free.
+- **Progressive bar reveal vs all-visible-from-start.** Progressive avoids the "wall of unfamiliar numbers" reaction on first sight and makes each reveal feel like depth being uncovered. Costs a small amount of choreography; worth it.
+- **Demos use fixed RNG seeds for the scatter sampler.** Without this, the cluster reshuffles on every re-sample and the player perceives chaos instead of shrink/grow. Same approach as the existing green/orange/red freeze beats.
+- **Slider demos block commits without freezing the meter.** For the H Speed demo specifically: the marker must keep bouncing so the player can feel the speed change, but clicks must not commit. New `set_input_blocked` flag is cleaner than overloading `_paused`.
+- **Rules slideshow uses a self-contained mini dartboard, not the main board.** Phase A shipped highlights routed to the main board, but the 0.75-opacity modal scrim renders them nearly invisible. A mini board inside the slide panel (modeled on the assembly screen's existing zone preview pattern) puts the visual next to the text it's explaining, eliminates scrim-occlusion, and isolates the slideshow from any state changes on the main board.
 
 ---
 

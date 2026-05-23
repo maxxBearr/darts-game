@@ -106,6 +106,8 @@ const STAT_MAX_VALUE: float = 100.0
 
 var _stat_bars: Dictionary = {}
 var _stat_value_labels: Dictionary = {}
+var _stat_rows: Dictionary = {}
+var _stats_title_label: Label = null
 var _modifier_status_title: Label
 var _modifier_rows: Array[Dictionary] = []
 
@@ -338,12 +340,12 @@ func _build_stat_bars() -> void:
 	var tooltip_theme: Theme = _create_tooltip_theme()
 	stats_container.theme = tooltip_theme
 
-	var title: Label = Label.new()
-	title.text = "— Stats —"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 14)
-	title.modulate = Color(0.8, 0.8, 0.6)
-	stats_container.add_child(title)
+	_stats_title_label = Label.new()
+	_stats_title_label.text = "— Stats —"
+	_stats_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_stats_title_label.add_theme_font_size_override("font_size", 14)
+	_stats_title_label.modulate = Color(0.8, 0.8, 0.6)
+	stats_container.add_child(_stats_title_label)
 
 	for key: String in STAT_KEYS:
 		var row: HBoxContainer = HBoxContainer.new()
@@ -380,6 +382,43 @@ func _build_stat_bars() -> void:
 
 		_stat_bars[key] = bar_fill
 		_stat_value_labels[key] = val_lbl
+		_stat_rows[key] = row
+
+
+## Set visibility on specific stat bar rows. Used by the tutorial to progressively reveal stats.
+func set_stat_bar_visibility(stat_keys: Array[String], is_visible: bool) -> void:
+	for key: String in stat_keys:
+		if _stat_rows.has(key):
+			(_stat_rows[key] as Control).visible = is_visible
+
+
+## Set visibility on the stats title label ("— Stats —").
+func set_stats_title_visible(is_visible: bool) -> void:
+	if _stats_title_label != null:
+		_stats_title_label.visible = is_visible
+
+
+## Fade in specific stat bar rows with a tween animation.
+func fade_in_stat_bars(stat_keys: Array[String], duration: float = 0.4) -> void:
+	for key: String in stat_keys:
+		if not _stat_rows.has(key):
+			continue
+		var row: Control = _stat_rows[key] as Control
+		row.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		row.visible = true
+		var tween: Tween = create_tween()
+		tween.tween_property(row, "modulate:a", 1.0, duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+
+
+## Show all stat bars and the title — convenience for restoring after tutorial.
+func show_all_stat_bars() -> void:
+	if _stats_title_label != null:
+		_stats_title_label.visible = true
+	for key: String in STAT_KEYS:
+		if _stat_rows.has(key):
+			var row: Control = _stat_rows[key] as Control
+			row.visible = true
+			row.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
 
 ## Update the stats panel bars with current values and color coding.

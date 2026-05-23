@@ -940,6 +940,7 @@ func _setup_tutorial_system() -> void:
 	tutorial_controller.throw_mechanic = throw_mechanic
 	tutorial_controller.dartboard = dartboard
 	tutorial_controller.ghost_dart_layer = ghost_dart_layer
+	tutorial_controller.hud = hud
 	tutorial_controller.tutorial_finished.connect(_on_tutorial_finished)
 	add_child(tutorial_controller)
 
