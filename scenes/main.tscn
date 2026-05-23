@@ -46,7 +46,6 @@ outline_color = Color(0, 0, 0, 1)
 
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
-debug_start_with_modifier = true
 next_dart_delay = 0.05
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
