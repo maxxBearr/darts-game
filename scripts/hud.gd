@@ -331,6 +331,7 @@ func hide_score() -> void:
 
 ## Show a fresh set of upgrade choices (for subsequent rounds).
 func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
+	_preview_upgrades = upgrades
 	score_label.text = "Choose another upgrade!"
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
@@ -1027,9 +1028,14 @@ func show_modifier_choices(modifiers: Array) -> void:
 ## Non-empty string = warning text shown on the card (e.g., "Replaces: Wedge Streak").
 func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: Array[String]) -> void:
 	_modifier_mode = true
+	_preview_upgrades.clear()
 	score_label.text = "Choose a scoring modifier!"
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
+		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
+			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
+		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
+			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
 		var modifier: Resource = modifiers[i]
 		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
 		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
