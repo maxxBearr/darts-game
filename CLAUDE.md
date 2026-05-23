@@ -1,242 +1,512 @@
-# Tutorial & Help System — Phase A Shipped, Phase B Additions
+# Active Spec — Modifier Icon Language, Streak Section, & Color Streak Split
 
-**Spec date:** 2026-05-22 (original) | revised 2026-05-22 (Phase B additions)
-**Status:** Phase A shipped via Claude Code; Phase B additions designed, ready for implementation.
-**Scope of this pass:** Fold stat education into the existing mechanics tutorial via progressive bar reveals and three interactive slider demos, a "real stats" requirement that ties the tutorial throws to the player's actual build, and a side-by-side mini-dartboard rework of the rules slideshow (because the current implementation's highlights are obscured by the modal scrim). Leaves Assembly Tutorial (Section 5) and Stats Reference (Section 6) as smaller follow-ons.
+*Spec date: 2026-05-23.* Item-presentation tightening pass. Replaces the flat rarity-tinted squares in the modifier panel with category-aware shape icons, adds a dedicated runtime streak status section to the HUD, splits the single generic Color Streak modifier into four per-color variants that share the COLOR slot, and simplifies Wedge Streak (drops the leniency axis, surfaces the streaked wedge value in the display).
 
----
+## Goals
 
-## Already Shipped (do NOT rebuild)
+1. **A consistent visual language for modifier items** that conveys category at a glance (color / parity / wedge) without forcing the player to read text on every relic square. Shape encodes category, fill/outline color encode the specifics, rarity is always the outermost ring.
+2. **Persistent, explicit streak feedback.** Streaks are mechanically central to the game's late-run scoring (grouping is a real darts virtue) but currently only surface during target-tooltip hovers. A dedicated streak strip above the dart pips makes the player aware of what they're maintaining, what they've lost, and what they could still build.
+3. **Structural separation of Bonus vs Streak modifiers.** Bonuses live in the modifier relic panel (visual-only "I own this" representation). Streak modifiers also appear in the relic panel but additionally get a runtime status line in the new streak section. The streak section explicitly labels them as streaks — the relic panel does not — so location does the bonus/streak disambiguation work, not a glyph variant.
+4. **Color Streak granularity.** The current single `ColorStreakModifier` rewards "consecutive same-color hits" regardless of which color the streak forms on, which dilutes both the player's read of the streak and the rarity tuning. Split into four per-color variants (Red / Green / Black / White Streak) following the existing `ColorBonusModifier` "one class, target_color rolled at generation" pattern. Existing one-per-category COLOR slot rule still caps the player at one active color streak at a time.
+5. **Wedge Streak simplification.** Drop the leniency axis (was being used by rarity); rarity now drives scope only, like the other streaks. Always WHOLE_WEDGE matching: any ring on the same numbered wedge counts. Surface the currently-tracked wedge value in the streak display (`20 Wedge Streak (per leg): x2` → switches to `5 Wedge Streak (per leg): x1` when the player breaks 20 by hitting a 5).
+6. **Relic vs Board Mutation classification.** Introduce an explicit `ModifierKind` distinction. RELIC modifiers (Color Bonus, Color Streak, Even/Odd Bonus, Even/Odd Streak, Wedge Streak) live in the modifier panel and have icons. BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) are one-time effects that mutate the dartboard at acquisition and then *disappear from the inventory* — the board itself becomes the receipt. They never get icons because they never appear in panel UI. Reduces visual noise and matches player mental model: "what's actively scoring for me?" (panel) vs "what does the board look like?" (the board).
 
-The first Claude Code pass shipped the bulk of the original spec. Before adding anything, read the relevant files to understand the current shape — Phase B plugs *into* this code, not alongside it.
+## Non-Goals
 
-| Spec section | Status | Lives in |
-|---|---|---|
-| 1. Start Screen | Shipped | `scripts/start_screen.gd`; wired in `main.gd` (signals: `start_game_pressed`, `play_tutorial_pressed`, `rules_pressed`, `stats_reference_pressed`). `stats_reference_pressed` is emitted but not yet handled — see Section 6 below. |
-| 2. Mechanics Tutorial | Shipped | `scripts/tutorial_controller.gd` (448 lines, full 3-throw walkthrough). Captions live in the exported `tutorial_strings: Dictionary`. Throw 1 beats are split across named functions: `_throw1_place_aim`, `_throw1_explain_ideal`, `_throw1_lock_vertical`, `_throw1_start_h_freezes`, `_throw1_show_h_freeze`, `_throw1_next_h_freeze`, `_throw1_resume_h`. Throw 2 is `_start_throw_2_guided` → `_on_throw_2_completed`. Throw 3 is `_start_throw_3_free` → `_on_throw_3_completed` → `_build_end_buttons`. |
-| 2c. Throw mechanic hooks | Shipped | `throw_mechanic.gd`: `set_paused`, `set_scripted_mode`, `set_bounce_t`, `set_horizontal_bounce_t`, `force_lock_aim`, `force_lock_vertical`, `force_lock_horizontal`, `meter_position_changed` signal, `get_zone_boundary_h_positions`. |
-| 2e. Callout overlay | Shipped | `scripts/tutorial_callout.gd`. |
-| 3. Ghost-Dart Scatter Preview | Shipped | `scripts/ghost_dart_layer.gd`; sampler is `throw_mechanic.sample_scatter_points(...)`; opt-in live preview exposed via `live_scatter_preview: bool` and `live_scatter_sample_count: int` on throw_mechanic. |
-| 4. Meter Zone Bands | Shipped | `throw_mechanic.gd::show_h_meter_zone_bands: bool` toggles them; rendered alongside the H meter using existing `accuracy_*_color` exports. |
-| 7. Rules of Darts | Shipped | `scripts/rules_slideshow.gd` (405 lines, slideshow + doubles drill). Dartboard highlight via `dartboard.set_tutorial_highlight(...)` / `clear_tutorial_highlight()`. Slide content lives in exported `rules_slides: Array[Dictionary]`. |
-| 8. First-Run Trigger | Shipped | `scripts/settings_store.gd` (static singleton over `ConfigFile` at `user://settings.cfg`). `scripts/welcome_modal.gd` is the soft prompt. `main.gd::_ready` checks `SettingsStore.get_tutorial_seen()` and routes accordingly. `debug_reset_tutorial_seen` export on main.gd lets Max reset the flag from the inspector. |
-
-**Reminder for the next pass:** if a section in this spec contradicts what's in the code, treat the *code* as the current truth and adapt the spec changes to it (Phase A may have made small variations during implementation). Don't restructure shipped code unless the spec explicitly calls for it.
+- Not changing scoring math (apart from making the per-hit multiplier scale an exported var per streak type).
+- Not changing slot system or rarity weights.
+- Not changing the upgrade pick card layout, only the small icon shown on it (if room).
+- Not redesigning the shop hover or tooltip UI.
 
 ---
 
-## Phase B — New Work
+## Modifier Kind Classification
 
-Five changes. B1–B4 are all folded into the existing mechanics tutorial — the goal there is to **teach stats in context**, where each stat is revealed and explained next to the throw stage it controls, rather than as a separate Stats Reference flow. B5 is independent — a layout/visual fix to the already-shipped rules slideshow.
+Add a new enum to `scoring_enums.gd`:
 
-### B1. Real stats throughout the tutorial
+```gdscript
+## Whether a modifier persists in the player's inventory (relic panel) or
+## is a one-time effect that mutates the board and then disappears.
+enum ModifierKind {
+    RELIC,           ## Persistent — shown in modifier panel, has an icon, contributes to live scoring per dart.
+    BOARD_MUTATION,  ## One-time — applied at acquisition (or after a wedge/color picker), no panel presence afterward.
+                     ## The board itself reflects the change (effective wedge values / segment colors).
+}
+```
 
-The tutorial sandbox should use the player's *actual* build stats — not arbitrary tutorial-friendly defaults — so the throws in tutorial throw 3 feel exactly like the throws in their first real leg.
+Add to `ScoringModifier` base class:
 
-**Behavior:**
+```gdscript
+## Whether this modifier appears in the HUD modifier panel after acquisition.
+## RELIC modifiers persist as inventory items. BOARD_MUTATION modifiers fire
+## once and then leave only their effect on the board, not a relic square.
+@export var kind: ScoringEnums.ModifierKind = ScoringEnums.ModifierKind.RELIC
+```
 
-- When tutorial is entered from the **Start Screen on first run**, the player has no equipped build yet, so the throw_mechanic is on its default exported values. That's fine — use them as-is. Don't seed special tutorial values.
-- When tutorial is entered from **Assembly** (replay), the player has an equipped build. The throw_mechanic stats reflect that build (per `dart_build.apply_to_throw_mechanic(...)` in main.gd's `_on_run_confirmed`). Use those values. This becomes an emergent "feel my current build" tool for returning players.
-- When the **live slider demos** (B3) temporarily mutate a stat, the original value must be snapshotted before the demo and restored after. Pattern to follow: `main.gd::_snapshot_base_stats` / `_restore_raw_stats`. Wrap each demo in a save/restore.
+Default is RELIC (matches existing behavior for most modifiers). Subclasses override:
 
-**Implementation:**
+| Modifier | Kind |
+|----------|------|
+| ColorBonusModifier | RELIC |
+| ColorStreakModifier | RELIC |
+| OddEvenBonusModifier | RELIC |
+| EvenStreakModifier / OddStreakModifier | RELIC |
+| StreakBonusModifier (Wedge Streak) | RELIC |
+| WedgeValueModifier | BOARD_MUTATION |
+| WedgeSwapModifier | BOARD_MUTATION |
+| ColorFlipModifier | BOARD_MUTATION |
 
-- Add a small helper on `tutorial_controller.gd`: `_snapshot_stat(stat_name: String) -> float` and `_restore_stat(stat_name: String, value: float) -> void`. The snapshot stores the throw_mechanic property by name; restore writes it back. Called before/after each B3 demo.
-- No new public API on `throw_mechanic.gd` — the controller reads/writes the existing exported vars directly.
-- Document in the controller's class comment that the tutorial assumes throw_mechanic stats are pre-configured by main.gd before the tutorial starts. No re-initialization inside the controller.
+`hud.gd::add_modifier_to_panel()` gates on `kind == RELIC` — BOARD_MUTATION modifiers early-return without creating a relic square. They still go through the manager's `add_modifier(...)` for state tracking and effect application, but they never show up in the relic bar.
 
-### B2. Progressive stat-bar reveal
-
-The six stat bars (currently rendered by `hud.gd::_build_stat_bars` into the `StatsContainer`) start **hidden** when the tutorial begins. As each relevant stage is explained, the corresponding bars fade in and a callout names them. By the end of throw 1, all six are visible. They remain visible for throws 2 and 3.
-
-**Reveal mapping (which stat appears at which beat):**
-
-| Tutorial beat (existing function) | Stats revealed | Caption (new `tutorial_strings` key) |
-|---|---|---|
-| `_throw1_place_aim` — aim ellipse shown | H Range, V Range | `"reveal_range"`: "These two stats — **H Range** and **V Range** — control the size of your aim ellipse. Higher Range = smaller ellipse = more precise aim." |
-| `_throw1_lock_vertical` — V meter active | V Speed | `"reveal_v_speed"`: "**V Speed** controls how fast the vertical marker bounces. Higher = slower = easier to time." |
-| `_throw1_start_h_freezes` — H meter active | H Speed | `"reveal_h_speed"`: "**H Speed** is the same idea for the horizontal marker." |
-| `_throw1_show_h_freeze` at the green-zone beat | H Accuracy, V Accuracy | `"reveal_accuracy"`: "**H Accuracy** and **V Accuracy** set your base scatter size. Where you lock on the meters then modifies it — closer to the centroid shrinks the scatter, farther bloats it." |
-
-**Implementation:**
-
-- The HUD already builds the stat rows. Add a method `hud.set_stat_bar_visibility(stat_keys: Array[String], visible: bool)` that toggles `visible` on the matching rows in `stats_container`. Stat keys use the existing `STAT_KEYS` constant.
-- Tutorial controller starts by calling `hud.set_stat_bar_visibility(STAT_KEYS, false)` and the stats title (the "— Stats —" label) also hidden. Then at each reveal beat it un-hides the named subset.
-- Fade in via a short `create_tween()` on each row's `modulate.a` from 0 → 1. Duration exported on `tutorial_controller.gd` as `@export var stat_reveal_fade_duration: float = 0.4`.
-- After the tutorial finishes (`_finish_to_assembly` or `_finish_to_start`), re-show all stat bars regardless of state, so normal gameplay isn't affected.
-- The reveal beats are inserted *into the existing throw 1 flow* — they're not their own throws. Each reveal piggybacks on a callout already happening at that stage (e.g., the aim-ellipse callout grows to include the range-stat reveal). Or, if cleaner, add a new sequential callout immediately following the existing one. Either is fine; pick whichever flows better in playtest.
-
-### B3. Three live-slider demos (Range, Speed, Accuracy)
-
-After the stat reveal at each stage, a small interactive demo lets the player drag a slider on the *horizontal* stat (H Range, H Speed, H Accuracy) and watch the visual update live. Three demos total; the player gets the cause-effect once per category and generalizes to the vertical counterpart.
-
-**Demo 1 — H Range (after aim-ellipse + reveal_range callout):**
-
-- Pauses the throw mechanic in AIMING with the aim ellipse placed (the tutorial already auto-places it via `force_lock_aim`).
-- Shows a slider widget at a tutorial-controlled screen position, labeled "H Range" with the current value displayed.
-- Slider min/max derived from the H Range gameplay range — recommend `(20, 90)` to bracket the visible-difference window. Pull from new exports `@export var demo_h_range_min: float = 20.0` and `@export var demo_h_range_max: float = 90.0`.
-- On slider drag, write the value to `throw_mechanic.horizontal_range` and call `throw_mechanic.queue_redraw()`. The aim ellipse half-width recomputes (the throw mechanic already redraws the ellipse from the current `horizontal_range` value).
-- Caption: `"demo_range"`: "Try it — drag the slider and watch the ellipse change. **V Range** works the same way for the vertical axis."
-- A "Got it" button next to the slider continues the tutorial. On click: restore the original `horizontal_range` value, remove the slider widget, advance to the next beat.
-
-**Demo 2 — H Speed (after H meter starts + reveal_h_speed callout):**
-
-- Pauses the H meter only briefly to set up, then resumes with the marker free-running. The marker keeps bouncing left/right at whatever speed the slider currently dictates. Player clicks are *blocked* during the demo (no commit).
-- Slider on `throw_mechanic.horizontal_speed`. Min/max `(1.0, 5.0)` covering the documented gameplay range.
-- On slider drag, write to `throw_mechanic.horizontal_speed`. The bounce loop already reads this value each frame — no extra redraw call needed.
-- Caption: `"demo_speed"`: "Drag to feel the difference. Slower meter = more time to react. **V Speed** is the same for the vertical meter."
-- "Got it" → restore, remove slider, *unblock H meter input*, continue.
-- **Implementation note:** the controller already has `set_scripted_mode(true)` for throw 1. Add an explicit `set_input_blocked(blocked: bool)` flag on throw_mechanic (or reuse `set_paused` carefully) so the marker keeps moving but clicks don't commit during the demo. Cleanest is a new internal flag, since `_paused` halts `_process` entirely.
-
-**Demo 3 — H Accuracy (after the H freeze beats, just before resume to throw resolution):**
-
-- Pauses in HORIZONTAL_RELEASE with a representative locked position (the orange-zone freeze position from the existing `_throw1_show_h_freeze` sequence is a good baseline — neutral, no zone bonus or penalty).
-- Shows ghost-dart cluster via `ghost_dart_layer.show_scatter(sample_scatter_points(..., rng_seed=<fixed>))`. **Fixed seed is essential** so the cluster pattern stays consistent and the player perceives shrink/grow rather than "shuffle."
-- Slider on `throw_mechanic.horizontal_accuracy`. Min/max `(20, 80)`.
-- On slider drag: write the new value, then re-sample with the same seed, then call `ghost_dart_layer.show_scatter(new_points)`. Cluster shrinks/grows visibly.
-- Caption: `"demo_accuracy"`: "Watch the scatter shrink and grow. Tighter accuracy = your darts land closer together. **V Accuracy** does the same for vertical spread."
-- "Got it" → restore, clear scatter, remove slider, continue to `_throw1_resume_h`.
-
-**Slider widget:**
-
-- New file: `scripts/tutorial_slider.gd` extending `Control`. Small VBox: label (stat name + current value), HSlider, "Got it" button.
-- Signals: `value_changed(value: float)`, `dismissed`.
-- Position, size, fonts, colors all exported with hover descriptions per project conventions.
-- Lives transiently — instantiated by tutorial_controller for the demo, freed when dismissed.
-
-**New beat ordering inside throw 1:**
-
-The existing throw 1 sequence has beats roughly: intro → place aim → explain ideal → lock vertical → start H freezes → show H freeze ×3 → resume H → throw completed. The new beats slot in as:
-
-1. intro
-2. place aim
-3. **reveal H/V Range bars + caption** (B2)
-4. **H Range slider demo** (B3 demo 1)
-5. explain ideal
-6. lock vertical
-7. **reveal V Speed bar + caption** (B2)
-8. start H freezes
-9. **reveal H Speed bar + caption + H Speed slider demo** (B2 + B3 demo 2 — the demo runs *before* the freeze sequence so the player isn't pulled out mid-freeze)
-10. show H freeze (green)
-11. **reveal H/V Accuracy bars + caption** (B2) — anchored to the green-zone freeze since that's where scatter is most visibly tight
-12. show H freeze (orange)
-13. show H freeze (red)
-14. **H Accuracy slider demo** (B3 demo 3) — after all three freezes have established what zone-driven scatter changes look like
-15. resume H
-16. throw completed
-
-Beats 10-13 are unchanged from current code. The new beats (3, 4, 7, 9, 11, 14) plug in around them.
-
-### B4. Skip-tutorial behavior under the new beats
-
-The existing tutorial already has a Skip Tutorial path. The new demos add interactive widgets that need cleanup on skip. The cleanest pattern: any active demo registers a teardown callback with the tutorial controller; the skip handler walks the teardown stack before exiting. This avoids leaked sliders or mutated stats when a player skips mid-demo.
-
-### B5. Rules Slideshow — mini dartboard + side-by-side layout
-
-The shipped rules slideshow (`scripts/rules_slideshow.gd`) routes highlight calls to the **main dartboard**, but the dartboard sits behind a 0.75-opacity modal scrim while the slideshow is open — so the highlights technically fire but are nearly invisible. Fix: add a dedicated mini dartboard *inside* the slide panel, and restructure the panel layout side-by-side (text left, board right).
-
-**Behavior:**
-
-- Modal panel widens (current `panel_width: 520.0` → ~720). The panel splits into two columns: left column holds title, body, slide counter, prev/next/close buttons (current single-column layout, just narrower); right column holds a small label ("The Board") above a mini dartboard.
-- The mini dartboard is **always visible** while the slideshow is open, even on slides whose `highlight` array is empty. Acts as a spatial reference the player can glance at throughout.
-- Slides whose `highlight` array is non-empty render those highlights on the **mini board only** — never on the main board. The main dartboard stays clean and unhighlighted for the slideshow's entire lifetime.
-
-**Implementation — model after the assembly screen's zone preview:**
-
-The pattern to copy is `scripts/assembly_screen.gd::_build_zone_preview()` and `_draw_preview_dartboard(center)` (around lines 841–966). That's a custom-drawn `Control` with its own simplified `_draw_board_segment(...)` and `_draw_board_ring(...)` helpers that draw arc-based wedges and concentric rings at a given center — **not** a Dartboard node instance. Lightweight, self-contained, and already proven in production. The same ring threshold constants (0.032, 0.08, 0.48, 0.53, 0.76, 0.83) used by both the assembly preview and the main dartboard mean the mini board's geometry matches the real board.
-
-Add to `rules_slideshow.gd`:
-
-1. **Mini-board widget construction.** A `Control` child of the slide panel, positioned in the right column. Connect its `draw` signal to a new `_draw_mini_board()` method that mirrors `assembly_screen.gd::_draw_preview_dartboard(center)`. Copy the segment/ring helpers verbatim (or extract them to a shared utility if Max prefers — see note below). All visual constants (background color, segment colors, wire color) exported with hover descriptions.
-2. **Highlight overlay.** After drawing the base board, draw any active highlights on top. Port the four highlight-type handlers from `dartboard.gd::set_tutorial_highlight` (`all_wedges_ring`, `single_wedge_all`, `single_segment`, `bullseye`) into the mini board's draw method. Highlights are stored in a small `_active_highlights: Array[Dictionary]` field on the slideshow, set per-slide in `_display_current_slide()` and `queue_redraw()` triggered on the mini board.
-3. **Stop passing highlights to the main dartboard.** Remove the `dartboard.set_tutorial_highlight(slide["highlight"])` call (currently in `_display_current_slide`). The existing `dartboard: Node2D` field can be kept solely for the open/close cleanup below, or removed entirely if the slideshow no longer needs any reference to the main board.
-4. **Cleanup pass for stale main-board highlights.** `show_slideshow()` should call `dartboard.clear_tutorial_highlight()` on open (currently only called on close, which means a slideshow opened immediately after a previous one closed could briefly inherit stale highlights from elsewhere — defensive cleanup is cheap). After this pass, the main board's tutorial-highlight system is touched ONLY by the rules slideshow on open/close, and never set during slideshow play.
-
-**New exports (with hover descriptions per project conventions):**
-
-- `mini_board_radius: float` (default ~100.0) — pixel radius of the mini board. Pulled from the same scaling logic the assembly preview uses (`preview_ratio = mini_board_radius / 300.0`).
-- `mini_board_column_width: float` (default ~200.0) — width of the right column inside the panel.
-- `text_column_width: float` (default ~480.0) — width of the left column. Old `body_label` width binds to this.
-- `mini_board_label_text: String` (default "The Board") — title above the mini board.
-- `mini_board_label_font_size: int` (default 14).
-- Per-color exports for the mini board's background, segment colors, wire color, and highlight overlay (highlight color can default to the same `Color(1.0, 0.85, 0.2, 0.4)` value as the main dartboard's `tutorial_highlight_color`).
-- `panel_width` already exists — update default from 520 to ~720 (or whatever fits two columns cleanly).
-
-**Note on factoring the segment/ring drawing helpers:**
-
-The mini-board draw code in `assembly_screen.gd` is ~60 lines of arc/polygon math. It's already duplicated (the main `dartboard.gd::_draw_segment` does the same thing at a different scale). After this change there'd be three copies. If Max wants to clean that up:
-
-- Extract a `class_name DartboardGeometry extends RefCounted` (or similar) with static helpers `draw_segment(canvas, center, start_deg, end_deg, outer_r, inner_r, color)` and `draw_ring(canvas, center, radius, color)`.
-- Both `dartboard.gd` and `assembly_screen.gd` and the new rules-slideshow mini board call into it.
-
-This is a small refactor and not strictly required for B5 to ship. Flag it as a follow-up cleanup if Max wants it.
-
-**Skip-tutorial / close behavior:**
-
-- Close button or scrim-click: hide slideshow, mini-board widget stays as a child of the panel (no need to destroy/recreate), main dartboard's highlights stay clear.
-- Re-opening the slideshow: re-runs `show_slideshow()` from slide 0, which calls `dartboard.clear_tutorial_highlight()` defensively, and the mini board re-draws based on the new active slide.
+This means **BOARD_MUTATION modifiers don't need icons** — they never appear in any icon-rendering surface (panel or streak section). The icon system only handles RELIC modifiers.
 
 ---
 
-## Pending from Original Spec (still applicable, lower priority)
+## Visual Language
 
-### Section 5 — Assembly Tutorial (trimmed)
+### Category Shapes (RELIC modifiers only)
 
-Now that Phase B teaches stats in context during the mechanics tutorial, the Assembly Tutorial becomes a lighter walkthrough focused on the *assembly screen itself*, not stat fundamentals. New scope:
+| Category | Base Shape | Why |
+|----------|------------|-----|
+| Color | Circle | Round = "ball of color." Fill = target color. |
+| Parity (Even) | Square | Even = "level / regular." Reinforced by red outline. |
+| Parity (Odd) | Triangle | Odd = "pointed / off." Reinforced by green outline. |
+| Wedge | Pie slice / sector | Direct semantic link to a dartboard wedge. |
 
-1. Callout pointing at the dart preview: "Your dart — barrel + shaft + flight."
-2. Callout pointing at slot arrows: "Cycle through your owned components on each slot."
-3. Callout pointing at stat bars: "Watch the bars change as you swap parts." (No re-teaching of what each stat means — that lived in the mechanics tutorial.)
-4. Callout pointing at the balance bar: "Component weights sum to a balance value. Green = bonus, drifting into orange/red = penalties. Sometimes worth it for the raw stats."
-5. Callout pointing at the zone preview (bottom-left): "Live preview of your aim ellipse and accuracy zone at current stats."
-6. Callout pointing at Begin Run: "Hit this when you're happy with the build."
-7. End message.
+The shape carries the *category*. Within a category, the fill and inner outline carry the *specifics* (which color, which parity), and rarity is always the *outermost* ring.
 
-**Implementation:**
+### Outline Rules
 
-- Add `_build_assembly_tutorial_beats() -> Array[Dictionary]` to `tutorial_controller.gd`. Reuses the existing `tutorial_callout.gd` infrastructure.
-- Wire to a new "Assembly Tutorial" button in `assembly_screen.gd` (separate from the existing "Play Tutorial" button, which re-enters the mechanics tutorial). New signal: `assembly_tutorial_pressed`.
-- `main.gd` connects the new signal to a handler that calls `tutorial_controller.start_assembly_tutorial()`.
-- Arrow targets read from the AssemblyScreen's existing exported layout vars (e.g., `dart_preview_position`, `barrel_slot_position`, `zone_preview_position`) so callouts move when Max retunes UI positions in the inspector.
+- **Color modifiers (Color Bonus, per-color Streaks):** ONE outline = rarity. The fill color *is* the category-specific information; an inner category outline would be redundant.
+- **Parity modifiers (Even/Odd Bonus, Even/Odd Streak):** TWO outlines. Inner outline = category color (red for even, green for odd). Outer outline = rarity color. Both should be visible at panel size.
+- **Wedge Streak:** ONE outline = rarity. Filled with a neutral dark color, since the player reads the streaked-wedge value from the streak section text, not the icon fill.
 
-### Section 6 — Stats Reference (deferred / nice-to-have)
+### Per-Modifier Specifics
 
-With stats taught in-context, the persistent Stats Reference shifts from *teaching tool* to *reference tool* — "I forgot what V Accuracy does, let me look it up." Still useful, but no longer mission-critical for first-time comprehension.
+| Modifier | Shape | Fill | Inner Outline | Outer Outline |
+|----------|-------|------|---------------|---------------|
+| Color Bonus (Red/Green/Black/White) | Circle | target color | — | rarity |
+| Red/Green/Black/White Streak | Circle | target color | — | rarity |
+| Even Bonus | Square | dark neutral | red | rarity |
+| Odd Bonus | Triangle | dark neutral | green | rarity |
+| Even Streak | Square | dark neutral | red | rarity |
+| Odd Streak | Triangle | dark neutral | green | rarity |
+| Wedge Streak | Sector | dark neutral | — | rarity |
 
-If shipped:
+Bonus vs Streak is **not** distinguished visually within a category — the player tells them apart by where they appear (relic bar for "owned" status, streak strip for live streak state) and by the modifier name on hover. BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) don't appear in this table — they have no icons and no panel presence.
 
-- Create `scripts/stat_descriptions.gd` (RefCounted, static dictionaries for `SHORT`, `LONG`, `DISPLAY_NAMES`, `STAGE`). Migrate `hud.gd::STAT_DESCRIPTIONS` and `STAT_DISPLAY_NAMES` to reference these so there's a single source of truth.
-- Create `scripts/stats_reference_panel.gd` (modal Control overlay listing all six stats grouped by stage).
-- Wire `start_screen.stats_reference_pressed` (already emits, just not handled) to show the panel.
-- Add a "Stats" button to the Assembly Screen that also opens it.
+### Sizes
 
-Defer unless playtest shows the in-context teaching alone is insufficient.
+Three render sizes, all driven by exported vars:
 
----
-
-## Implementation Notes
-
-- **Static typing throughout** per project conventions. Every `var`, every parameter, every return.
-- **Frequent commenting** — especially on the new beat ordering inside throw 1. Note in the controller's class comment which beats are "shipped Phase A" vs "added Phase B" so future readers can trace the design history.
-- **All tunable values exported with `##` hover descriptions** per project conventions: slider widget position/size/colors, slider min/max for each demo, stat reveal fade duration, the demo captions (new `tutorial_strings` keys).
-- **Snapshot/restore around every demo.** Critical — a tutorial that leaves the player's stats mutated would be a bug players never notice but always feel as "the dart doesn't behave like it did in the tutorial."
-- **No changes to scoring, game logic, or modifier systems.** Phase B is pure tutorial enhancement.
-- **Scene tree additions (Phase B only):**
-  - `scripts/tutorial_slider.gd` — new transient widget, instantiated by tutorial_controller as needed.
-  - Possibly a `set_input_blocked(blocked: bool)` on `throw_mechanic.gd` if the existing `_paused` flag isn't right for the H Speed demo (marker keeps bouncing, clicks ignored).
-- **HUD changes:** add `set_stat_bar_visibility(stat_keys: Array[String], visible: bool)` to `hud.gd`. Pair it with a "show all" convenience caller that the tutorial uses on exit.
+- **Relic-bar size** (`modifier_square_size`, currently `40px`) — full-size on the HUD modifier panel.
+- **Streak-line icon size** (`streak_icon_size`, new, default `20px`) — smaller inline icon at the start of each streak section line.
+- **Pick-card icon size** (`pick_card_icon_size`, new, default `28px`) — medium icon shown on upgrade/shop modifier pick cards. Optional this pass — see Deferred.
 
 ---
 
-## Key Design Decisions (for the archive)
+## Streak Section in HUD
 
-- **Stats taught in-context during mechanics tutorial, not as a separate Stats Reference flow.** Realized post-Phase-A playtest: a separated reference is less effective than showing the stat next to the thing it controls. The Stats Reference becomes a "look it up later" tool rather than a primary teaching surface.
-- **Three live demos, one per category (Range, Speed, Accuracy), horizontal axis only.** Six demos would balloon the tutorial; one per category teaches the cause-effect once and the player generalizes to the V counterpart. Horizontal axis is the visually larger one for each category, so the slider delta is more striking.
-- **Real stats throughout the tutorial.** No "easy mode" tutorial values that diverge from real gameplay. Tutorial throw 3 must feel exactly like the first throw of the first real leg, or the player feels lied to. Side benefit: replaying the tutorial from Assembly with an upgraded build becomes a "feel my current dart" tool for free.
-- **Progressive bar reveal vs all-visible-from-start.** Progressive avoids the "wall of unfamiliar numbers" reaction on first sight and makes each reveal feel like depth being uncovered. Costs a small amount of choreography; worth it.
-- **Demos use fixed RNG seeds for the scatter sampler.** Without this, the cluster reshuffles on every re-sample and the player perceives chaos instead of shrink/grow. Same approach as the existing green/orange/red freeze beats.
-- **Slider demos block commits without freezing the meter.** For the H Speed demo specifically: the marker must keep bouncing so the player can feel the speed change, but clicks must not commit. New `set_input_blocked` flag is cleaner than overloading `_paused`.
-- **Rules slideshow uses a self-contained mini dartboard, not the main board.** Phase A shipped highlights routed to the main board, but the 0.75-opacity modal scrim renders them nearly invisible. A mini board inside the slide panel (modeled on the assembly screen's existing zone preview pattern) puts the visual next to the text it's explaining, eliminates scrim-occlusion, and isolates the slideshow from any state changes on the main board.
+### Position & Layout
+
+A new `StreakSection` VBoxContainer added to the HUD scene tree, positioned **above** `DartIndicator` and **below** `TurnScoreLabel`. Visible only when at least one streak modifier is owned. Vertically grows with the number of owned streaks (max 3, gated by the one-per-category slot rule: WEDGE + COLOR + PARITY).
+
+```
+HUD (CanvasLayer)
+├── ... existing labels ...
+├── TurnScoreLabel
+├── StreakSection (VBoxContainer)   ← NEW
+│   ├── StreakLine (HBoxContainer)  ← one per owned streak modifier
+│   │   ├── StreakIcon (ModifierIcon)   ← small shape icon
+│   │   ├── StreakNameLabel (Label)     ← e.g. "Red Streak" or "20 Wedge Streak"
+│   │   ├── StreakScopeLabel (Label)    ← "(per leg)", rarity-colored
+│   │   └── StreakCountLabel (Label)    ← ": x2"
+│   ├── ... up to 3 ...
+├── DartIndicator
+└── ... rest of HUD ...
+```
+
+### Display Format
+
+`[Icon] [Name] [(per scope)] [: xN]`
+
+- **Icon:** small (`streak_icon_size`) version of the modifier's shape icon (same drawing helper, scaled down). Color/outline rules identical to the relic-bar version.
+- **Name:** the modifier's `modifier_name`. For Wedge Streak, prepend the current streaked wedge value: `"%d %s" % [face_value, modifier_name]` → `"20 Wedge Streak"`. When `_streak_wedge_index < 0` (no streak), display `"— Wedge Streak"` (em-dash placeholder).
+- **(per scope):** the scope string (`"(per turn)"`, `"(per leg)"`, `"(per run)"`) — modulate color set to the modifier's `rarity_color`.
+- **: xN:** the current streak count.
+
+### Idle vs Active State
+
+A streak with `_streak_count == 0` (owned but no live streak yet, or just reset) renders with reduced opacity (~0.5) — the line is still visible so the player remembers they own it, but it's clearly inactive. When the streak goes live (count ≥ 1), the line jumps to full opacity. Drive this via an exported `streak_idle_opacity` var.
+
+### Update Cadence
+
+The HUD's streak section is repopulated when:
+
+- A streak modifier is acquired (`add_modifier_to_panel`-equivalent path also adds a streak line).
+- A streak modifier is replaced (one-per-category swap): old line removed, new line added.
+- A streak modifier is toggled off (unlocked modifier): line is shown but at a deeper-dimmed opacity (e.g. `streak_disabled_opacity`, default `0.3`) and prefixed with a `[OFF]` tag.
+- Per-throw: after every throw, walk the owned streak modifiers and rewrite each line's count, opacity, and (for wedge streak) name. This is cheap — max 3 modifiers.
+- New run: clear the section entirely.
+
+### Where the Update Hook Lives
+
+Add a `hud.update_streak_section(active_streak_modifiers: Array)` method called from `main.gd`'s post-throw pipeline, right after `scoring_modifier_manager.process_score(...)` and before the existing `set_modifier_perkup(...)` call. `main.gd` already has access to the modifier manager and can pull the active modifiers list.
+
+---
+
+## Color Streak Split
+
+### Behavior Change
+
+The current `ColorStreakModifier` rewards consecutive *same-color* hits without caring what that color is. Hit red → red → red = streak. Hit green → green = streak. Hit red → green = streak resets.
+
+New behavior: each Color Streak instance has a **fixed target color** rolled at generation. A Red Streak only counts red hits, etc. Same architecture as `ColorBonusModifier`.
+
+### Code Changes to `color_streak_modifier.gd`
+
+- Add `@export var target_color: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.RED` with a `##` doc comment.
+- Drop `_streak_color: int` — the target color is now fixed at generation, no need to track which color the streak is "on" (it's always `target_color`). Only track `_streak_count`.
+- Rewrite `apply()`:
+  - If `segment_color == target_color`, increment streak.
+  - If `segment_color != target_color` OR no segment (off-board), reset streak.
+- Update `generate(rarity_tier)` to roll a random target color and bake it into `modifier_name` (e.g. `"Red Streak"`, `"Green Streak"`, `"Black Streak"`, `"White Streak"`) and description.
+- Update `save_streak_state()` / `restore_streak_state_from(snapshot)` to only persist `_streak_count` (target_color is part of the modifier, not the live state).
+- Update `get_streak_display()` to return `"%s ×%d" % [color_name, _streak_count]` (no longer a generic "Color" label).
+
+### Pool Weighting
+
+`get_pool_weight()` currently returns `15` for color streak. With four flavors competing for the same slot, the *effective* color-streak appearance rate would quadruple if we kept `15` per flavor. To keep total color-streak prevalence steady, set `get_pool_weight()` to `4` (so the four together sum to ~16, near the original 15). Color is chosen uniformly within the color-streak pool: each of red / green / black / white has equal odds when a color streak is rolled.
+
+**Why uniform, not weighted by streak difficulty.** Black/white are easier to streak (almost any wedge counts) and red/green are harder (require doubles/triples/bullseye), but those streak-difficulty differences are not the same as "modifier power" differences. The trade-offs cut multiple ways:
+
+- Doubles and triples score far more per dart than singles, so a red/green streak is *fewer hits but more raw score per hit*. Black/white streaks are *more hits but lower individual scores*.
+- Synergy with the player's other modifiers, build, and target-selection plans matter more than the bare streak rate.
+- Lock/unlock status and rarity scope (per turn / leg / run) already provide several independent variation axes that affect each flavor's effective power.
+
+For these reasons the spec deliberately does **not** introduce per-color weighting on the color-streak roll. Revisit only if playtest shows one or two color flavors are dominantly best or worst across every build configuration.
+
+### Backward Compatibility
+
+If any saved `ColorStreakModifier` resources or `debug_modifiers` array entries reference the old "generic any-color" behavior, those resources need a `target_color` default. The `@export var target_color = RED` default handles this — old resources load as Red Streaks by default. No save-format breakage (this is a runtime-generated modifier system, not a persisted-across-runs system at this point).
+
+---
+
+## Wedge Streak Simplification
+
+### Behavior Change
+
+- Drop the `leniency` axis. Always WHOLE_WEDGE — any ring on the same numbered wedge counts (D20 → S20 → T20 → S20 all streak).
+- Rarity now drives scope only (turn/leg/run), like the other streaks.
+- The streaked wedge value (face value of `_streak_wedge_index`) is surfaced in the streak section display.
+
+### Code Changes to `streak_bonus_modifier.gd`
+
+- Remove `@export var leniency`.
+- Remove `_streak_ring: String` from state (no longer needed without leniency).
+- Remove `_ring_name_to_zone()` helper.
+- Simplify `_is_qualifying_hit(wedge_index)` to `return wedge_index == _streak_wedge_index`.
+- Drop the leniency branch in `generate()`. Each rarity tier just sets `streak_scope`.
+- Add `@export var bonus_per_hit: int = 2` with a `##` doc comment explaining: "Multiplier added per consecutive same-wedge hit. Default 2 because grouping (consecutive same-wedge throws) is significantly harder than streaking color or parity — most consecutive-wedge attempts are skill plays."
+- Apply: `result["multiplier"] += bonus_per_hit` per accumulated bonus (loop replaced with `multiplier += effective_count * bonus_per_hit`-equivalent — make sure `_track_modification` still records the change).
+- Update `modifier_name` to just `"Wedge Streak"` (no leniency suffix).
+- Update `get_streak_display()` to return `"Wedge ×%d" % _streak_count` (leniency label removed). The "20 Wedge Streak" wedge-value prefix is composed in the new streak section, not inside the modifier.
+- `save_streak_state()` / `restore_streak_state_from()`: drop the `"ring"` key. Keep `"wedge_index"` and `"count"`.
+
+### Parity / Color bonus_per_hit
+
+Add the same `@export var bonus_per_hit: int` to:
+- `parity_streak_modifier.gd` — default `1`.
+- `color_streak_modifier.gd` — default `1`.
+
+Update each one's `apply()` to multiply the bonus by `bonus_per_hit` instead of always `+1`. Gives Max one-stop tuning for streak power balance from the inspector.
+
+### Wedge Value Display in Streak Section
+
+The streak section needs the face value, not the wedge index. The modifier knows its `_streak_wedge_index`. The dartboard knows the wedge order. Two options:
+
+1. The streak modifier holds a reference to `scoring_modifier_manager.effective_wedge_values` and looks up `effective_wedge_values[_streak_wedge_index]` on demand. **Preferred** — it picks up any active Wedge Swap or Wedge Value modifications, so the display reads `20 Wedge Streak` even if the player has swapped 20 with another wedge. Source of truth = effective values, consistent with "the board renders effective values" principle.
+2. The HUD looks up the value when rendering. Same lookup, just lives in the HUD instead of the modifier.
+
+Go with option 2 — keeps modifiers ignorant of the manager. `hud.update_streak_section(active_streak_modifiers, effective_wedge_values)` receives the lookup table.
+
+### Open Question — bonus math change
+
+Bumping wedge streak from `+1x` to `+2x` per consecutive hit is a balance change. The exported var makes this trivial to revert. **Default to 2 in the spec; flag it for playtest verification before considering shipped.**
+
+---
+
+## ModifierIcon — New Drawing Helper
+
+Create `scripts/modifier_icon.gd`:
+
+```gdscript
+class_name ModifierIcon
+extends Control
+## Custom-drawn icon for a scoring modifier. Renders the modifier's category
+## shape (circle / square / triangle / sector), fill, category outline, and
+## rarity outline based on a single ScoringModifier resource reference.
+##
+## Used by the HUD modifier panel (relic squares), the new streak section
+## (small inline icons), and optionally upgrade pick cards. Same renderer,
+## different sizes — see the size-related export vars below.
+
+## The modifier resource this icon represents. Setting this triggers a redraw.
+@export var modifier: Resource = null:
+    set(value):
+        modifier = value
+        queue_redraw()
+
+## Outline width of the rarity ring in pixels.
+@export var rarity_outline_width: float = 2.0
+
+## Outline width of the inner category ring (parity modifiers only).
+@export var category_outline_width: float = 2.0
+
+## Gap in pixels between the inner category outline and the outer rarity outline.
+@export var outline_gap: float = 1.0
+
+## Inset from the Control's bounds before drawing — leaves room for outlines.
+@export var draw_inset: float = 2.0
+
+## Color used as the neutral fill on parity and wedge shapes (no category color).
+@export var neutral_fill_color: Color = Color(0.18, 0.18, 0.22)
+
+
+func _draw() -> void:
+    if modifier == null:
+        return
+    # Dispatch to category-specific shape draw, then layer outlines.
+    ...
+```
+
+Implementation notes:
+
+- `_draw()` reads the modifier's IconShape via `get_icon_shape()` to figure out which shape to draw.
+- Shape draw helpers as private methods: `_draw_circle()`, `_draw_square()`, `_draw_triangle()`, `_draw_sector()`. All operate inside the Control's `size` minus `draw_inset`.
+- Color-specific lookup table: map `ScoringEnums.SegmentColor` → drawn `Color`. Use the same colors as the dartboard's segment fills for consistency. Export the four colors so they can be tuned alongside the dartboard's colors.
+- Rarity outline color: read from `modifier.rarity_color` (already exposed by the base ScoringModifier resource).
+- Category outline (parity only): exported red / green colors. Default red for even = the dartboard's red segment color, green for odd = the dartboard's green segment color. Reinforces the visual link between "the red ring on the board is even-numbered wedges' double/triple."
+- No inner glyphs in this pass. If future iterations call for stronger per-modifier visual identity, the path forward is hand-drawn art on a more focused art-direction pass — not exported font glyphs.
+
+### Categorization Helper
+
+To decide which shape to draw, the `ModifierIcon` needs to classify the modifier. Add an enum to `scoring_enums.gd`:
+
+```gdscript
+## Visual icon category — drives ModifierIcon's shape dispatch.
+## Independent of streak_category (which controls slot rules).
+## Only RELIC modifiers have an IconShape; BOARD_MUTATION modifiers
+## never get rendered and don't need to override.
+enum IconShape {
+    NONE,           ## Default / fallback — should not appear in practice for RELIC modifiers.
+    COLOR_CIRCLE,   ## Color Bonus, per-color Streak.
+    EVEN_SQUARE,    ## Even Bonus, Even Streak.
+    ODD_TRIANGLE,   ## Odd Bonus, Odd Streak.
+    WEDGE_SECTOR,   ## Wedge Streak.
+}
+```
+
+Add a virtual `get_icon_shape() -> ScoringEnums.IconShape` method to `ScoringModifier`, default returning `IconShape.NONE`. Each RELIC subclass overrides:
+- `ColorBonusModifier`, `ColorStreakModifier` → `COLOR_CIRCLE`
+- `OddEvenBonusModifier` → branches on `target_odd` (`ODD_TRIANGLE` or `EVEN_SQUARE`)
+- `ParityStreakModifier` (and subclasses) → branches on `target_is_odd`
+- `StreakBonusModifier` → `WEDGE_SECTOR`
+
+BOARD_MUTATION subclasses (`WedgeValueModifier`, `WedgeSwapModifier`, `ColorFlipModifier`) do **not** override `get_icon_shape()` — they keep the `NONE` default and are never asked to render. The `ModifierIcon._draw()` should early-return when the modifier's kind is BOARD_MUTATION or its IconShape is NONE, as a defensive double-check.
+
+This keeps the icon system *out* of the modifier scoring code (modifiers don't draw themselves; they just declare their shape).
+
+---
+
+## HUD Integration
+
+### Modifier Panel (Relic Bar) Update
+
+In `hud.gd::add_modifier_to_panel(modifier)`:
+- **First line: early-return if `modifier.kind != ScoringEnums.ModifierKind.RELIC`** — BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) never get a relic square. Their effect is visible on the dartboard itself.
+- Replace the `Panel` + `StyleBoxFlat` background approach with a `ModifierIcon` Control as the child.
+- Keep the existing `set_meta("modifier", modifier)`, `set_meta("rest_y", ...)`, click/hover handlers, and the lock indicator label overlay — all of that wraps the ModifierIcon.
+- Container hierarchy per relic: `Control (slot wrapper) → ModifierIcon (the shape) + Label (lock O/X overlay)`.
+- The perk-up animation tweens the wrapper Control's position, same as today.
+- The disabled-state visual (currently `square.modulate = Color(0.3, 0.3, 0.3, 0.6)`) still applies to the wrapper, which dims the icon and the lock label together.
+
+Side effects of removing BOARD_MUTATION modifiers from the panel:
+- `set_modifier_perkup(triggered_names)` — currently iterates `modifier_panel.get_children()`. Since BOARD_MUTATION modifiers never made it into the panel, no functional change; they just stay out.
+- Hover tooltips — only RELIC modifiers will have hover tooltips. Acceptable, since BOARD_MUTATION effects are visible on the board (effective wedge values, segment colors) — the board is its own tooltip.
+- `clear_modifier_panel()` — unchanged. It just nukes the children regardless of kind.
+
+### New `_build_streak_section()`
+
+In `hud.gd::_ready()`, after `_build_stat_bars()` and `_build_checkout_panel()`, call `_build_streak_section()` which:
+- Locates the `StreakSection` VBoxContainer added in the scene tree (between `TurnScoreLabel` and `DartIndicator`).
+- Sets up an empty container and stores it.
+- Adds a small title label `"— Streaks —"` matching the style of `_modifier_status_title` / `_stats_title_label`. Hidden when no streaks are owned.
+
+### New `hud.update_streak_section(streak_modifiers, effective_wedge_values)`
+
+- Clears existing streak lines.
+- If `streak_modifiers.is_empty()`, hides the section title and returns.
+- Shows the title.
+- For each streak modifier:
+  - Create an `HBoxContainer` line.
+  - Add a `ModifierIcon` Control with `custom_minimum_size = Vector2(streak_icon_size, streak_icon_size)` and `modifier = mod`.
+  - Add a Label with the name. If `mod is StreakBonusModifier` (wedge streak), compose `"%d Wedge Streak" % effective_wedge_values[mod._streak_wedge_index]` (or `"— Wedge Streak"` if `_streak_wedge_index < 0`). Other streak types: just `mod.modifier_name`.
+  - Add a Label with `"(per %s)" % scope_name`, modulate set to `mod.rarity_color`.
+  - Add a Label with `": x%d" % mod.get_streak_count()`.
+  - Set the HBoxContainer's modulate alpha:
+    - `streak_disabled_opacity` (default 0.3) if `mod.toggleable` and not `mod.enabled`.
+    - `streak_idle_opacity` (default 0.5) if `mod.get_streak_count() == 0`.
+    - `1.0` otherwise.
+- New `@export var streak_icon_size: int = 20` on hud.gd.
+- New `@export var streak_idle_opacity: float = 0.5` on hud.gd, with a `##` doc comment.
+- New `@export var streak_disabled_opacity: float = 0.3` on hud.gd, with a `##` doc comment.
+
+### Where `main.gd` Calls It
+
+`main.gd::_on_throw_completed()` already calls into the modifier manager. After the score pipeline finishes (and before / alongside `set_modifier_perkup`), call:
+
+```gdscript
+hud.update_streak_section(
+    scoring_modifier_manager.get_active_streak_modifiers(),
+    scoring_modifier_manager.effective_wedge_values
+)
+```
+
+Add a public `get_active_streak_modifiers() -> Array` method on `ScoringModifierManager` that filters `active_modifiers` to those whose `streak_category != NONE`. Also call `hud.update_streak_section(...)` after:
+- A modifier is acquired (`add_modifier(...)` returns).
+- A modifier is toggled (the existing `modifier_toggled` signal handler in `main.gd`).
+- A turn / leg / run reset (where streak scopes reset).
+- A new run (clears everything).
+
+---
+
+## Pick Card Icon (Optional / Light)
+
+Upgrade pick cards currently display the modifier as text + rarity-tinted button. **Light touch**: add a small `ModifierIcon` (`pick_card_icon_size`, default `28px`) next to the modifier name on each card.
+
+If layout adjustment becomes thorny, defer this — the relic bar and streak section are the primary surfaces. See Deferred.
+
+---
+
+## File-by-File Change List
+
+### New Files
+
+- `scripts/modifier_icon.gd` — `ModifierIcon extends Control`. Per the spec above.
+
+### Modified Files
+
+- `scripts/scoring_enums.gd`:
+  - Add `ModifierKind` enum (RELIC / BOARD_MUTATION).
+  - Add `IconShape` enum (NONE / COLOR_CIRCLE / EVEN_SQUARE / ODD_TRIANGLE / WEDGE_SECTOR).
+  - No other changes.
+
+- `scripts/scoring_modifier.gd`:
+  - Add `@export var kind: ScoringEnums.ModifierKind = ScoringEnums.ModifierKind.RELIC` with a `##` doc comment.
+  - Add virtual `get_icon_shape() -> ScoringEnums.IconShape` returning `NONE` by default.
+
+- `scripts/modifiers/color_bonus_modifier.gd`:
+  - Override `get_icon_shape() -> ScoringEnums.IconShape: return ScoringEnums.IconShape.COLOR_CIRCLE`.
+
+- `scripts/modifiers/color_streak_modifier.gd`:
+  - Add `@export var target_color: ScoringEnums.SegmentColor` (with doc comment).
+  - Add `@export var bonus_per_hit: int = 1` (with doc comment).
+  - Drop `_streak_color: int` (now fixed at `target_color`).
+  - Rewrite `apply()` to compare against `target_color` instead of the previous-color cache.
+  - Rewrite `generate()` to roll target color and bake name (`"Red Streak"` etc).
+  - Override `get_icon_shape()` → `COLOR_CIRCLE`.
+  - Update pool weight handling (see Pool Weighting in Color Streak Split section).
+
+- `scripts/modifiers/even_streak_modifier.gd`, `scripts/modifiers/odd_streak_modifier.gd`, `scripts/modifiers/parity_streak_modifier.gd`:
+  - Add `@export var bonus_per_hit: int = 1` on the base (`parity_streak_modifier.gd`).
+  - Apply uses `bonus_per_hit` in the multiplier accumulation.
+  - Override `get_icon_shape()` on `EvenStreakModifier` → `EVEN_SQUARE`; on `OddStreakModifier` → `ODD_TRIANGLE`. Base `ParityStreakModifier` returns based on `target_is_odd`.
+
+- `scripts/modifiers/odd_even_bonus_modifier.gd`:
+  - Override `get_icon_shape()` → branches on `target_odd`.
+
+- `scripts/modifiers/streak_bonus_modifier.gd` (Wedge Streak):
+  - Remove `@export var leniency`.
+  - Remove `_streak_ring` from state, `_ring_name_to_zone()` from code.
+  - Simplify `_is_qualifying_hit()`.
+  - Add `@export var bonus_per_hit: int = 2` (with doc comment about the per-hit power being elevated vs color/parity streaks).
+  - Use `bonus_per_hit` in `apply()`.
+  - Update `generate()` to drop leniency rolling; rarity drives scope only.
+  - Update `modifier_name` to plain `"Wedge Streak"`.
+  - Override `get_icon_shape()` → `WEDGE_SECTOR`.
+  - Update `save_streak_state` / `restore_streak_state_from` to drop the `"ring"` key.
+
+- `scripts/modifiers/wedge_value_modifier.gd`, `wedge_swap_modifier.gd`, `color_flip_modifier.gd`:
+  - In each `_init()` (or as the export default), set `kind = ScoringEnums.ModifierKind.BOARD_MUTATION`.
+  - Do **not** override `get_icon_shape()` — they keep the `NONE` default and never render an icon.
+
+- `scripts/scoring_modifier_manager.gd`:
+  - Add `get_active_streak_modifiers() -> Array` returning modifiers whose `streak_category != NONE`.
+
+- `scripts/hud.gd`:
+  - New exports: `streak_icon_size: int`, `streak_idle_opacity: float`, `streak_disabled_opacity: float`, plus `streak_section_title_text: String = "— Streaks —"`.
+  - Replace `Panel` creation in `add_modifier_to_panel()` with a wrapper `Control` containing a `ModifierIcon` + the existing lock label.
+  - Update `_update_modifier_square_visual()` to set the `ModifierIcon.modifier` property and the lock label, instead of building a `StyleBoxFlat`.
+  - Add `_build_streak_section()`, `update_streak_section(...)`, `_clear_streak_section()`.
+
+- `scripts/main.gd`:
+  - Call `hud.update_streak_section(...)` from:
+    - `_on_throw_completed()` post-score-pipeline.
+    - The `modifier_toggled` handler.
+    - The `add_modifier` callback path (post-acquisition).
+    - `start_new_run()` (clear / refresh).
+
+- `scenes/main.tscn`:
+  - Add `StreakSection` VBoxContainer to the HUD CanvasLayer, positioned between `TurnScoreLabel` and `DartIndicator`. Set `visible = false` initially.
+
+---
+
+## Exported Var Summary
+
+Newly exposed for inspector tuning (all with `##` doc comments per project conventions):
+
+| Var | File | Default | Purpose |
+|-----|------|---------|---------|
+| `target_color` | `color_streak_modifier.gd` | `SegmentColor.RED` | Which color this streak instance tracks. |
+| `bonus_per_hit` | `color_streak_modifier.gd` | `1` | Multiplier added per consecutive same-color hit. |
+| `bonus_per_hit` | `parity_streak_modifier.gd` | `1` | Multiplier added per consecutive same-parity hit. |
+| `bonus_per_hit` | `streak_bonus_modifier.gd` | `2` | Multiplier added per consecutive same-wedge hit. Higher than parity/color because grouping is harder. |
+| `streak_icon_size` | `hud.gd` | `20` | Pixel size of the small icon in each streak section line. |
+| `streak_idle_opacity` | `hud.gd` | `0.5` | Alpha applied to a streak line when count is 0 (owned but no live streak). |
+| `streak_disabled_opacity` | `hud.gd` | `0.3` | Alpha applied to a streak line when the modifier is unlocked and toggled off. |
+| `streak_section_title_text` | `hud.gd` | `"— Streaks —"` | Title shown above the streak section when at least one streak is owned. |
+| `rarity_outline_width` | `modifier_icon.gd` | `2.0` | Pixel width of the outer rarity ring. |
+| `category_outline_width` | `modifier_icon.gd` | `2.0` | Pixel width of the inner category ring (parity only). |
+| `outline_gap` | `modifier_icon.gd` | `1.0` | Pixel gap between inner category outline and outer rarity outline. |
+| `draw_inset` | `modifier_icon.gd` | `2.0` | Pixel inset from the Control bounds; leaves room for outlines. |
+| `neutral_fill_color` | `modifier_icon.gd` | `Color(0.18, 0.18, 0.22)` | Fill for parity/wedge shapes (where the fill color isn't category-defined). |
+
+Plus optional exports for the four `SegmentColor → Color` lookup values (red / green / black / white) on `modifier_icon.gd`, defaulting to the dartboard's actual segment colors. Lets Max tweak the icon palette in lockstep with the board.
+
+---
+
+## Open Questions Resolved in This Pass
+
+- **Streak modifier identity.** Color Streak is now four discrete items, each clearly labeled by which color it tracks. Player decision-space goes from "do I take color streak" to "do I take *this color's* streak given my current build and rarity scope."
+- **Wedge streak balance lever.** Bumping per-hit multiplier from `+1x` to `+2x` reflects the much harder skill curve of streaking a specific wedge vs streaking by color/parity. Behind an exported var so playtest can dial it.
+- **Visual category encoding.** Shape + color + outline now communicate "this modifier is a {color, parity, wedge} thing" without text. Reduces text-reading cost in the relic bar.
+- **Streak feedback explicit.** Players can now see streak state at all times, not just on tooltip hover.
+- **Relic vs Board Mutation distinction.** Explicit `ModifierKind` enum cleans up the "do I get an icon?" question. One-time board-changing modifiers (Wedge Value, Wedge Swap, Color Flip) do not appear in the modifier panel and do not need icons — the board itself is their receipt.
+- **Color streak pool weighting.** Uniform 1/4 each for red / green / black / white. Black/white score less per hit, red/green score more but are harder to streak — trade-offs are bidirectional and synergy + lock/rarity provide enough variation axes. Revisit only if playtest shows dominance.
+
+## Open Questions Still Floating (Not For This Pass)
+
+- **Wedge value display source of truth.** Currently the new streak section pulls `effective_wedge_values` from the manager. If/when the Wedge Value modifier system grows (e.g., per-throw temporary value changes), this lookup may need to be a snapshot-at-streak-start rather than always-current.
+- **Stacking implications.** Splitting color streak doesn't change the slot rule (still one per COLOR slot). But: if rule modifiers ever let the player exceed slot caps, the per-color split is now more impactful (four red streaks would never make sense — they'd just be one). Worth keeping in mind for the rule-modifier category design.
+- **Where does the player see what board mutations are active?** With BOARD_MUTATION modifiers out of the panel, the board itself is the only visible record. For Wedge Value the board's modified-number rendering already covers it. For Color Flip the segment colors carry it. For Wedge Swap the swapped numbers carry it. If a future modifier (or stacked board mutations) makes "why is the board like this?" hard to answer, consider an "Active Board Effects" inspect-only list — outside this pass's scope.
+
+## Deferred From This Pass
+
+- **Pick-card icons.** If layout fights us during implementation, defer the icon on the upgrade/shop pick buttons. The relic bar and streak section are the primary read surfaces.
+- **Streak-line entry animation.** When a streak ticks from x0 to x1, the line could fade-in / pulse to draw attention. Spec calls for a static opacity flip; animation is polish, do later.
+- **Streak-line "broken!" feedback.** When the player breaks a streak (e.g. has Red Streak x3, hits a black wedge → reset), no special call-out. Could later add a brief flash / shake on the affected line.
+- **Refactor of shared shape-drawing helpers.** `dartboard.gd`, `assembly_screen.gd`, and `rules_slideshow.gd` all draw board geometry separately. The new `modifier_icon.gd` adds a fourth shape-drawing site. Could consolidate into a `DartboardGeometry` helper (already noted as a deferred refactor in the tutorial spec).
 
 ---
 

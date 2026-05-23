@@ -1,12 +1,16 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-22 after the Checkout Helper + Locked/Unlocked modifier status passes shipped.*
+*Canonical design doc. Last refreshed 2026-05-22 after the Tutorial & Help System pass shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
 ## Status snapshot
+
+**Shipped 2026-05-22 (Tutorial pass):**
+
+- **Tutorial & Help System** (`specs/2026-05-22-tutorial-and-help-system.md`). First-time-player onboarding plus persistent help references. New Start Screen ahead of Assembly. A 3-throw sandbox **mechanics tutorial** with freeze-and-explain at the three accuracy zones, progressive stat-bar reveals (bars start hidden, fade in stage-by-stage), and three interactive slider demos (H Range / H Speed / H Accuracy) that let the player drag and watch live. Ghost-dart scatter visualization. A **rules-of-darts slideshow** with side-by-side mini dartboard (custom-drawn `Control` modeled after the assembly screen's zone preview) and one interactive doubles-checkout drill. A **first-run welcome modal** with `user://settings.cfg`-backed persistence. Tutorial uses the player's real stats (default exports on first run, equipped build on Assembly replay), with snapshot/restore around demos. Assembly Tutorial and persistent Stats Reference were scoped out — playtest showed in-context teaching makes them lower priority.
 
 **Shipped 2026-05-22 (on `checkout-helper` branch):**
 
@@ -79,8 +83,10 @@ Main (Node2D) — main.gd
 ├── Dartboard (Node2D) — dartboard.gd
 ├── ThrowMechanic (Node2D) — throw_mechanic.gd
 ├── DartContainer (Node2D) — holds dart marker instances
+├── GhostDartLayer (Node2D) — ghost_dart_layer.gd (tutorial scatter previews + optional always-on)
 ├── X01Game (Node) — x01_game.gd
 ├── ScoringModifierManager (Node) — scoring_modifier_manager.gd
+├── TutorialController (Node) — tutorial_controller.gd
 └── HUD (CanvasLayer) — hud.gd
     ├── ScoreLabel (Label)
     ├── TotalScoreLabel (Label)
@@ -93,7 +99,12 @@ Main (Node2D) — main.gd
     │   └── UpgradeButton3 (Button)
     ├── HoverTooltip (Label)
     ├── ModifierTooltip (Label)
-    └── ModifierPanel (HBoxContainer)
+    ├── ModifierPanel (HBoxContainer)
+    ├── AssemblyScreen (Control) — assembly_screen.gd
+    ├── StartScreen (Control) — start_screen.gd
+    ├── WelcomeModal (Control) — welcome_modal.gd
+    ├── RulesSlideshow (Control) — rules_slideshow.gd
+    └── TutorialCalloutLayer (Control) — tutorial_callout.gd (active callout / slider widgets)
 ```
 
 ---
@@ -111,29 +122,31 @@ Main (Node2D) — main.gd
 - Ring thresholds: Double Bull 0–0.032, Single Bull 0.032–0.08, Inner Single 0.08–0.48, Triple 0.48–0.53, Outer Single 0.53–0.76, Double 0.76–0.83, Off Board 0.83+.
 - All colors are exported and tweakable.
 
-### `throw_mechanic.gd` — Four-stage throw input system.
+### `throw_mechanic.gd` — Three-stage ellipse-based throw input system.
 
-- `ThrowState` enum: `IDLE, AIMING, POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE`
-- **AIMING:** Vertical highlight band follows mouse horizontally. Width = `aim_accuracy * 2`. Click/Space to lock.
-- **POSITIONING:** Locked band shrinks via tween to a shorter window based on `vertical_accuracy`. Player moves window with W/S or Up/Down arrows. Enter/Space to lock.
-- **VERTICAL_RELEASE:** Bounce marker moves up/down within the locked window via sine wave. Speed based on `vertical_speed`. Click/Space to lock vertical position.
-- **HORIZONTAL_RELEASE:** Bounce marker moves left/right within the aim band at the locked Y position. Speed based on `horizontal_speed`. Click/Space to lock horizontal position.
-- **RESOLVING:** Brief pause showing the final variance rectangle (vertical consistency height × horizontal consistency width) before dart resolves. Duration controlled by `resolve_preview_duration`.
-- **DONE:** Dart resolves — vertical offset from `vertical_consistency`, horizontal offset from `horizontal_consistency`, both using `randf_range`.
-- Signals: `throw_completed(hit_position)`, `state_changed(new_state)`.
+- `ThrowState` enum: `IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE`
+- **AIMING:** Aim ellipse follows the cursor. Ellipse size is set by the `horizontal_range` and `vertical_range` stats. The player declares a target wedge by clicking — the segment under the click becomes the *declared target*, and its centroid becomes the "ideal aim point" the rest of the throw is trying to hit.
+- **VERTICAL_RELEASE:** Vertical marker bounces up/down across the ellipse. Speed set by `vertical_speed`. Click/Space to lock the vertical release Y.
+- **HORIZONTAL_RELEASE:** Horizontal marker bounces left/right along the locked Y. Speed set by `horizontal_speed`. Click/Space to lock the horizontal release X. At this stage the H meter renders colored zone bands (green/orange/red) showing where the locked X would land relative to the declared target's centroid — controllable via `show_h_meter_zone_bands`.
+- **RESOLVING:** Brief pause (duration `resolve_preview_duration`) showing the final accuracy/scatter zone. The zone's size = base `horizontal_accuracy` × `vertical_accuracy` × an *accuracy multiplier* derived from the normalized distance between the locked release point and the declared target's centroid. Green zone shrinks the multiplier (tighter scatter — bonus); penalty zone bloats it (wider scatter — penalty). Thresholds: `green_zone_threshold`, `penalty_zone_threshold`. Multipliers: `green_zone_multiplier`, `max_edge_penalty_multiplier`.
+- **DONE:** Dart resolves — final position sampled from a 2D Gaussian distribution centered on the locked release, scaled by the accuracy zone × multiplier. Spread tuned via `gaussian_spread`.
+- Signals: `throw_completed(hit_position)`, `state_changed(new_state)`, `meter_position_changed(state, normalized_t)`.
+- Tutorial hooks (used by `tutorial_controller.gd`): `set_paused(bool)`, `set_scripted_mode(bool)`, `set_input_blocked(bool)`, `set_bounce_t(float)`, `set_horizontal_bounce_t(float)`, `force_lock_aim(pos, target)`, `force_lock_vertical(t)`, `force_lock_horizontal(t)`, `get_zone_boundary_h_positions(locked_y)`, `sample_scatter_points(pos, count, rng_seed)`. Also exposes opt-in always-on visualization via `live_scatter_preview` and `live_scatter_sample_count`.
 
 #### Throw Mechanic Stats (6 stats)
 
 | Stat | Export Var | What It Controls | Throw Stage |
 |------|-----------|-----------------|-------------|
-| Aim Accuracy | `aim_accuracy` | Width of the horizontal aim band (lower = thinner = more accurate) | Stage 1 — Aim |
-| Vertical Accuracy | `vertical_accuracy` | How much the vertical window shrinks (higher = more shrinkage = tighter) | Stage 2 — Window |
-| Vertical Speed | `vertical_speed` | Bounce speed of the vertical marker (higher = slower = easier) | Stage 3 — Vertical Release |
-| Vertical Consistency | `vertical_consistency` | Size of the vertical variance zone after release (higher = tighter) | Stage 3 — Vertical Release |
-| Horizontal Speed | `horizontal_speed` | Bounce speed of the horizontal marker (higher = slower = easier) | Stage 4 — Horizontal Release |
-| Horizontal Consistency | `horizontal_consistency` | Size of the horizontal variance zone after release (higher = tighter) | Stage 4 — Horizontal Release |
+| H Range | `horizontal_range` | Half-width of the aim ellipse (higher = tighter ellipse = more precise aim) | Stage 1 — Aim |
+| V Range | `vertical_range` | Half-height of the aim ellipse (higher = tighter ellipse) | Stage 1 — Aim |
+| V Speed | `vertical_speed` | Bounce speed of the vertical marker (higher = slower = easier to time) | Stage 2 — Vertical Release |
+| H Speed | `horizontal_speed` | Bounce speed of the horizontal marker (higher = slower = easier) | Stage 3 — Horizontal Release |
+| V Accuracy | `vertical_accuracy` | Base half-height of the final scatter zone (higher = tighter) | Stage 4 — Resolve |
+| H Accuracy | `horizontal_accuracy` | Base half-width of the final scatter zone (higher = tighter) | Stage 4 — Resolve |
 
-Stats are on a 1–100 scale (except speeds which are ~1.0–5.0). Base values are set at run start, and stat upgrades add to them. All stats cap at 100 (or 5.0 for speed).
+Range and accuracy stats are on a 1–100 scale (lerped between exported min/max pixel sizes). Speed stats are ~1.0–5.0. Base values are set at run start by `DartBuild.apply_to_throw_mechanic(...)`, and per-leg stat upgrades add to them. All stats cap at 100 (or 5.0 for speed).
+
+**Skill axis on top of stats:** the accuracy multiplier (green/orange/red zones) is independent of stats — a player with weak accuracy stats can still get a green-zone bonus if they time the meters well, and a player with great accuracy stats forgives sloppy meter timing. The two systems compose multiplicatively.
 
 ### `x01_game.gd` — Pure game-logic controller for x01 mode.
 
@@ -233,6 +246,17 @@ Stats are on a 1–100 scale (except speeds which are ~1.0–5.0). Base values a
 ### ThrowModifier system (separate from ScoringModifier)
 
 `ThrowModifier` is a parallel system to `ScoringModifier`. Where ScoringModifiers transform *scores*, ThrowModifiers transform *throw stats* (range, speed, accuracy) on a per-throw conditional basis. They live on dart components — when a component is equipped, its ThrowModifier (if any) is evaluated each throw against a game-state context (remaining score, current turn, current leg, darts this turn, etc.). Examples: "Nervous Sweater" gives +5 accuracy while score is above 50; "Ice Veins" gives +10 accuracy when checkout is possible. See `ThrowModifierGuide.txt` for full implementation spec.
+
+### Tutorial & Help System scripts (shipped 2026-05-22)
+
+- **`start_screen.gd`** (`StartScreen extends Control`) — Pre-game menu shown ahead of Assembly. Three primary buttons: Start Game, Play Tutorial, Rules of Darts. Also emits `stats_reference_pressed` for the deferred Stats Reference panel.
+- **`welcome_modal.gd`** (`WelcomeModal extends Control`) — Soft first-run prompt: "Want a walkthrough?" with Yes/No. Yes routes to the mechanics tutorial; No routes straight to Start Screen. Either choice marks the welcome flag in `SettingsStore` so subsequent launches go straight to Start Screen.
+- **`settings_store.gd`** (`SettingsStore extends RefCounted`, static singleton) — Persistent settings backed by `ConfigFile` at `user://settings.cfg`. Currently holds the tutorial-seen flag. Designed to host future settings (audio levels, visual toggles, etc.) under additional sections.
+- **`tutorial_controller.gd`** (`TutorialController extends Node`) — Orchestrates the mechanics tutorial. Owns the beat sequence as named functions (`_throw1_place_aim`, `_throw1_show_h_freeze`, `_start_throw_2_guided`, `_start_throw_3_free`, etc.). All captions live in the exported `tutorial_strings: Dictionary`. Phase B added progressive stat-bar reveals and three interactive slider demos (H Range, H Speed, H Accuracy) with snapshot/restore wrappers so player stats stay clean after demos.
+- **`tutorial_callout.gd`** (`TutorialCallout extends Control`) — Reusable overlay widget: panel with text, optional anchor arrow, Next button, Skip Tutorial button. Tutorial controller pushes/pops callouts onto the active stack.
+- **`tutorial_slider.gd`** (`TutorialSlider extends Control`) — Transient slider widget used during the three interactive demos. Label + HSlider + "Got it" button. Drives a `value_changed` signal; the tutorial controller wires it to the relevant throw_mechanic stat and pairs it with a snapshot/restore on dismissal.
+- **`ghost_dart_layer.gd`** (`GhostDartLayer extends Node2D`) — Renders semi-transparent ghost dart markers. Used by the tutorial's accuracy-zone freeze beats to visualize scatter clusters and by the H Accuracy slider demo to show shrink/grow. Sampler lives on `throw_mechanic.gd` (`sample_scatter_points(...)`), supports a fixed `rng_seed` for consistent demo visuals.
+- **`rules_slideshow.gd`** (`RulesSlideshow extends Control`) — Modal slideshow walking through wedge layout, scoring, the doubles checkout rule. Side-by-side layout: text/nav on the left, custom-drawn mini dartboard on the right. Mini board uses local arc/polygon helpers (copy of the assembly screen's zone-preview pattern); highlights drawn locally on the mini board only — the main dartboard's highlight system is not touched during the slideshow. Includes one interactive drill at the doubles-checkout slide.
 
 ---
 
@@ -472,6 +496,71 @@ The "Try toggling a modifier to recalculate" hint in the checkout helper only ap
 
 ---
 
+## Tutorial & Help System (IMPLEMENTED 2026-05-22)
+
+*Spec: `specs/2026-05-22-tutorial-and-help-system.md`. Implementation lives across `main.gd` (Start Screen routing, first-run gate, sandbox flag), `tutorial_controller.gd` (beat orchestration), `tutorial_callout.gd` and `tutorial_slider.gd` (UI widgets), `ghost_dart_layer.gd` (scatter visualization), `rules_slideshow.gd` (rules walkthrough + mini board + doubles drill), `start_screen.gd`, `welcome_modal.gd`, `settings_store.gd`, plus tutorial hooks added to `throw_mechanic.gd` and `dartboard.gd`, and a `set_stat_bar_visibility(...)` method on `hud.gd`.*
+
+### Why it exists
+
+The game's signature interaction (V meter, H meter, accuracy zone, scatter) is unfamiliar — no other dart game does it this way. Combined with x01 rules (which assume the player knows what "checking out on a double" means) and the build/balance/modifier roguelike layer, a first-time player without explanation is lost in the first thirty seconds. The tutorial system makes the game shippable to friends without sitting next to them.
+
+### Three flows, kept separate
+
+1. **Mechanics Tutorial** — 3-throw sandbox teaching the throw loop.
+2. **Rules of Darts** — slideshow + interactive doubles drill teaching x01 scoring.
+3. **First-Run Welcome** — soft prompt on first launch routing new players into the mechanics tutorial.
+
+These were deliberately not merged into one walkthrough. Darts vets skip the rules. Returning players replay just mechanics. Mixing them is cognitive overload, and tracking them separately means each can be rebuilt independently if playtest reveals one is unclear.
+
+### Mechanics Tutorial structure
+
+Sandbox mode — no `x01_game` involvement, no score pressure, no leg/turn counters, no modifiers. Player can flub throws without consequences. Uses the player's **real stats**: default `throw_mechanic` exports when entered from Start Screen on first run, equipped build values when entered from Assembly as a replay. The replay-from-Assembly case becomes an emergent "feel my current build" tool for returning players.
+
+**Throw 1 — Autopilot demo with freeze-and-explain.** Tutorial places the aim ellipse for the player, auto-locks vertical, then drives the H meter through three pauses at green / orange / red zone positions. Each pause shows a ghost-dart scatter cluster at that locked candidate position (sampled with a fixed RNG seed so the demonstration stays consistent across runs). Captions walk through what each zone means.
+
+**Throw 2 — Guided attempt.** Normal speed. Banner: "Try to lock the H meter in the green zone." No forced click. Post-throw feedback names the zone they hit without judgment.
+
+**Throw 3 — Free throw.** No prompts. Apply what you learned. End buttons: "Play a real game" → Assembly. "Back to start" → Start Screen.
+
+**Progressive stat-bar reveal woven through Throw 1.** Stat bars start hidden. Range bars fade in when the aim ellipse is shown. V Speed bar appears when the V meter starts. H Speed bar appears when the H meter starts. Accuracy bars appear at the green-zone freeze beat (where scatter is tightest, the visual delta most obvious). Each reveal pairs with a caption explaining the stat's effect.
+
+**Three interactive slider demos.** After the relevant stat reveal, a small slider widget lets the player drag and watch the visual update live. One per stat category (H Range, H Speed, H Accuracy), with explicit "V counterpart works the same way" captions. Demos snapshot the stat value before opening and restore it on dismiss — critical so the player's actual values aren't mutated. The H Speed demo blocks click commits without freezing the meter (via `set_input_blocked`) so the marker keeps bouncing and the player can feel the speed change.
+
+### Rules Slideshow structure
+
+Side-by-side modal layout: text + nav buttons on the left column, custom-drawn mini dartboard on the right column. Mini board is a Control with its own `_draw_board_segment` / `_draw_board_ring` helpers — modeled on `assembly_screen.gd::_build_zone_preview()`. The main dartboard's tutorial-highlight system is *not* used during the slideshow (a Phase B refinement — Phase A initially routed highlights to the main board, but the modal scrim obscured them; the mini board fixes that and isolates state).
+
+Slides cover: board orientation, singles, doubles, triples, bullseye, x01 scoring, the doubles checkout rule, then a single interactive drill ("you have 32 remaining, which dart wins?") with three buttons. The drill picks specifically the doubles checkout rule because it's the most counterintuitive part of x01 for newcomers — passive reading isn't reliable retention; doing it once is.
+
+### First-Run Welcome
+
+`SettingsStore` (static singleton over `ConfigFile` at `user://settings.cfg`) tracks the welcome-seen flag. On launch, `main.gd` checks the flag and either shows the welcome modal (first run) or routes directly to Start Screen. The welcome modal is intentionally soft: "Want a walkthrough?" with Yes/No. Either answer sets the flag. `main.gd` has a `debug_reset_tutorial_seen` export for Max to re-test first-run flow from the inspector.
+
+### Ghost-dart scatter visualization
+
+`throw_mechanic.sample_scatter_points(locked_release_pos, sample_count, rng_seed)` samples N positions from the same gaussian/accuracy-zone math the real throw uses. `ghost_dart_layer.gd` renders them as semi-transparent dart markers. Used by the tutorial at freeze beats and by the H Accuracy slider demo (with a fixed seed so the cluster pattern stays consistent and the player sees shrink/grow rather than "shuffle"). Also exposed as an opt-in always-on preview via `live_scatter_preview: bool` and `live_scatter_sample_count: int` exports — players who want to see their spread during real play can turn it on.
+
+### What didn't ship (deferred)
+
+- **Assembly Tutorial.** A guided walkthrough of the assembly screen itself (cycling components, balance bar, zone preview, Begin Run). Scope is now trimmed because the mechanics tutorial teaches stats in-context, so this becomes a lighter "show me the UI" walkthrough. Future spec.
+- **Persistent Stats Reference panel.** A look-it-up-later overlay listing all six stats with longer descriptions. `start_screen.stats_reference_pressed` signal exists but isn't yet handled in `main.gd`. The would-be single-source-of-truth file `scripts/stat_descriptions.gd` was also deferred. Promote to in-flight only if playtest shows in-context teaching alone is insufficient.
+- **DartboardGeometry refactor.** The mini-board segment/ring drawing math is the third copy in the codebase (after `dartboard.gd::_draw_segment` and `assembly_screen.gd::_draw_board_segment`). Could be extracted into a shared `class_name DartboardGeometry extends RefCounted` static helper. Small cleanup, not blocking anything.
+- **In-game "?" menu.** A contextual help button on the active-game HUD surfacing Stats Reference / Rules of Darts mid-run. Currently those are accessible only from Start Screen and (for rules) Assembly. Could be added later.
+
+### Design decisions captured during the pass
+
+- **Three separate flows, not merged.** Different players need different subsets; cognitive load on a "full" tutorial would be too high.
+- **3-throw demo→guided→free.** One throw is "look at this," not "you did this." Three is the sweet spot.
+- **Sandbox mode, not first-leg-of-real-game.** No score pressure during learning.
+- **Ghost-dart scatter over heatmap shader.** Players don't think in probability density; they think "where will my darts land."
+- **Freeze-and-explain at zone transitions, not forced-click prompts.** Show-then-do > railroad clicks.
+- **Hybrid slideshow + one drill** for rules of darts. Specifically at the doubles checkout rule — the most counterintuitive piece.
+- **Real stats throughout the tutorial.** Tutorial throw 3 must feel identical to throw 1 of the first real leg, or the player feels lied to. Demos snapshot/restore around mutations.
+- **Stats taught in context during mechanics tutorial, not as a separate Stats Reference flow.** Realized post-Phase-A playtest: a separated reference is less effective than showing the stat next to the thing it controls.
+- **Mini dartboard inside the slideshow modal**, not highlights on the main board. Modal scrim obscures the main board; mini board puts the visual next to the text and isolates state.
+
+---
+
 ## Phase Outline
 
 *Note: status markers below may lag reality. Cross-check against actual code state.*
@@ -490,6 +579,7 @@ The "Try toggling a modifier to recalculate" hint in the checkout helper only ap
 ### Phase 6 — Shop System — COMPLETE (merged 2026-05-21). Run-end interaction with the shop is the remaining open question — see Open Design Questions below.
 ### Phase 6.5 — Checkout Helper — COMPLETE (shipped 2026-05-22 on `checkout-helper` branch). Solver-driven text panel for valid checkout paths and setup recommendations. Lives in `scoring_modifier_manager.gd` + `hud.gd`.
 ### Phase 6.6 — Locked/Unlocked Modifier Status — COMPLETE (shipped 2026-05-22 on `checkout-helper` branch). 65/35 lock-rate roll at modifier generation. Toggle interaction in HUD modifier panel.
+### Phase 6.7 — Tutorial & Help System — COMPLETE (shipped 2026-05-22). Start Screen, 3-throw sandbox mechanics tutorial with in-context stat reveals and three interactive slider demos, rules slideshow + interactive doubles drill, first-run welcome modal with `user://settings.cfg` persistence, ghost-dart scatter visualization (also exposed as opt-in always-on preview). Spec at `specs/2026-05-22-tutorial-and-help-system.md`. Assembly Tutorial and persistent Stats Reference deferred — playtest showed in-context teaching makes them lower priority.
 ### Phase 7 — More Modifiers & Items — PLANNED. Includes the **rule-modifier category** (turn-count buffs, rethrows, see-extra-options-at-shop, etc.) as a deferred-but-discussed expansion.
 ### Phase 8 — Form System — PLANNED
 ### Phase 9+ — Polish & Beyond — FUTURE
@@ -501,17 +591,18 @@ The "Try toggling a modifier to recalculate" hint in the checkout helper only ap
 1. **Dart count scaling:** Fixed 15 darts per leg forever, or does it change? Could decrease as difficulty climbs. Could be modifier-dependent. Now also affects shop yield, since `shop_darts` is derived from leg dart budgets.
 2. **Modifier stacking/conflicts (broader, non-streak):** Can modifiers conflict (e.g., "doubles worth 0" + must finish on a double)? Intended as a design feature (risk/reward) or something to prevent? The streak slot system answered this for streak modifiers (one per category). The lock/toggle system gives the player an out on toggleable conflicts. The broader question — what about *locked* non-streak modifiers that lock the player out of checkout altogether — is still open. The checkout helper makes the failure mode visible (no valid paths surfaced) but doesn't prevent the situation.
 3. **Absolute weight:** A potential second weight axis (total dart mass) affecting throw arc or power. Currently only directional balance is tracked.
-4. **Distribution type for variance:** Currently uniform `randf_range`. Gaussian would feel more natural (most darts near center, fewer at edges).
-5. **Shop run-end interaction:** What happens if a shop would fire after the final leg of a run? Deferred from the shop spec. Depends partly on whether runs are fixed-length or open-ended, which depends on #6.
-6. **Meta-progression scope:** What persists across runs? Unlocked parts? Unlocked modifiers? Cosmetics?
-7. **Rule-modifier category (new):** Discussed during the checkout helper design pass but explicitly deferred. Items that affect run-structure rather than scoring: +1 turn per leg, get a rethrow each leg, see +1 option at upgrade pick, etc. Likely needs its own slot system distinct from the 6 scoring slots, and the checkout helper will need to learn about these (extra darts affect solver depth, rethrows introduce a new decision point). Pure design space, no implementation yet.
+4. **Shop run-end interaction:** What happens if a shop would fire after the final leg of a run? Deferred from the shop spec. Depends partly on whether runs are fixed-length or open-ended, which depends on #5.
+5. **Meta-progression scope:** What persists across runs? Unlocked parts? Unlocked modifiers? Cosmetics?
+6. **Rule-modifier category (new):** Discussed during the checkout helper design pass but explicitly deferred. Items that affect run-structure rather than scoring: +1 turn per leg, get a rethrow each leg, see +1 option at upgrade pick, etc. Likely needs its own slot system distinct from the 6 scoring slots, and the checkout helper will need to learn about these (extra darts affect solver depth, rethrows introduce a new decision point). Pure design space, no implementation yet.
 
 ### Resolved since previous refresh
 
+- **Distribution type for variance.** Resolved 2026-05-22. Gaussian is shipped via the `gaussian_spread` export on `throw_mechanic.gd` (default 0.4), with green/orange/red zones driven by normalized distance from the declared target's centroid. Sample uses 2D gaussian draws scaled by the accuracy zone × zone-driven multiplier.
 - **Currency system.** No traditional currency. Spare darts saved across legs are the de facto currency and spend at the shop directly by throwing. See Shop System section.
 - **Streak modifier conflicts.** Resolved by the one-per-category slot rule (Phase 4c).
 - **Player agency vs. helper paternalism.** Resolved by the soft-hint design call in the checkout helper — passive nudges ("try toggling a modifier") instead of active suggestions ("disable Color Streak to enable T20-T20-Bull"). Will inform all future helper-style features.
 - **Modifier commitment texture.** Resolved by the lock/unlock system — 65% locked / 35% toggleable, with rarity as the power axis (not lock status). See the Locked/Unlocked Modifier Status section.
+- **Onboarding scope and shape.** Resolved 2026-05-22 via the Tutorial & Help System pass — three flows (mechanics, rules, welcome) kept separate, in-context stat teaching over a persistent reference panel, 3-throw demo→guide→free for the mechanics walkthrough, hybrid slideshow + one interactive moment for the rules. See the Tutorial & Help System section and `feedback_onboarding_ux_patterns` memory.
 
 ---
 
@@ -524,7 +615,7 @@ The "Try toggling a modifier to recalculate" hint in the checkout helper only ap
 - **Balance affects accuracy specifically.** Thematically clean — a balanced dart flies straighter. Components determine ceiling, balance determines delivery quality.
 - **Three balance zones (green/orange/red)** rather than a continuous curve. Simple for players to understand and tune.
 - **Board renders effective values.** If a wedge is modified, the number on the board changes. The player should never have to remember invisible modifications.
-- **Hover/inspect active during AIMING and between darts.** Not during POSITIONING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, or RESOLVING — player needs to focus during active throw phases.
+- **Hover/inspect active between darts.** Not during AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, or RESOLVING — player needs to focus during active throw phases. (The current enum no longer has a POSITIONING state — that was folded into AIMING with the ellipse rework.)
 - **Streak modifiers are one-per-category.** Three slot categories (WEDGE, COLOR, PARITY). Picking a new streak modifier in a category the player already has triggers replacement, shown on the pick card. The PARITY category contains two distinct items (Even Streak / Odd Streak) that compete for the single slot.
 - **Spare darts are the shop currency.** No coins, no points-to-spend. Saving darts in a leg (finishing efficiently) directly translates to shop throwing power. Skill expressed in regular play = leverage in the shop.
 - **Three calculating interactions on every throw.** Board RNG read + skill/confidence + stat-driven hit probability. The shop's geometric placement rules deliberately invoke all three; future reward-delivery systems should preserve this trinity rather than collapse it.
