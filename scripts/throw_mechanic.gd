@@ -103,19 +103,27 @@ var accuracy_skew_v: float = 0.0
 ## At 0.4, roughly 95% of throws land in the inner 80% of the accuracy ellipse.
 @export_range(0.2, 0.6, 0.01) var gaussian_spread: float = 0.4
 
+## Reference radius for accuracy zone distance normalization (in pixels).
+## Distance from the target centroid is divided by this value to get the
+## normalized distance. Uses absolute pixel distance — independent of ellipse
+## size so that improving range doesn't penalize accuracy zone placement.
+@export var accuracy_zone_reference_radius: float = 150.0
+
 ## Normalized distance threshold for the green (bonus) zone.
 ## At or below this distance, the player gets an accuracy bonus.
+## With the default 150px reference: green zone = within ~37px of target.
 @export_range(0.0, 0.5, 0.01) var green_zone_threshold: float = 0.25
 
 ## Normalized distance threshold where the penalty zone begins.
 ## Between green_threshold and this value is the neutral zone (no change).
+## With the default 150px reference: penalty starts at ~90px from target.
 @export_range(0.3, 0.8, 0.01) var penalty_zone_threshold: float = 0.6
 
 ## Accuracy multiplier at the center of the green zone (best case).
 ## Values < 1.0 mean the accuracy zone shrinks (tighter grouping).
 @export_range(0.5, 1.0, 0.01) var green_zone_multiplier: float = 0.75
 
-## Accuracy multiplier at the ellipse edge (worst case).
+## Accuracy multiplier at maximum penalty distance (worst case).
 ## Values > 1.0 mean the accuracy zone bloats (wider scatter).
 @export_range(1.5, 4.0, 0.1) var max_edge_penalty_multiplier: float = 2.5
 
@@ -293,16 +301,14 @@ func _get_ellipse_half_width_at_y(y: float) -> float:
 	return _aim_half_width * sqrt(1.0 - dy * dy)
 
 
-## Compute normalized distance from an arbitrary point to the target centroid,
-## scaled relative to the aim ellipse size.
+## Compute normalized distance from an arbitrary point to the target centroid.
+## Uses absolute pixel distance divided by accuracy_zone_reference_radius,
+## so the zone boundaries are fixed in space regardless of ellipse size.
 func _get_target_distance_normalized_at(pos: Vector2) -> float:
 	if _declared_target.is_empty():
 		return 0.5
-	var dx: float = pos.x - _target_centroid.x
-	var dy: float = pos.y - _target_centroid.y
-	var norm_x: float = dx / _aim_half_width if _aim_half_width > 0.0 else 0.0
-	var norm_y: float = dy / _aim_half_height if _aim_half_height > 0.0 else 0.0
-	return sqrt(norm_x * norm_x + norm_y * norm_y)
+	var distance: float = pos.distance_to(_target_centroid)
+	return distance / accuracy_zone_reference_radius if accuracy_zone_reference_radius > 0.0 else 0.5
 
 
 ## Compute normalized distance from the locked marker position to the target centroid.
@@ -831,11 +837,17 @@ func set_input_blocked(blocked: bool) -> void:
 	_input_blocked = blocked
 
 
-## Recompute the cached aim ellipse dimensions from the current range stats.
-## Called by the tutorial Range slider demo so the ellipse visually resizes live.
+## Recompute the cached aim ellipse dimensions and all dependent values from
+## the current range stats. Called by the tutorial Range slider demo so the
+## ellipse, marker position, and meter range all update live.
 func recompute_aim_dimensions() -> void:
 	_aim_half_width = _get_aim_half_width()
 	_aim_half_height = _get_aim_half_height()
+	# Recompute marker Y so it stays proportional within the new ellipse height
+	_release_y = _placed_center.y + sin(_bounce_t) * _aim_half_height
+	# Recompute H meter width at the current locked Y (ellipse width depends on height)
+	_h_meter_half_width = _get_ellipse_half_width_at_y(_locked_release_y)
+	_horizontal_x = _placed_center.x + sin(_horizontal_bounce_t) * _h_meter_half_width
 	queue_redraw()
 
 

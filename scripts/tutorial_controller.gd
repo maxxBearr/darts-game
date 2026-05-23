@@ -78,12 +78,12 @@ var entry_source: String = "start_screen"
 	"intro": "We'll throw at the bullseye.",
 	"aim_ellipse": "This is your [b]aim ellipse[/b]. Where your dart can possibly end up after the meters resolve. Bigger ellipse = wider range of outcomes.",
 	"reveal_range": "These two stats — [b]H Range[/b] and [b]V Range[/b] — control the size of your aim ellipse. Higher Range = smaller ellipse = more precise aim.",
-	"demo_range": "Try it — drag the slider and watch the ellipse change. [b]V Range[/b] works the same way for the vertical axis.",
+	"demo_range": "Try it — drag the sliders and watch the ellipse change. Each axis controls one dimension of the ellipse.",
 	"ideal_aim": "The center of your target is the ideal spot. Time the meters to land as close to it as possible.",
 	"lock_vertical": "First you lock your [b]vertical[/b] position.",
 	"reveal_v_speed": "[b]V Speed[/b] controls how fast the vertical marker bounces. Higher = slower = easier to time.",
 	"reveal_h_speed": "[b]H Speed[/b] is the same idea for the horizontal marker.",
-	"demo_speed": "Drag to feel the difference. Slower meter = more time to react. [b]V Speed[/b] is the same for the vertical meter.",
+	"demo_speed": "Drag to feel how speed and range interact. Slower meter = more time to react. Tighter range = less distance to cover.",
 	"green_zone": "When timed closer to your chosen target (double bullseye), your scatter shrinks.",
 	"reveal_accuracy": "[b]H Accuracy[/b] and [b]V Accuracy[/b] set your base scatter size. Where you lock on the meters then modifies it — closer to the centroid shrinks the scatter, farther bloats it.",
 	"orange_zone": "When timed near it, No bonus, no penalty. Default scatter shape.",
@@ -107,15 +107,20 @@ var _h_freeze_index: int = 0
 var _guided_mode: bool = false
 var _free_mode: bool = false
 
-# B3: active slider widget (null when no demo is running)
-var _active_slider: TutorialSlider = null
+# B3: active slider widgets (empty when no demo is running)
+var _active_sliders: Array[TutorialSlider] = []
+
+# B3: how many slider "Got it" dismissals remain before advancing
+var _demo_dismiss_remaining: int = 0
+
+# B3: callback to run when all sliders in a demo are dismissed
+var _demo_advance_callback: Callable
 
 # B4: teardown callbacks for skip cleanup
 var _teardown_stack: Array[Callable] = []
 
-# B1: stat snapshot for slider demos
-var _demo_snapshot_name: String = ""
-var _demo_snapshot_value: float = 0.0
+# B1: stat snapshots for slider demos {stat_name: saved_value}
+var _demo_snapshots: Dictionary = {}
 
 
 ## Whether the tutorial is currently active.
@@ -128,8 +133,7 @@ func is_active() -> bool:
 ## Snapshot a single throw_mechanic stat before a slider demo mutates it.
 func _snapshot_stat(stat_name: String) -> float:
 	var value: float = throw_mechanic.get(stat_name)
-	_demo_snapshot_name = stat_name
-	_demo_snapshot_value = value
+	_demo_snapshots[stat_name] = value
 	return value
 
 
@@ -137,6 +141,53 @@ func _snapshot_stat(stat_name: String) -> float:
 func _restore_stat(stat_name: String, value: float) -> void:
 	throw_mechanic.set(stat_name, value)
 	throw_mechanic.queue_redraw()
+
+
+## Restore all snapshotted stats and clear the snapshot dict.
+func _restore_all_snapshots() -> void:
+	for stat_name: String in _demo_snapshots:
+		throw_mechanic.set(stat_name, _demo_snapshots[stat_name])
+	_demo_snapshots.clear()
+	throw_mechanic.recompute_aim_dimensions()
+	throw_mechanic.queue_redraw()
+
+
+## Remove all active sliders from the scene.
+func _free_all_sliders() -> void:
+	for slider: TutorialSlider in _active_sliders:
+		if is_instance_valid(slider):
+			slider.queue_free()
+	_active_sliders.clear()
+
+
+## Create a slider for a stat demo, positioned vertically based on index.
+## Returns the slider instance. Connects value_changed to the given callback.
+## Vertical spacing: first slider at slider_position.y, subsequent ones offset by 120px.
+func _create_demo_slider(stat_name: String, stat_property: String, min_val: float, max_val: float, index: int, on_change: Callable) -> TutorialSlider:
+	var saved: float = _snapshot_stat(stat_property)
+	var slider: TutorialSlider = TutorialSlider.new()
+	var y_offset: float = float(index) * 120.0
+	slider.widget_position = Vector2(slider_position.x, slider_position.y + y_offset)
+	get_parent().get_node("HUD").add_child(slider)
+	slider.setup(stat_name, saved, min_val, max_val)
+	slider.value_changed.connect(on_change)
+	slider.dismissed.connect(_on_demo_slider_dismissed.bind(slider))
+	_active_sliders.append(slider)
+	return slider
+
+
+## Called when any demo slider's "Got it" is clicked. Hides that slider
+## and advances the tutorial when all sliders in the demo have been dismissed.
+func _on_demo_slider_dismissed(which: TutorialSlider) -> void:
+	if is_instance_valid(which):
+		which.visible = false
+	_demo_dismiss_remaining -= 1
+	if _demo_dismiss_remaining <= 0:
+		_restore_all_snapshots()
+		_pop_teardown()
+		_free_all_sliders()
+		if _demo_advance_callback.is_valid():
+			_demo_advance_callback.call()
 
 
 # ── B4: Teardown stack for skip cleanup ───────────────────────────────────
@@ -204,10 +255,8 @@ func stop_tutorial() -> void:
 	# B4: run any pending teardowns (slider cleanup, stat restore)
 	_run_all_teardowns()
 
-	# Remove active slider if any
-	if _active_slider != null:
-		_active_slider.queue_free()
-		_active_slider = null
+	# Remove active sliders
+	_free_all_sliders()
 
 	if throw_mechanic != null:
 		throw_mechanic.set_scripted_mode(false)
@@ -358,35 +407,26 @@ func _beat_reveal_range() -> void:
 
 
 func _beat_demo_range() -> void:
-	var saved: float = _snapshot_stat("horizontal_range")
-
-	_active_slider = TutorialSlider.new()
-	_active_slider.widget_position = slider_position
-	get_parent().get_node("HUD").add_child(_active_slider)
-	_active_slider.setup("H Range", saved, demo_h_range_min, demo_h_range_max)
-
-	_active_slider.value_changed.connect(func(val: float) -> void:
-		throw_mechanic.horizontal_range = val
-		throw_mechanic.recompute_aim_dimensions()
+	_create_demo_slider("H Range", "horizontal_range", demo_h_range_min, demo_h_range_max, 0,
+		func(val: float) -> void:
+			throw_mechanic.horizontal_range = val
+			throw_mechanic.recompute_aim_dimensions()
+	)
+	_create_demo_slider("V Range", "vertical_range", demo_h_range_min, demo_h_range_max, 1,
+		func(val: float) -> void:
+			throw_mechanic.vertical_range = val
+			throw_mechanic.recompute_aim_dimensions()
 	)
 
-	_push_teardown(func() -> void:
-		_restore_stat("horizontal_range", saved)
-		throw_mechanic.recompute_aim_dimensions()
-		if _active_slider != null:
-			_active_slider.queue_free()
-			_active_slider = null
-	)
-
-	_active_slider.dismissed.connect(func() -> void:
-		_restore_stat("horizontal_range", saved)
-		throw_mechanic.recompute_aim_dimensions()
-		_pop_teardown()
-		_active_slider.queue_free()
-		_active_slider = null
+	_demo_dismiss_remaining = 2
+	_demo_advance_callback = func() -> void:
 		_waiting_for_next = true
 		_set_beat_after_next("aim_explain")
 		_on_next_pressed()
+
+	_push_teardown(func() -> void:
+		_restore_all_snapshots()
+		_free_all_sliders()
 	)
 
 	callout.show_callout(tutorial_strings["demo_range"], callout_position)
@@ -448,36 +488,27 @@ func _beat_demo_speed() -> void:
 	throw_mechanic.set_scripted_mode(false)
 	throw_mechanic.set_input_blocked(true)
 
-	var saved: float = _snapshot_stat("horizontal_speed")
-
-	_active_slider = TutorialSlider.new()
-	_active_slider.widget_position = slider_position
-	get_parent().get_node("HUD").add_child(_active_slider)
-	_active_slider.setup("H Speed", saved, demo_h_speed_min, demo_h_speed_max)
-
-	_active_slider.value_changed.connect(func(val: float) -> void:
-		throw_mechanic.horizontal_speed = val
+	_create_demo_slider("H Speed", "horizontal_speed", demo_h_speed_min, demo_h_speed_max, 0,
+		func(val: float) -> void:
+			throw_mechanic.horizontal_speed = val
+	)
+	_create_demo_slider("H Range", "horizontal_range", demo_h_range_min, demo_h_range_max, 1,
+		func(val: float) -> void:
+			throw_mechanic.horizontal_range = val
+			throw_mechanic.recompute_aim_dimensions()
 	)
 
-	_push_teardown(func() -> void:
-		_restore_stat("horizontal_speed", saved)
+	_demo_dismiss_remaining = 2
+	_demo_advance_callback = func() -> void:
 		throw_mechanic.set_input_blocked(false)
-		if _active_slider != null:
-			_active_slider.queue_free()
-			_active_slider = null
-	)
-
-	_active_slider.dismissed.connect(func() -> void:
-		_restore_stat("horizontal_speed", saved)
-		_pop_teardown()
-		throw_mechanic.set_input_blocked(false)
-		# Re-pause and re-enter scripted mode for the H freeze sequence
 		throw_mechanic.set_scripted_mode(true)
 		throw_mechanic.set_paused(true)
-		_active_slider.queue_free()
-		_active_slider = null
-		# Continue to H freezes
 		_throw1_start_h_freezes()
+
+	_push_teardown(func() -> void:
+		_restore_all_snapshots()
+		throw_mechanic.set_input_blocked(false)
+		_free_all_sliders()
 	)
 
 	callout.show_callout(tutorial_strings["demo_speed"], callout_position)
@@ -561,46 +592,32 @@ func _beat_demo_accuracy() -> void:
 	ghost_dart_layer.clear_scatter()
 	throw_mechanic.set_tutorial_pulse_target("accuracy_zone")
 
-	# Use the current frozen position for the scatter demo
 	var locked_y: float = throw_mechanic._locked_release_y
 	var demo_x: float = throw_mechanic._horizontal_x
-
-	var saved: float = _snapshot_stat("horizontal_accuracy")
+	var release_pos: Vector2 = Vector2(demo_x, locked_y)
 
 	# Show initial scatter
-	var release_pos: Vector2 = Vector2(demo_x, locked_y)
-	var points: Array[Vector2] = throw_mechanic.sample_scatter_points(release_pos, 10, accuracy_demo_scatter_seed)
-	ghost_dart_layer.show_scatter(points)
+	var initial_points: Array[Vector2] = throw_mechanic.sample_scatter_points(release_pos, 10, accuracy_demo_scatter_seed)
+	ghost_dart_layer.show_scatter(initial_points)
 
-	_active_slider = TutorialSlider.new()
-	_active_slider.widget_position = slider_position
-	get_parent().get_node("HUD").add_child(_active_slider)
-	_active_slider.setup("H Accuracy", saved, demo_h_accuracy_min, demo_h_accuracy_max)
-
-	_active_slider.value_changed.connect(func(val: float) -> void:
-		throw_mechanic.horizontal_accuracy = val
-		# Re-sample scatter with same seed so pattern shrinks/grows, not reshuffles
-		var new_points: Array[Vector2] = throw_mechanic.sample_scatter_points(release_pos, 10, accuracy_demo_scatter_seed)
-		ghost_dart_layer.show_scatter(new_points)
-		throw_mechanic.queue_redraw()
+	_create_demo_slider("H Accuracy", "horizontal_accuracy", demo_h_accuracy_min, demo_h_accuracy_max, 0,
+		func(val: float) -> void:
+			throw_mechanic.horizontal_accuracy = val
+			var new_points: Array[Vector2] = throw_mechanic.sample_scatter_points(release_pos, 10, accuracy_demo_scatter_seed)
+			ghost_dart_layer.show_scatter(new_points)
+			throw_mechanic.queue_redraw()
 	)
 
-	_push_teardown(func() -> void:
-		_restore_stat("horizontal_accuracy", saved)
+	_demo_dismiss_remaining = 1
+	_demo_advance_callback = func() -> void:
 		ghost_dart_layer.clear_scatter()
-		if _active_slider != null:
-			_active_slider.queue_free()
-			_active_slider = null
-	)
-
-	_active_slider.dismissed.connect(func() -> void:
-		_restore_stat("horizontal_accuracy", saved)
-		_pop_teardown()
-		ghost_dart_layer.clear_scatter()
-		_active_slider.queue_free()
-		_active_slider = null
 		throw_mechanic.queue_redraw()
 		_throw1_resume_h()
+
+	_push_teardown(func() -> void:
+		_restore_all_snapshots()
+		ghost_dart_layer.clear_scatter()
+		_free_all_sliders()
 	)
 
 	callout.show_callout(tutorial_strings["demo_accuracy"], callout_position)
