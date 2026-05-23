@@ -69,8 +69,10 @@ shop_border_thickness = 2.2
 
 [node name="ThrowMechanic" type="Node2D" parent="." unique_id=967240672]
 script = ExtResource("3_throw")
-vertical_speed = 2.1
-horizontal_speed = 2.1
+horizontal_range = 14.0
+vertical_range = 14.0
+vertical_speed = 2.3
+horizontal_speed = 2.3
 marker_size = 6.0
 marker_outline_thickness = 1.3
 resolve_preview_duration = 0.6
@@ -356,6 +358,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("10_assembly")
+point_preview_h_offset = -20.0
 stats_position = Vector2(40, 350)
 zone_preview_board_radius = 90.0
 zone_preview_label_offset = 12.59

@@ -65,6 +65,15 @@ var _h_bounce_t: float = 0.0
 @export var dart_preview_size: Vector2 = Vector2(400.0, 100.0)
 @export var component_preview_height: float = 80.0
 
+## Size of the point sprite in the dart preview.
+@export var point_preview_size: Vector2 = Vector2(40.0, 20.0)
+
+## Horizontal offset of the point relative to its default position (pixels).
+@export var point_preview_h_offset: float = 0.0
+
+## Vertical offset of the point relative to the barrel (pixels).
+@export var point_preview_v_offset: float = 0.0
+
 @export_group("Slot Selectors")
 @export var barrel_slot_position: Vector2 = Vector2(100.0, 200.0)
 @export var shaft_slot_position: Vector2 = Vector2(490.0, 200.0)
@@ -237,6 +246,19 @@ func _build_dart_preview() -> void:
 	preview_container.add_theme_constant_override("separation", -3)
 	preview_container.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(preview_container)
+
+	# Point (tip of the dart, to the left of the barrel)
+	var point_holder: Control = Control.new()
+	point_holder.custom_minimum_size = Vector2(point_preview_size.x, component_preview_height)
+	preview_container.add_child(point_holder)
+
+	var point_tex: TextureRect = TextureRect.new()
+	point_tex.texture = preload("res://sprites/point.png")
+	point_tex.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	point_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	point_tex.size = point_preview_size
+	point_tex.position = Vector2(point_preview_h_offset, (component_preview_height - point_preview_size.y) / 2.0 + point_preview_v_offset)
+	point_holder.add_child(point_tex)
 
 	# Barrel slot
 	var barrel_holder: Control = Control.new()
