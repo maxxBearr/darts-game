@@ -33,6 +33,7 @@ var rules_slideshow: RulesSlideshow
 var tutorial_callout: TutorialCallout
 var tutorial_controller: TutorialController
 var ghost_dart_layer: GhostDartLayer
+var game_over_screen: GameOverScreen
 
 ## Whether the game is currently in tutorial sandbox mode.
 var _in_tutorial: bool = false
@@ -167,6 +168,9 @@ var _trigger_anim_active: bool = false
 var _start_modifier_pending: bool = false
 
 # --- Shop system state ---
+
+## Total darts thrown across the entire run (for game over stats).
+var _run_total_darts: int = 0
 
 ## Saved darts accumulated across the current 3-leg window.
 var _saved_darts_accumulator: int = 0
@@ -405,6 +409,8 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	var no_modifiers: Array[String] = []
 	hud.update_modifier_status(no_modifiers)
 
+	_run_total_darts += 1
+
 	# Score the throw (raw, before modifiers)
 	var result: Dictionary = dartboard.calculate_score(hit_position)
 
@@ -456,7 +462,10 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		hud.hide_checkout_helper()
 		if response["is_game_over"]:
 			_run_over = true
-			hud.show_game_over(response["current_leg"], response["target_score"])
+			if score_tween != null and score_tween.is_valid():
+				score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
+			else:
+				_show_game_over(response["current_leg"])
 		else:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
@@ -476,7 +485,10 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		hud.hide_checkout_helper()
 		if response["is_game_over"]:
 			_run_over = true
-			hud.show_game_over(response["current_leg"], response["target_score"])
+			if score_tween != null and score_tween.is_valid():
+				score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
+			else:
+				_show_game_over(response["current_leg"])
 		else:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
@@ -612,10 +624,17 @@ func _on_next_leg() -> void:
 	_update_checkout_helper()
 
 
-## Player presses "New Run" — start fresh after game over.
-func _on_new_run() -> void:
+## Show the game over overlay with run stats.
+func _show_game_over(current_leg: int) -> void:
+	_hide_gameplay_hud()
+	game_over_screen.show_results(current_leg - 1, _run_total_darts)
+
+
+## Reset all run state (shared by all post-game-over paths).
+func _reset_run_state() -> void:
 	_run_over = false
 	_turn_score = 0
+	_run_total_darts = 0
 	_leg_phase = ""
 	_in_shop = false
 	_saved_darts_accumulator = 0
@@ -633,8 +652,25 @@ func _on_new_run() -> void:
 	_clear_darts()
 	if dartboard.picker_mode:
 		dartboard.set_picker_mode(false)
-	# Restore to raw stats (before any build) so the assembly screen starts fresh
 	_restore_raw_stats()
+	game_over_screen.visible = false
+
+
+## Player presses "Return to Assembly" on the game over screen.
+func _on_game_over_to_assembly() -> void:
+	_reset_run_state()
+	_show_assembly()
+
+
+## Player presses "Main Menu" on the game over screen.
+func _on_game_over_to_menu() -> void:
+	_reset_run_state()
+	_show_start_screen()
+
+
+## Player presses "New Run" — start fresh after game over.
+func _on_new_run() -> void:
+	_reset_run_state()
 	_show_start_screen()
 
 
@@ -995,6 +1031,14 @@ func _setup_tutorial_system() -> void:
 	# Wire the callout to the controller
 	tutorial_controller.callout = tutorial_callout
 
+	# Game over screen — lives in the HUD canvas layer
+	game_over_screen = GameOverScreen.new()
+	game_over_screen.name = "GameOverScreen"
+	game_over_screen.return_to_assembly_pressed.connect(_on_game_over_to_assembly)
+	game_over_screen.return_to_menu_pressed.connect(_on_game_over_to_menu)
+	game_over_screen.visible = false
+	hud.add_child(game_over_screen)
+
 
 ## Show the start screen, hiding other overlays.
 func _show_start_screen() -> void:
@@ -1141,6 +1185,7 @@ func _on_run_confirmed() -> void:
 			})
 	hud.setup_modifier_status(modifier_info)
 
+	_run_total_darts = 0
 	x01_game.start_run()
 	_update_all_hud()
 	_update_checkout_highlights()
