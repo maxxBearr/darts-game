@@ -62,6 +62,22 @@ signal modifier_toggled
 ## Color for committed (already-thrown) steps in a path.
 @export var checkout_committed_color: Color = Color(0.3, 1.0, 0.4)
 
+@export_group("Streak Section")
+
+## Pixel size of the small icon in each streak section line.
+@export var streak_icon_size: int = 20
+
+## Alpha applied to a streak line when count is 0 (owned but no live streak).
+@export var streak_idle_opacity: float = 0.5
+
+## Alpha applied to a streak line when the modifier is toggled off.
+@export var streak_disabled_opacity: float = 0.3
+
+## Title shown above the streak section when at least one streak is owned.
+@export var streak_section_title_text: String = "— Streaks —"
+
+@export_group("Checkout Helper")
+
 ## Hint text shown when modifiers can be toggled.
 @export var checkout_toggle_hint: String = "Try toggling a modifier to recalculate"
 
@@ -110,6 +126,8 @@ var _stat_rows: Dictionary = {}
 var _stats_title_label: Label = null
 var _modifier_status_title: Label
 var _modifier_rows: Array[Dictionary] = []
+var _streak_section: VBoxContainer = null
+var _streak_title_label: Label = null
 
 ## Whether upgrade buttons are in modifier selection mode.
 var _modifier_mode: bool = false
@@ -167,6 +185,7 @@ func _ready() -> void:
 	modifier_tooltip.visible = false
 
 	_build_stat_bars()
+	_build_streak_section()
 	_build_checkout_panel()
 
 
@@ -766,7 +785,7 @@ func set_modifier_perkup(triggered_names: Array[String]) -> void:
 			child.set_meta("perked_up", false)
 			var tween: Tween = create_tween()
 			tween.tween_property(child, "position:y", rest_y, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-			_update_modifier_square_visual(child as Panel)
+			_update_modifier_square_visual(child as Control)
 
 
 ## Clear all perk-up states on modifier squares.
@@ -779,23 +798,141 @@ func clear_modifier_perkup() -> void:
 			var rest_y: float = child.get_meta("rest_y")
 			var tween: Tween = create_tween()
 			tween.tween_property(child, "position:y", rest_y, perkup_anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-		_update_modifier_square_visual(child as Panel)
+		_update_modifier_square_visual(child as Control)
 
 
-## Add a modifier square to the panel. Called when a scoring modifier is acquired.
+## Build the streak section container between TurnScoreLabel and DartIndicator.
+func _build_streak_section() -> void:
+	_streak_section = VBoxContainer.new()
+	_streak_section.add_theme_constant_override("separation", 2)
+	_streak_section.visible = false
+	_streak_section.theme = _create_tooltip_theme()
+	add_child(_streak_section)
+
+	# Position between TurnScoreLabel and DartIndicator
+	_streak_section.position = Vector2(20.0, 200.0)
+	_streak_section.size = Vector2(260.0, 0.0)
+
+	_streak_title_label = Label.new()
+	_streak_title_label.text = streak_section_title_text
+	_streak_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_streak_title_label.add_theme_font_size_override("font_size", 14)
+	_streak_title_label.modulate = Color(0.8, 0.8, 0.6)
+	_streak_section.add_child(_streak_title_label)
+
+
+## Update the streak section with current streak modifier states.
+func update_streak_section(streak_modifiers: Array, effective_wedge_values: Array[int]) -> void:
+	# Clear existing streak lines (keep title)
+	for i: int in range(_streak_section.get_child_count() - 1, 0, -1):
+		_streak_section.get_child(i).queue_free()
+
+	if streak_modifiers.is_empty():
+		_streak_section.visible = false
+		return
+
+	_streak_section.visible = true
+
+	const SCOPE_NAMES: Dictionary = {
+		ScoringEnums.StreakScope.WITHIN_TURN: "per turn",
+		ScoringEnums.StreakScope.WITHIN_LEG: "per leg",
+		ScoringEnums.StreakScope.WITHIN_RUN: "per run",
+	}
+
+	for mod: Resource in streak_modifiers:
+		if not mod is ScoringModifier:
+			continue
+		var streak_mod: ScoringModifier = mod as ScoringModifier
+
+		var line: HBoxContainer = HBoxContainer.new()
+		line.add_theme_constant_override("separation", 4)
+		line.mouse_filter = Control.MOUSE_FILTER_STOP
+		var lock_info: String = "Click to toggle" if streak_mod.toggleable else "Locked"
+		line.tooltip_text = "%s\n%s\n%s" % [streak_mod.modifier_name, streak_mod.description, lock_info]
+
+		# Small icon
+		var icon: ModifierIcon = ModifierIcon.new()
+		icon.modifier = streak_mod
+		icon.custom_minimum_size = Vector2(streak_icon_size, streak_icon_size)
+		icon.size = Vector2(streak_icon_size, streak_icon_size)
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.add_child(icon)
+
+		# Name label — for wedge streak, prepend the streaked wedge value
+		var name_label: Label = Label.new()
+		if streak_mod is StreakBonusModifier:
+			var wedge_mod: StreakBonusModifier = streak_mod as StreakBonusModifier
+			if wedge_mod._streak_wedge_index >= 0 and wedge_mod._streak_wedge_index < effective_wedge_values.size():
+				name_label.text = "%d %s" % [effective_wedge_values[wedge_mod._streak_wedge_index], streak_mod.modifier_name]
+			else:
+				name_label.text = "— %s" % streak_mod.modifier_name
+		else:
+			name_label.text = streak_mod.modifier_name
+		name_label.add_theme_font_size_override("font_size", 13)
+		line.add_child(name_label)
+
+		# Scope label — colored by rarity
+		var scope_label: Label = Label.new()
+		var scope_name: String = SCOPE_NAMES.get(streak_mod.streak_scope, "")
+		scope_label.text = "(%s)" % scope_name
+		scope_label.add_theme_font_size_override("font_size", 13)
+		scope_label.modulate = streak_mod.rarity_color
+		line.add_child(scope_label)
+
+		# Count label
+		var count_label: Label = Label.new()
+		count_label.text = ": x%d" % streak_mod.get_streak_count()
+		count_label.add_theme_font_size_override("font_size", 13)
+		line.add_child(count_label)
+
+		# Set opacity based on state
+		if streak_mod.toggleable and not streak_mod.enabled:
+			line.modulate = Color(1.0, 1.0, 1.0, streak_disabled_opacity)
+		elif streak_mod.get_streak_count() == 0:
+			line.modulate = Color(1.0, 1.0, 1.0, streak_idle_opacity)
+		else:
+			line.modulate = Color(1.0, 1.0, 1.0, 1.0)
+
+		_streak_section.add_child(line)
+
+
+## Clear the streak section entirely.
+func clear_streak_section() -> void:
+	for i: int in range(_streak_section.get_child_count() - 1, 0, -1):
+		_streak_section.get_child(i).queue_free()
+	_streak_section.visible = false
+
+
+## Add a modifier to the relic panel. Streak modifiers are shown only in the
+## streak section, not here. BOARD_MUTATION modifiers have no panel presence.
 func add_modifier_to_panel(modifier: Resource) -> void:
-	var square: Panel = Panel.new()
-	square.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
-	square.set_meta("modifier", modifier)
-	square.set_meta("perked_up", false)
-	square.mouse_entered.connect(_on_modifier_hover.bind(square))
-	square.mouse_exited.connect(_on_modifier_unhover)
-	square.gui_input.connect(_on_modifier_clicked.bind(square))
-	square.mouse_filter = Control.MOUSE_FILTER_STOP
-	modifier_panel.add_child(square)
-	_update_modifier_square_visual(square)
-	# Store rest position after layout settles (deferred so container positions it first)
-	square.ready.connect(func() -> void: square.set_meta("rest_y", square.position.y))
+	if modifier is ScoringModifier:
+		if modifier.kind != ScoringEnums.ModifierKind.RELIC:
+			return
+		if modifier.streak_category != ScoringEnums.StreakCategory.NONE:
+			return
+	var wrapper: Control = Control.new()
+	wrapper.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
+	wrapper.set_meta("modifier", modifier)
+	wrapper.set_meta("perked_up", false)
+	wrapper.mouse_entered.connect(_on_modifier_hover.bind(wrapper))
+	wrapper.mouse_exited.connect(_on_modifier_unhover)
+	wrapper.gui_input.connect(_on_modifier_clicked.bind(wrapper))
+	wrapper.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var icon: ModifierIcon = ModifierIcon.new()
+	icon.modifier = modifier
+	icon.custom_minimum_size = Vector2(modifier_square_size, modifier_square_size)
+	icon.size = Vector2(modifier_square_size, modifier_square_size)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrapper.add_child(icon)
+	wrapper.set_meta("icon", icon)
+
+	modifier_panel.add_child(wrapper)
+	_update_modifier_square_visual(wrapper)
+	# HBoxContainer children sit at y=0 in local space — set rest position
+	# immediately so the perk-up animation has a baseline to lift from.
+	wrapper.set_meta("rest_y", 0.0)
 
 
 ## Remove a modifier square from the panel by matching the modifier reference.
@@ -815,8 +952,8 @@ func clear_modifier_panel() -> void:
 
 
 ## Called when the mouse enters a modifier square.
-func _on_modifier_hover(square: Panel) -> void:
-	var modifier: Resource = square.get_meta("modifier")
+func _on_modifier_hover(wrapper: Control) -> void:
+	var modifier: Resource = wrapper.get_meta("modifier")
 	if modifier:
 		var status: String = "ON" if modifier.enabled else "OFF"
 		var lock_info: String = "Click to toggle" if modifier.toggleable else "Locked"
@@ -830,44 +967,42 @@ func _on_modifier_unhover() -> void:
 
 
 ## Toggle modifier on click (only if unlocked/toggleable).
-func _on_modifier_clicked(event: InputEvent, square: Panel) -> void:
+func _on_modifier_clicked(event: InputEvent, wrapper: Control) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		var modifier: Resource = square.get_meta("modifier")
+		var modifier: Resource = wrapper.get_meta("modifier")
 		if modifier and modifier.toggleable:
 			modifier.enabled = not modifier.enabled
-			_update_modifier_square_visual(square)
-			_on_modifier_hover(square)
+			_update_modifier_square_visual(wrapper)
+			_on_modifier_hover(wrapper)
 			modifier_toggled.emit()
 
 
-## Update the visual appearance of a modifier square based on enabled/locked state.
-func _update_modifier_square_visual(square: Panel) -> void:
-	var modifier: Resource = square.get_meta("modifier")
+## Update the visual appearance of a modifier wrapper based on enabled/locked state.
+func _update_modifier_square_visual(wrapper: Control) -> void:
+	var modifier: Resource = wrapper.get_meta("modifier")
 	if not modifier:
 		return
-	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = modifier.rarity_color
-	style.set_corner_radius_all(3)
+
 	if modifier.enabled:
-		style.border_color = Color(1.0, 1.0, 1.0, 0.9)
-		style.set_border_width_all(2)
-		square.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		wrapper.modulate = Color(1.0, 1.0, 1.0, 1.0)
 	else:
-		style.set_border_width_all(0)
-		square.modulate = Color(0.3, 0.3, 0.3, 0.6)
-	square.add_theme_stylebox_override("panel", style)
+		wrapper.modulate = Color(0.3, 0.3, 0.3, 0.6)
+
+	# Trigger icon redraw
+	if wrapper.has_meta("icon"):
+		(wrapper.get_meta("icon") as ModifierIcon).queue_redraw()
 
 	# Add or update lock/unlock indicator
 	var lock_label: Label
-	if square.has_meta("lock_label"):
-		lock_label = square.get_meta("lock_label")
+	if wrapper.has_meta("lock_label"):
+		lock_label = wrapper.get_meta("lock_label")
 	else:
 		lock_label = Label.new()
 		lock_label.add_theme_font_size_override("font_size", 10)
 		lock_label.position = Vector2(2.0, 0.0)
 		lock_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		square.add_child(lock_label)
-		square.set_meta("lock_label", lock_label)
+		wrapper.add_child(lock_label)
+		wrapper.set_meta("lock_label", lock_label)
 	lock_label.text = "O" if modifier.toggleable else "X"
 
 

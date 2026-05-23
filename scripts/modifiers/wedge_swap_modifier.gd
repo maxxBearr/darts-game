@@ -8,6 +8,7 @@ func _init() -> void:
 	description = "Swap the positions of two wedges on the board"
 	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
 	config_type = ScoringEnums.ConfigType.PICK_TWO_WEDGES
+	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
 
 
 func apply_to_board(wedge_values: Array[int], wedge_colors: Array[Dictionary], config: Dictionary) -> void:

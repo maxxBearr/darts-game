@@ -9,6 +9,9 @@ extends ScoringModifier
 ## Set by subclass _init() — determines which parity continues the streak.
 @export var target_is_odd: bool = true
 
+## Multiplier added per consecutive same-parity hit.
+@export var bonus_per_hit: int = 1
+
 ## Current number of consecutive matching-parity hits.
 var _streak_count: int = 0
 
@@ -18,6 +21,10 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.PER_DART
 	config_type = ScoringEnums.ConfigType.NONE
 	streak_category = ScoringEnums.StreakCategory.PARITY
+
+
+func get_icon_shape() -> ScoringEnums.IconShape:
+	return ScoringEnums.IconShape.ODD_TRIANGLE if target_is_odd else ScoringEnums.IconShape.EVEN_SQUARE
 
 
 func apply(result: Dictionary, context: Dictionary) -> Dictionary:
@@ -45,10 +52,10 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 	if not is_preview:
 		_streak_count = effective_count
 
-	# Apply bonus: streak count - 1 extra multipliers
+	# Apply bonus: (streak count - 1) * bonus_per_hit extra multipliers
 	var bonus: int = effective_count - 1
 	if bonus > 0:
-		for i: int in range(bonus):
+		for i: int in range(bonus * bonus_per_hit):
 			var old_mult: int = result["multiplier"]
 			result["multiplier"] += 1
 			result["total_score"] = result["face_value"] * result["multiplier"]

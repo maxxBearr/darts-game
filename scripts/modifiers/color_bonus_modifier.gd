@@ -30,6 +30,10 @@ func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
 	return result
 
 
+func get_icon_shape() -> ScoringEnums.IconShape:
+	return ScoringEnums.IconShape.COLOR_CIRCLE
+
+
 const COLOR_NAMES: Dictionary = {
 	ScoringEnums.SegmentColor.RED: "Red",
 	ScoringEnums.SegmentColor.GREEN: "Green",

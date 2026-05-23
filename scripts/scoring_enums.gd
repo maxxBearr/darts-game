@@ -68,6 +68,22 @@ enum ComponentSlot {
 	FLIGHT,
 }
 
+## Whether a modifier persists in the player's inventory (relic panel) or
+## is a one-time effect that mutates the board and then disappears.
+enum ModifierKind {
+	RELIC,           ## Persistent — shown in modifier panel, has an icon, contributes to live scoring per dart.
+	BOARD_MUTATION,  ## One-time — applied at acquisition, no panel presence afterward.
+}
+
+## Visual icon category — drives ModifierIcon's shape dispatch.
+enum IconShape {
+	NONE,           ## Default / fallback.
+	COLOR_CIRCLE,   ## Color Bonus, per-color Streak.
+	EVEN_SQUARE,    ## Even Bonus, Even Streak.
+	ODD_TRIANGLE,   ## Odd Bonus, Odd Streak.
+	WEDGE_SECTOR,   ## Wedge Streak.
+}
+
 ## Item rarity tiers. Determines value ranges and visual presentation.
 enum Rarity {
 	COMMON,

@@ -39,7 +39,7 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> OddStreakModifier:
 	var scope_name: String = SCOPE_NAMES[mod.streak_scope]
 
 	mod.modifier_name = "Odd Streak"
-	mod.description = "+1x per consecutive odd hit (per %s)" % scope_name
+	mod.description = "+%dx per consecutive odd hit (per %s)" % [mod.bonus_per_hit, scope_name]
 
 	mod.roll_toggleable()
 	return mod

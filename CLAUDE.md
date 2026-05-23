@@ -253,9 +253,9 @@ extends Control
 
 ## The modifier resource this icon represents. Setting this triggers a redraw.
 @export var modifier: Resource = null:
-    set(value):
-        modifier = value
-        queue_redraw()
+	set(value):
+		modifier = value
+		queue_redraw()
 
 ## Outline width of the rarity ring in pixels.
 @export var rarity_outline_width: float = 2.0

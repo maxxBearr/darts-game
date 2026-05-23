@@ -20,6 +20,7 @@ func _init() -> void:
 	modifier_name = "Wedge Boost"
 	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
 	config_type = ScoringEnums.ConfigType.PICK_WEDGE
+	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
 
 
 ## Called with the player's wedge choice. Mutates the effective values array.

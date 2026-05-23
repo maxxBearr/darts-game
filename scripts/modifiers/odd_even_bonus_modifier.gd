@@ -16,6 +16,10 @@ func _init() -> void:
 	config_type = ScoringEnums.ConfigType.NONE
 
 
+func get_icon_shape() -> ScoringEnums.IconShape:
+	return ScoringEnums.IconShape.ODD_TRIANGLE if target_odd else ScoringEnums.IconShape.EVEN_SQUARE
+
+
 func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
 	var face_value: int = result.get("face_value", 0)
 	if face_value <= 0:

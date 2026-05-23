@@ -100,6 +100,15 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 	return result
 
 
+## Get all active streak modifiers (those with a non-NONE streak category).
+func get_active_streak_modifiers() -> Array:
+	var result: Array = []
+	for modifier: Resource in active_modifiers:
+		if modifier is ScoringModifier and modifier.streak_category != ScoringEnums.StreakCategory.NONE:
+			result.append(modifier)
+	return result
+
+
 ## Check if adding a modifier would replace an existing streak modifier.
 ## Returns the existing modifier that would be replaced, or null if no conflict.
 func get_streak_conflict(new_modifier: ScoringModifier) -> ScoringModifier:

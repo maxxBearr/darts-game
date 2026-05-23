@@ -239,10 +239,9 @@ func _ready() -> void:
 	# Sync dartboard with modifier manager's effective board state
 	_sync_board_state()
 
-	# Sync any debug modifiers to the HUD panel (skip ON_ACQUIRE board-state modifiers)
+	# Sync any debug modifiers to the HUD panel (BOARD_MUTATION filtered inside)
 	for modifier: Resource in scoring_modifier_manager.active_modifiers:
-		if modifier.timing != ScoringEnums.ModifierTiming.ON_ACQUIRE:
-			hud.add_modifier_to_panel(modifier)
+		hud.add_modifier_to_panel(modifier)
 
 	# --- Tutorial system setup ---
 	_setup_tutorial_system()
@@ -335,10 +334,13 @@ func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
 	if replaced != null:
 		hud.remove_modifier_from_panel(replaced)
 
-	# ON_ACQUIRE modifiers are one-time board changes — no panel square needed
-	if modifier.timing != ScoringEnums.ModifierTiming.ON_ACQUIRE:
-		hud.add_modifier_to_panel(modifier)
+	# Add to panel (BOARD_MUTATION modifiers are filtered out inside add_modifier_to_panel)
+	hud.add_modifier_to_panel(modifier)
 	_sync_board_state()
+	hud.update_streak_section(
+		scoring_modifier_manager.get_active_streak_modifiers(),
+		scoring_modifier_manager.effective_wedge_values
+	)
 	scoring_modifier_manager.invalidate_preferred_remainders()
 	scoring_modifier_manager._build_solver_candidates()
 	_update_checkout_highlights()
@@ -418,6 +420,12 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# Flash the hit segment for visual feedback
 	dartboard.flash_segment(hit_position)
+
+	# Update streak section
+	hud.update_streak_section(
+		scoring_modifier_manager.get_active_streak_modifiers(),
+		scoring_modifier_manager.effective_wedge_values
+	)
 
 	# Show per-dart score feedback
 	hud.show_score(result)
@@ -560,6 +568,10 @@ func _on_next_turn() -> void:
 	x01_game.end_turn()
 	x01_game.start_turn()
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
+	hud.update_streak_section(
+		scoring_modifier_manager.get_active_streak_modifiers(),
+		scoring_modifier_manager.effective_wedge_values
+	)
 	_start_new_throw()
 	_update_checkout_highlights()
 	_update_checkout_helper()
@@ -591,6 +603,10 @@ func _on_next_leg() -> void:
 	_clear_darts()
 	x01_game.advance_leg()
 	_update_all_hud()
+	hud.update_streak_section(
+		scoring_modifier_manager.get_active_streak_modifiers(),
+		scoring_modifier_manager.effective_wedge_values
+	)
 	_start_new_throw()
 	_update_checkout_highlights()
 	_update_checkout_helper()
@@ -612,6 +628,7 @@ func _on_new_run() -> void:
 	scoring_modifier_manager.reset_for_run()
 	hud.clear_modifier_panel()
 	hud.clear_modifier_status()
+	hud.clear_streak_section()
 	_sync_board_state()
 	_clear_darts()
 	if dartboard.picker_mode:
@@ -1001,6 +1018,8 @@ func _hide_gameplay_hud() -> void:
 	hud.stats_container.visible = false
 	hud.modifier_panel.visible = false
 	hud.dart_indicator.visible = false
+	if hud._streak_section != null:
+		hud._streak_section.visible = false
 	hud.hide_all_buttons()
 	hud.upgrade_container.visible = false
 	hud.hide_checkout_helper()
@@ -1429,10 +1448,14 @@ func _update_checkout_helper() -> void:
 		hud.update_setup_display(setup, has_toggleable)
 
 
-## Called when a modifier is toggled on/off — recompute checkout helper.
+## Called when a modifier is toggled on/off — recompute checkout helper and streak display.
 func _on_modifier_toggled() -> void:
 	_update_checkout_highlights()
 	_update_checkout_helper()
+	hud.update_streak_section(
+		scoring_modifier_manager.get_active_streak_modifiers(),
+		scoring_modifier_manager.effective_wedge_values
+	)
 
 
 ## Check if hitting the hovered segment would cause a bust.

@@ -28,6 +28,11 @@ extends Resource
 ## Streak modifiers set this to their category so the one-per-category rule can be enforced.
 @export var streak_category: ScoringEnums.StreakCategory = ScoringEnums.StreakCategory.NONE
 
+## Whether this modifier appears in the HUD modifier panel after acquisition.
+## RELIC modifiers persist as inventory items. BOARD_MUTATION modifiers fire
+## once and then leave only their effect on the board.
+@export var kind: ScoringEnums.ModifierKind = ScoringEnums.ModifierKind.RELIC
+
 ## Whether this modifier is currently active. Only toggleable if unlocked.
 var enabled: bool = true
 
@@ -43,6 +48,11 @@ var rarity: String:
 var rarity_color: Color:
 	get:
 		return ScoringEnums.RARITY_DATA[rarity_tier]["color"]
+
+
+## Visual icon shape for the modifier panel. Override in RELIC subclasses.
+func get_icon_shape() -> ScoringEnums.IconShape:
+	return ScoringEnums.IconShape.NONE
 
 
 ## Get the current streak count for display purposes.

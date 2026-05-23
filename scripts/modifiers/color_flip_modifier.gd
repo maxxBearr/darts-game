@@ -14,6 +14,7 @@ func _init() -> void:
 	description = "Flip a wedge's colors (Black/Red ↔ White/Green)"
 	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
 	config_type = ScoringEnums.ConfigType.PICK_WEDGE
+	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
 
 
 func apply_to_board(_wedge_values: Array[int], wedge_colors: Array[Dictionary], config: Dictionary) -> void:
