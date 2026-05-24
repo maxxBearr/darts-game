@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://28bbtty2f2jl"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_fl2qp"]
+[ext_resource type="Texture2D" uid="uid://cl4os8w3t5wmb" path="res://sprites/DartComponents/DartShafts/shaft-short-1.png" id="2_f78xc"]
+[ext_resource type="Script" uid="uid://bpt06ne1ux73h" path="res://scripts/unlock_conditions/leg_win_hit_condition.gd" id="3_ct82p"]
+
+[sub_resource type="Resource" id="Resource_rw82f"]
+script = ExtResource("3_ct82p")
+final_dart_mode = 1
+description = "Win a leg on the final dart of you last turn of a leg "
+metadata/_custom_type_script = "uid://bpt06ne1ux73h"
+
+[resource]
+script = ExtResource("1_fl2qp")
+id = &"teal_tail"
+component_name = "Teal Tail"
+description = "Emphasizies control over accuracy"
+component_type = 1
+weight = 0.3599999999999999
+default_unlocked = false
+unlock_condition = SubResource("Resource_rw82f")
+texture = ExtResource("2_f78xc")
+h_range_bonus = 2.0
+h_speed_bonus = 7.0
+v_speed_bonus = 7.0
+h_accuracy_bonus = -1.0
+v_accuracy_bonus = -1.0

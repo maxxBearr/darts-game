@@ -1,9 +1,0 @@
-[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://dnax676hbqde8"]
-
-[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_bnupe"]
-[ext_resource type="Texture2D" uid="uid://b5v1qua1pmtrq" path="res://sprites/DartComponents/DartBarrels/barrel-medium-2.png" id="2_u4txb"]
-
-[resource]
-script = ExtResource("1_bnupe")
-texture = ExtResource("2_u4txb")
-metadata/_custom_type_script = "uid://bqjgrqhnbb5uv"

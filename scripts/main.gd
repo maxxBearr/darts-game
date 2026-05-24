@@ -149,6 +149,9 @@ var _picker_selected_wedge: int = -1
 # Cumulative score for the current turn (resets each turn)
 var _turn_score: int = 0
 
+# How many darts scored > 0 this turn (for unlock conditions).
+var _turn_darts_scored: int = 0
+
 # Whether hover feedback is currently active (set based on game state)
 var _hover_active: bool = false
 
@@ -451,6 +454,8 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# Accumulate turn score
 	_turn_score += result["total_score"]
+	if result["total_score"] > 0:
+		_turn_darts_scored += 1
 	hud.update_turn_score(_turn_score)
 
 	# Update remaining score display
@@ -476,6 +481,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		dartboard.clear_checkout_segments()
 		hud.hide_checkout_helper()
 		_awaiting_next_leg = true
+		_notify_leg_won(result, response)
 		if score_tween != null and score_tween.is_valid():
 			score_tween.tween_callback(_show_leg_upgrades.bind(response))
 		else:
@@ -510,6 +516,41 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Only recompute checkout helper if darts remain this turn
 	if not response["is_turn_over"] and not response["is_bust"] and not response["is_leg_won"]:
 		_update_checkout_helper()
+
+
+## Build the unlock context for a leg win and notify the UnlockManager.
+func _notify_leg_won(result: Dictionary, response: Dictionary) -> void:
+	var target: Dictionary = throw_mechanic._declared_target
+	var was_on_target: bool = true
+	if not target.is_empty():
+		was_on_target = target.get("wedge_index", -1) == result.get("wedge_index", -2)
+
+	var modifier_cats: Array[String] = []
+	var streak_names: Array[String] = []
+	for mod: Resource in scoring_modifier_manager.get_active_streak_modifiers():
+		streak_names.append(mod.modifier_name)
+	for mod_info: Dictionary in result.get("modifications", []):
+		var source: String = mod_info.get("source_name", "")
+		if streak_names.has(source) and not modifier_cats.has("streak"):
+			modifier_cats.append("streak")
+
+	var was_final: bool = (x01_game.current_turn == x01_game.max_turns
+		and x01_game.darts_this_turn == 3)
+
+	var leg_context: Dictionary = {
+		"target_score": response["target_score"],
+		"winning_ring": result.get("ring_name", ""),
+		"winning_wedge_value": result.get("face_value", 0),
+		"winning_score": result.get("total_score", 0),
+		"was_final_possible_dart": was_final,
+		"winning_modifier_categories": modifier_cats,
+		"was_winning_dart_on_target": was_on_target,
+		"checkout_total": _turn_score,
+		# Strict reading: all three darts of the winning turn must have scored.
+		# Excludes 1-dart and 2-dart finishes even if every dart thrown scored.
+		"winning_turn_all_darts_scored": _turn_darts_scored == 3 and x01_game.darts_this_turn == 3,
+	}
+	UnlockManager.on_leg_won(leg_context)
 
 
 ## Show the leg-complete upgrade UI or shop entry. Called after the score animation finishes.
@@ -574,6 +615,7 @@ func _auto_next_dart() -> void:
 func _on_next_turn() -> void:
 	_awaiting_next_turn = false
 	_turn_score = 0
+	_turn_darts_scored = 0
 	hud.update_turn_score(0)
 	scoring_modifier_manager.reset_for_turn()
 	_clear_darts()
@@ -609,6 +651,7 @@ func _on_next_leg() -> void:
 
 	_awaiting_next_leg = false
 	_turn_score = 0
+	_turn_darts_scored = 0
 	_leg_phase = ""
 	hud.update_turn_score(0)
 	scoring_modifier_manager.reset_for_leg()
@@ -634,6 +677,7 @@ func _show_game_over(current_leg: int) -> void:
 func _reset_run_state() -> void:
 	_run_over = false
 	_turn_score = 0
+	_turn_darts_scored = 0
 	_run_total_darts = 0
 	_leg_phase = ""
 	_in_shop = false
@@ -681,6 +725,7 @@ func _start_shop(response: Dictionary) -> void:
 	_in_shop = true
 	_shop_darts_remaining = _saved_darts_accumulator
 	_leg_phase = "shop"
+	UnlockManager.on_shop_opened()
 	_clear_darts()
 	dartboard.clear_checkout_segments()
 	hud.enter_shop_mode(_shop_darts_remaining)
@@ -954,6 +999,7 @@ func _end_shop(response: Dictionary) -> void:
 	_leg_phase = ""
 	_clear_darts()
 	hud.exit_shop_mode()
+	UnlockManager.on_shop_closed()
 
 	# Slide board off to the right, clear shop, slide back from the left
 	var viewport_size: Vector2 = get_viewport_rect().size
@@ -1038,6 +1084,11 @@ func _setup_tutorial_system() -> void:
 	game_over_screen.return_to_menu_pressed.connect(_on_game_over_to_menu)
 	game_over_screen.visible = false
 	hud.add_child(game_over_screen)
+
+	# Unlock notification queue — lives in the HUD canvas layer
+	var unlock_queue: UnlockNotificationQueue = UnlockNotificationQueue.new()
+	unlock_queue.name = "UnlockNotificationQueue"
+	hud.add_child(unlock_queue)
 
 
 ## Show the start screen, hiding other overlays.
@@ -1186,6 +1237,8 @@ func _on_run_confirmed() -> void:
 	hud.setup_modifier_status(modifier_info)
 
 	_run_total_darts = 0
+	UnlockManager.bind_registry(dart_component_registry)
+	UnlockManager.on_run_started()
 	x01_game.start_run()
 	_update_all_hud()
 	_update_checkout_highlights()
@@ -1587,6 +1640,23 @@ func _on_throw_state_changed(new_state: int) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# --- Debug shortcuts ---
+	# Only active in editor / debug builds. Stripped from shipped builds.
+	# F9  → wipe all unlock state and career stats (lock everything back up).
+	# F10 → unlock every registered component (preview full pool on assembly screen).
+	# Effects are visible next time the assembly screen refreshes a slot.
+	if OS.is_debug_build() and event is InputEventKey and event.pressed and not event.echo:
+		# F9 or Cmd+Shift+R → reset all unlock state
+		if event.keycode == KEY_F9 or (event.keycode == KEY_R and event.meta_pressed and event.shift_pressed):
+			PlayerProgress.debug_reset_all()
+			get_viewport().set_input_as_handled()
+			return
+		# F10 or Cmd+Shift+U → unlock all components
+		elif event.keycode == KEY_F10 or (event.keycode == KEY_U and event.meta_pressed and event.shift_pressed):
+			PlayerProgress.debug_unlock_all(dart_component_registry)
+			get_viewport().set_input_as_handled()
+			return
+
 	if _leg_phase != "wedge_picker":
 		return
 

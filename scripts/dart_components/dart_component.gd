@@ -4,6 +4,10 @@ extends Resource
 ## value that contributes to the dart's overall balance. Equip one of each in
 ## the assembly screen before a run.
 
+## Stable identity for save data and unlock tracking. Slot-prefixed snake_case.
+## MUST be non-empty and unique across all components. NEVER change after release.
+@export var id: StringName = &""
+
 @export var component_name: String = ""
 @export var description: String = ""
 
@@ -14,7 +18,15 @@ extends Resource
 @export_range(-1.0, 1.0, 0.01) var weight: float = 0.0
 
 @export var rarity_tier: ScoringEnums.Rarity = ScoringEnums.Rarity.COMMON
-@export var unlocked: bool = true
+
+## Whether this component is unlocked from the start of a new save file.
+## Set to false for progression-locked components — pair with an unlock_condition.
+@export var default_unlocked: bool = true
+
+## How the player earns this component if default_unlocked is false.
+## Leave null for default-unlocked components.
+@export var unlock_condition: UnlockCondition
+
 @export var texture: Texture2D
 
 ## --- Stat Modifiers (all default 0.0, only non-zero values appear in tooltips) ---

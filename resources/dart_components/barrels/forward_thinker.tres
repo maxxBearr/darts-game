@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://vrb0ijmgvy2j"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_mkrlr"]
+[ext_resource type="Texture2D" uid="uid://cmf2i6270asyr" path="res://sprites/DartComponents/DartBarrels/barrel-long-2.png" id="2_iwm5d"]
+[ext_resource type="Script" uid="uid://bpt06ne1ux73h" path="res://scripts/unlock_conditions/leg_win_hit_condition.gd" id="3_mkrlr"]
+
+[sub_resource type="Resource" id="Resource_iwm5d"]
+script = ExtResource("3_mkrlr")
+required_ring = "Double"
+required_modifier_category = "streak"
+description = "Win a on a double that was modified by an active streak "
+metadata/_custom_type_script = "uid://bpt06ne1ux73h"
+
+[resource]
+script = ExtResource("1_mkrlr")
+id = &"barrel_forward_thinker"
+component_name = "Forward Thinker"
+description = "Great vertical accuracy and control, but requires a lot of H meter skill to use"
+weight = -0.41
+default_unlocked = false
+unlock_condition = SubResource("Resource_iwm5d")
+texture = ExtResource("2_iwm5d")
+h_range_bonus = -8.0
+v_range_bonus = 8.0
+v_speed_bonus = 2.0
+v_accuracy_bonus = 12.0

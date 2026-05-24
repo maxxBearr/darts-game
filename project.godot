@@ -17,6 +17,8 @@ config/features=PackedStringArray("4.6", "Forward Plus")
 [autoload]
 
 AuidoManager="*uid://da8fhdrthfrse"
+PlayerProgress="*res://scripts/player_progress.gd"
+UnlockManager="*res://scripts/unlock_manager.gd"
 
 [display]
 

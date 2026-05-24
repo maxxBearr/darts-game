@@ -54,6 +54,15 @@ var _zone_preview: Control
 var _v_bounce_t: float = 0.0
 var _h_bounce_t: float = 0.0
 
+# "New Parts!" labels per slot, shown when newly unlocked parts exist
+var _barrel_new_label: Label
+var _shaft_new_label: Label
+var _flight_new_label: Label
+
+# IDs of components unlocked during this session that haven't been viewed yet.
+# Populated by the component_unlocked signal, cleared as the player cycles to them.
+var _unseen_new_ids: Dictionary = {}
+
 # ── Layout exports ───────────────────────────────────────────────────────────
 
 @export_group("Title")
@@ -169,6 +178,7 @@ func _process(delta: float) -> void:
 func _ready() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	PlayerProgress.component_unlocked.connect(_on_component_unlocked)
 
 	# Background overlay
 	var bg: ColorRect = ColorRect.new()
@@ -343,6 +353,15 @@ func _build_slot_selector(slot_name: String, pos: Vector2) -> void:
 	container.add_theme_constant_override("separation", 4)
 	add_child(container)
 
+	# "New Parts!" label (hidden by default, shown when new unlocks exist)
+	var new_label: Label = Label.new()
+	new_label.text = "New Parts!"
+	new_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	new_label.add_theme_font_size_override("font_size", 14)
+	new_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	new_label.visible = false
+	container.add_child(new_label)
+
 	# Slot title
 	var title: Label = Label.new()
 	title.text = slot_name.capitalize()
@@ -400,14 +419,17 @@ func _build_slot_selector(slot_name: String, pos: Vector2) -> void:
 			_barrel_name = name_label
 			_barrel_stats = stats_label
 			_barrel_perk = perk_label
+			_barrel_new_label = new_label
 		"shaft":
 			_shaft_name = name_label
 			_shaft_stats = stats_label
 			_shaft_perk = perk_label
+			_shaft_new_label = new_label
 		"flight":
 			_flight_name = name_label
 			_flight_stats = stats_label
 			_flight_perk = perk_label
+			_flight_new_label = new_label
 
 
 func _build_stat_bars() -> void:
@@ -624,14 +646,21 @@ func show_assembly(p_base_stats: Dictionary) -> void:
 	base_stats = p_base_stats
 
 	if registry:
-		_barrels = registry.get_unlocked_barrels()
-		_shafts = registry.get_unlocked_shafts()
-		_flights = registry.get_unlocked_flights()
+		_barrels = registry.barrels.duplicate()
+		_shafts = registry.shafts.duplicate()
+		_flights = registry.flights.duplicate()
 
 	if dart_build:
 		_barrel_idx = _find_component_index(_barrels, dart_build.equipped_barrel)
 		_shaft_idx = _find_component_index(_shafts, dart_build.equipped_shaft)
 		_flight_idx = _find_component_index(_flights, dart_build.equipped_flight)
+
+		# Skip past any locked component at the resolved index so the initial
+		# equip never targets a locked part (e.g., if a locked component ended
+		# up at array index 0).
+		_barrel_idx = _skip_locked(_barrels, _barrel_idx)
+		_shaft_idx = _skip_locked(_shafts, _shaft_idx)
+		_flight_idx = _skip_locked(_flights, _flight_idx)
 
 		if _barrels.size() > 0:
 			dart_build.equip_barrel(_barrels[_barrel_idx])
@@ -640,6 +669,7 @@ func show_assembly(p_base_stats: Dictionary) -> void:
 		if _flights.size() > 0:
 			dart_build.equip_flight(_flights[_flight_idx])
 
+	_refresh_new_parts()
 	_sync_throw_color_pickers()
 	_refresh_all()
 	visible = true
@@ -654,26 +684,44 @@ func _find_component_index(parts: Array[DartComponent], current: DartComponent) 
 	return 0
 
 
+## Advance an index forward (with wrap) until landing on an unlocked component.
+## Returns the original index unchanged if every part is locked, which only
+## happens if the registry contains nothing default-unlocked — an authoring
+## mistake the registry validator will already have flagged.
+func _skip_locked(parts: Array[DartComponent], idx: int) -> int:
+	if parts.size() == 0:
+		return idx
+	var start: int = idx
+	for _i: int in range(parts.size()):
+		if PlayerProgress.is_unlocked(parts[idx]):
+			return idx
+		idx = (idx + 1) % parts.size()
+		if idx == start:
+			break
+	return idx
+
+
 func _on_arrow_pressed(slot_name: String, direction: int) -> void:
 	match slot_name:
 		"barrel":
 			if _barrels.size() == 0:
 				return
 			_barrel_idx = wrapi(_barrel_idx + direction, 0, _barrels.size())
-			if dart_build:
+			if dart_build and PlayerProgress.is_unlocked(_barrels[_barrel_idx]):
 				dart_build.equip_barrel(_barrels[_barrel_idx])
 		"shaft":
 			if _shafts.size() == 0:
 				return
 			_shaft_idx = wrapi(_shaft_idx + direction, 0, _shafts.size())
-			if dart_build:
+			if dart_build and PlayerProgress.is_unlocked(_shafts[_shaft_idx]):
 				dart_build.equip_shaft(_shafts[_shaft_idx])
 		"flight":
 			if _flights.size() == 0:
 				return
 			_flight_idx = wrapi(_flight_idx + direction, 0, _flights.size())
-			if dart_build:
+			if dart_build and PlayerProgress.is_unlocked(_flights[_flight_idx]):
 				dart_build.equip_flight(_flights[_flight_idx])
+	_mark_current_seen()
 	_refresh_all()
 
 
@@ -683,8 +731,62 @@ func _refresh_all() -> void:
 	_refresh_slot("flight")
 	_refresh_stat_bars()
 	_refresh_balance()
+	_refresh_begin_button()
 	if _zone_preview:
 		_zone_preview.queue_redraw()
+
+
+func _refresh_begin_button() -> void:
+	var barrel: DartComponent = _barrels[_barrel_idx] if _barrel_idx < _barrels.size() else null
+	var shaft: DartComponent = _shafts[_shaft_idx] if _shaft_idx < _shafts.size() else null
+	var flight: DartComponent = _flights[_flight_idx] if _flight_idx < _flights.size() else null
+	var any_locked: bool = (
+		(barrel != null and not PlayerProgress.is_unlocked(barrel))
+		or (shaft != null and not PlayerProgress.is_unlocked(shaft))
+		or (flight != null and not PlayerProgress.is_unlocked(flight))
+	)
+	_begin_button.disabled = any_locked
+	_begin_button.modulate = Color(0.4, 0.4, 0.4) if any_locked else Color(1.0, 1.0, 1.0)
+
+
+## Called when a component is unlocked during play.
+func _on_component_unlocked(component: DartComponent) -> void:
+	if component.id != &"":
+		_unseen_new_ids[component.id] = true
+
+
+## Mark currently viewed components as seen and refresh the labels.
+func _refresh_new_parts() -> void:
+	_mark_current_seen()
+	_update_new_labels()
+
+
+## Mark the currently viewed component in each slot as seen.
+func _mark_current_seen() -> void:
+	if _barrel_idx < _barrels.size():
+		_unseen_new_ids.erase(_barrels[_barrel_idx].id)
+	if _shaft_idx < _shafts.size():
+		_unseen_new_ids.erase(_shafts[_shaft_idx].id)
+	if _flight_idx < _flights.size():
+		_unseen_new_ids.erase(_flights[_flight_idx].id)
+	_update_new_labels()
+
+
+## Show or hide the "New Parts!" label for each slot based on unseen parts.
+func _update_new_labels() -> void:
+	if _barrel_new_label:
+		_barrel_new_label.visible = _slot_has_unseen(_barrels)
+	if _shaft_new_label:
+		_shaft_new_label.visible = _slot_has_unseen(_shafts)
+	if _flight_new_label:
+		_flight_new_label.visible = _slot_has_unseen(_flights)
+
+
+func _slot_has_unseen(parts: Array[DartComponent]) -> bool:
+	for part: DartComponent in parts:
+		if part != null and _unseen_new_ids.has(part.id):
+			return true
+	return false
 
 
 func _refresh_slot(slot_name: String) -> void:
@@ -726,19 +828,43 @@ func _refresh_slot(slot_name: String) -> void:
 		_update_perk_display(null, perk_label)
 		return
 
+	var is_locked: bool = not PlayerProgress.is_unlocked(part)
+
 	if name_label:
-		name_label.text = part.component_name
+		if is_locked:
+			name_label.text = "[Locked]"
+			name_label.modulate = Color(0.5, 0.5, 0.5)
+		else:
+			name_label.text = part.component_name
+			name_label.modulate = Color(1.0, 1.0, 1.0)
 
 	if stats_label:
-		stats_label.text = "[center]" + part.get_bbcode_tooltip() + "[/center]"
+		if is_locked:
+			var hint: String = ""
+			if part.unlock_condition != null and part.unlock_condition.description != "":
+				hint = part.unlock_condition.description
+			else:
+				hint = "???"
+			stats_label.text = "[center][color=#888888]%s[/color][/center]" % hint
+		else:
+			stats_label.text = "[center]" + part.get_bbcode_tooltip() + "[/center]"
 
-	_update_perk_display(part, perk_label)
+	if is_locked:
+		_update_perk_display(null, perk_label)
+	else:
+		_update_perk_display(part, perk_label)
 
-	# Update preview texture or placeholder
 	if tex_rect:
-		if part.texture:
+		if part.texture and not is_locked:
 			tex_rect.texture = part.texture
 			tex_rect.visible = true
+			tex_rect.modulate = Color(1.0, 1.0, 1.0)
+			if preview:
+				preview.visible = false
+		elif part.texture and is_locked:
+			tex_rect.texture = part.texture
+			tex_rect.visible = true
+			tex_rect.modulate = Color(0.08, 0.08, 0.08)
 			if preview:
 				preview.visible = false
 		else:

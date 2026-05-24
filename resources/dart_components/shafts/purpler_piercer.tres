@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://xerli7coxhfg"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_8i030"]
+[ext_resource type="Texture2D" uid="uid://cpnps1pc0yiyr" path="res://sprites/DartComponents/DartShafts/shaft-short-2.png" id="2_23j8x"]
+[ext_resource type="Script" uid="uid://dp3hj83gv6oik" path="res://scripts/unlock_conditions/leg_stat_condition.gd" id="3_23j8x"]
+
+[sub_resource type="Resource" id="Resource_jyktc"]
+script = ExtResource("3_23j8x")
+require_three_scoring_darts = true
+description = "Checkout with all 3 darts in a turn scoring "
+metadata/_custom_type_script = "uid://dp3hj83gv6oik"
+
+[resource]
+script = ExtResource("1_8i030")
+id = &"purple_piercer"
+component_name = "Purple Piercer"
+description = "This shaft helps keep your dart on a tight vertical line"
+component_type = 1
+weight = 0.16999999999999993
+default_unlocked = false
+unlock_condition = SubResource("Resource_jyktc")
+texture = ExtResource("2_23j8x")
+h_range_bonus = -3.0
+v_range_bonus = 8.0
+v_speed_bonus = 2.0
+h_accuracy_bonus = -1.0
+v_accuracy_bonus = 10.0

@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://6vu3vshie601"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_ay1sf"]
+[ext_resource type="Texture2D" uid="uid://btgbsjy0k8fou" path="res://sprites/DartComponents/DartBarrels/barrel-short-2.png" id="2_f4etp"]
+[ext_resource type="Script" uid="uid://bpt06ne1ux73h" path="res://scripts/unlock_conditions/leg_win_hit_condition.gd" id="3_p28ym"]
+
+[sub_resource type="Resource" id="Resource_4axha"]
+script = ExtResource("3_p28ym")
+required_ring = "Double Bull"
+description = "Win a leg on a double bullseye "
+metadata/_custom_type_script = "uid://bpt06ne1ux73h"
+
+[resource]
+script = ExtResource("1_ay1sf")
+id = &"air_cutter"
+component_name = "Air Cutter"
+description = "This thing doesnt move a centemter from where you aim it, but good luck with that part!"
+weight = -0.5700000000000001
+default_unlocked = false
+unlock_condition = SubResource("Resource_4axha")
+texture = ExtResource("2_f4etp")
+h_accuracy_bonus = 26.0
+v_accuracy_bonus = 26.0

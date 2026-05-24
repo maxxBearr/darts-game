@@ -1,48 +1,16 @@
-# DartComponent System & Unlock Conditions — Implementation Spec
-
-> **Status:** Spec — implementation pending.
-> When the implementation lands, strip this status line and treat the rest of the file as the living developer guide.
+# DartComponent System & Unlock Conditions — Developer Reference
 
 ## Overview
 
 A `DartComponent` is a single dart part (barrel / shaft / flight) the player equips on the assembly screen. Each component carries stat bonuses, a weight contribution, an optional `ThrowModifier` ability, and — new in this spec — an optional `UnlockCondition` describing how the player earns it. Locked components do not appear in the assembly screen part-picker until their condition is satisfied; satisfaction is detected at runtime by a central `UnlockManager` listening to game events.
 
-This spec covers three coupled changes:
+This system covers three coupled pieces:
 
 1. **A stable identity system** for `DartComponent` (the `id: StringName` field and naming/validation rules), so save data referencing components survives file moves and renames.
 2. **A `PlayerProgress` autoload** that owns the player's unlock state, separated cleanly from the resource definitions themselves.
 3. **An `UnlockCondition` resource hierarchy** (mirroring `ThrowModifier`) plus the `UnlockManager` autoload that evaluates conditions and grants unlocks.
 
-The throw modifier system (`ThrowModifierGuide.txt`) is the pattern this mirrors. If you've read that, this should feel familiar.
-
----
-
-## Implementation Scope & Acceptance
-
-### In scope for this implementation pass
-
-- All system code: the `id` field migration on existing `DartComponent` resources, the `PlayerProgress` autoload, the `UnlockManager` autoload, the `UnlockCondition` base + all six subclasses, registry validation, the integration calls in `main.gd` / `scoring_modifier_manager.gd` / shop scripts, the assembly-screen locked-state rendering, and the unlock notification queue.
-- Empty "shell" `.tres` files for new locked components — three per slot (barrel / shaft / flight) — placed in their respective folders so Max can fill in design values later. See [section 14](#14-shell-files-for-new-locked-components-content-deferred-to-max) for the exact recipe.
-
-### Out of scope (Max handles separately)
-
-- Stat values, weights, names, descriptions, textures, rarity tiers, throw_modifier links, and unlock_condition links for the new locked components. These get filled in by Max via the Godot inspector after the system lands, following the section 10 checklist.
-- Adding the new components to the `DartComponentRegistry` arrays. Max drags them in once each one is filled out — registration is the "ready" signal.
-- New `UnlockCondition` `.tres` instances tuned to specific components. Max creates these alongside the component design work.
-
-### Acceptance criteria
-
-The implementation is done when all of the following are true:
-
-1. The game starts cleanly with no `DartComponentRegistry` validation errors against existing components.
-2. Every existing dart component has a unique non-empty `id` matching the migration table in section 2; the field formerly known as `unlocked` is now `default_unlocked` and remains `true` on every existing component.
-3. The `PlayerProgress` autoload persists to `user://progress.tres` across game restarts (`unlocked_ids` and `career_stats` both survive). Verifiable by manually calling `PlayerProgress.unlock(component)` from a debug shortcut and confirming the unlock survives a restart.
-4. The `UnlockManager` autoload is registered, receives `bind_registry()` from `main.gd`, and fires all five event entry methods at the integration points listed in section 8.
-5. Locked components (any shell that has been filled in by Max and added to the registry with `default_unlocked = false`) render greyed-out with a lock icon and the `unlock_condition.description` shown in muted grey on the assembly screen part-picker.
-6. When `PlayerProgress.component_unlocked` fires, the notification queue displays a toast with the component thumbnail and name, and queues additional unlocks behind it if multiple fire at once.
-7. The shell `.tres` files exist at the paths specified in section 14, are NOT added to the registry arrays, and the game continues to run cleanly with them present.
-
-End-to-end test path Claude Code should execute before declaring done: temporarily fill in one shell with a stat block, a `LegWinHitCondition` requiring a double bullseye, and drag it into the registry. Start a new game, win a leg on a double bullseye, observe (a) the notification fires, (b) the component is selectable on the next assembly screen visit, (c) `user://progress.tres` contains the new ID. Then revert the test shell back to empty.
+The throw modifier system (`ThrowModifierGuide.txt`) is the pattern this mirrors. If you've read that, this should feel familiar. For per-condition setup recipes (15 entries covering the original design list), see `UnlockConditionRecipes.md`. For the design rationale behind why decisions were made a particular way, see `specs/2026-05-23-dart-component-unlock-system.md`.
 
 ---
 
@@ -215,66 +183,66 @@ func _ready() -> void:
 ## Check whether the player has access to a component.
 ## Combines the resource's default_unlocked flag with earned unlocks.
 func is_unlocked(component: DartComponent) -> bool:
-    if component.default_unlocked:
-        return true
-    return unlocked_ids.has(component.id)
+	if component.default_unlocked:
+		return true
+	return unlocked_ids.has(component.id)
 
 
 ## Grant an unlock. No-op if already unlocked. Saves immediately and emits signal.
 func unlock(component: DartComponent) -> void:
-    if is_unlocked(component):
-        return
-    unlocked_ids[component.id] = true
-    _save()
-    component_unlocked.emit(component)
+	if is_unlocked(component):
+		return
+	unlocked_ids[component.id] = true
+	_save()
+	component_unlocked.emit(component)
 
 
 ## Read a career stat. Returns 0 if never set.
 func get_stat(stat_name: StringName) -> int:
-    return career_stats.get(stat_name, 0)
+	return career_stats.get(stat_name, 0)
 
 
 ## Increment a career stat by `amount` (default 1). Saves immediately.
 func increment_stat(stat_name: StringName, amount: int = 1) -> void:
-    career_stats[stat_name] = career_stats.get(stat_name, 0) + amount
-    _save()
+	career_stats[stat_name] = career_stats.get(stat_name, 0) + amount
+	_save()
 
 
 ## Set a career stat to a specific value if it exceeds the current value.
 ## Used for "highest checkout ever" style stats. Saves if updated.
 func set_stat_max(stat_name: StringName, value: int) -> void:
-    var current: int = career_stats.get(stat_name, 0)
-    if value > current:
-        career_stats[stat_name] = value
-        _save()
+	var current: int = career_stats.get(stat_name, 0)
+	if value > current:
+		career_stats[stat_name] = value
+		_save()
 
 
 ## Save state to user://progress.tres.
 func _save() -> void:
-    var data: Dictionary = {
-        "unlocked_ids": unlocked_ids,
-        "career_stats": career_stats,
-    }
-    var save_file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-    if save_file == null:
-        push_error("PlayerProgress: failed to open %s for writing" % SAVE_PATH)
-        return
-    save_file.store_var(data)
-    save_file.close()
+	var data: Dictionary = {
+		"unlocked_ids": unlocked_ids,
+		"career_stats": career_stats,
+	}
+	var save_file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if save_file == null:
+		push_error("PlayerProgress: failed to open %s for writing" % SAVE_PATH)
+		return
+	save_file.store_var(data)
+	save_file.close()
 
 
 ## Load state from user://progress.tres. Creates an empty state if file is missing.
 func _load() -> void:
-    if not FileAccess.file_exists(SAVE_PATH):
-        return
-    var save_file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
-    if save_file == null:
-        return
-    var data: Variant = save_file.get_var()
-    save_file.close()
-    if data is Dictionary:
-        unlocked_ids = data.get("unlocked_ids", {})
-        career_stats = data.get("career_stats", {})
+	if not FileAccess.file_exists(SAVE_PATH):
+		return
+	var save_file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if save_file == null:
+		return
+	var data: Variant = save_file.get_var()
+	save_file.close()
+	if data is Dictionary:
+		unlocked_ids = data.get("unlocked_ids", {})
+		career_stats = data.get("career_stats", {})
 ```
 
 ### Register in `project.godot`
@@ -295,40 +263,40 @@ Modify `res://scripts/dart_component_registry.gd`:
 
 ```gdscript
 func _ready() -> void:
-    _validate_components()
+	_validate_components()
 
 
 ## Assert that every component has a non-empty unique ID, and that no component
 ## is permanently unobtainable. Errors are printed via push_error() so they show
 ## up loudly in the debugger.
 func _validate_components() -> void:
-    var seen_ids: Dictionary = {}
-    var all_parts: Array[DartComponent] = []
-    all_parts.append_array(barrels)
-    all_parts.append_array(shafts)
-    all_parts.append_array(flights)
+	var seen_ids: Dictionary = {}
+	var all_parts: Array[DartComponent] = []
+	all_parts.append_array(barrels)
+	all_parts.append_array(shafts)
+	all_parts.append_array(flights)
 
-    for part: DartComponent in all_parts:
-        if part == null:
-            continue
+	for part: DartComponent in all_parts:
+		if part == null:
+			continue
 
-        # Empty ID check
-        if part.id == &"" or part.id == &" ":
-            push_error("DartComponentRegistry: component '%s' has empty id"
-                % part.component_name)
-            continue
+		# Empty ID check
+		if part.id == &"" or part.id == &" ":
+			push_error("DartComponentRegistry: component '%s' has empty id"
+				% part.component_name)
+			continue
 
-        # Duplicate ID check
-        if seen_ids.has(part.id):
-            push_error("DartComponentRegistry: duplicate id '%s' on '%s' and '%s'"
-                % [part.id, seen_ids[part.id], part.component_name])
-        else:
-            seen_ids[part.id] = part.component_name
+		# Duplicate ID check
+		if seen_ids.has(part.id):
+			push_error("DartComponentRegistry: duplicate id '%s' on '%s' and '%s'"
+				% [part.id, seen_ids[part.id], part.component_name])
+		else:
+			seen_ids[part.id] = part.component_name
 
-        # Permanently unobtainable check
-        if not part.default_unlocked and part.unlock_condition == null:
-            push_error("DartComponentRegistry: '%s' is locked but has no unlock_condition — permanently unobtainable"
-                % part.component_name)
+		# Permanently unobtainable check
+		if not part.default_unlocked and part.unlock_condition == null:
+			push_error("DartComponentRegistry: '%s' is locked but has no unlock_condition — permanently unobtainable"
+				% part.component_name)
 ```
 
 ### Filter methods consult `PlayerProgress`
@@ -337,27 +305,27 @@ Replace the existing `get_unlocked_X()` methods:
 
 ```gdscript
 func get_unlocked_barrels() -> Array[DartComponent]:
-    return _filter_unlocked(barrels)
+	return _filter_unlocked(barrels)
 
 
 func get_unlocked_shafts() -> Array[DartComponent]:
-    return _filter_unlocked(shafts)
+	return _filter_unlocked(shafts)
 
 
 func get_unlocked_flights() -> Array[DartComponent]:
-    return _filter_unlocked(flights)
+	return _filter_unlocked(flights)
 
 
 ## Internal: return only the components the player has access to.
 ## A component is accessible if default_unlocked OR PlayerProgress has its id.
 func _filter_unlocked(parts: Array[DartComponent]) -> Array[DartComponent]:
-    var result: Array[DartComponent] = []
-    for part: DartComponent in parts:
-        if part == null:
-            continue
-        if PlayerProgress.is_unlocked(part):
-            result.append(part)
-    return result
+	var result: Array[DartComponent] = []
+	for part: DartComponent in parts:
+		if part == null:
+			continue
+		if PlayerProgress.is_unlocked(part):
+			result.append(part)
+	return result
 ```
 
 ### Helper: get all locked components
@@ -368,17 +336,17 @@ For the `UnlockManager` to know which conditions to evaluate, add:
 ## Return all components the player has NOT yet unlocked. Used by UnlockManager
 ## to know which unlock_conditions to test against game events.
 func get_locked_components() -> Array[DartComponent]:
-    var result: Array[DartComponent] = []
-    var all_parts: Array[DartComponent] = []
-    all_parts.append_array(barrels)
-    all_parts.append_array(shafts)
-    all_parts.append_array(flights)
-    for part: DartComponent in all_parts:
-        if part == null:
-            continue
-        if not PlayerProgress.is_unlocked(part) and part.unlock_condition != null:
-            result.append(part)
-    return result
+	var result: Array[DartComponent] = []
+	var all_parts: Array[DartComponent] = []
+	all_parts.append_array(barrels)
+	all_parts.append_array(shafts)
+	all_parts.append_array(flights)
+	for part: DartComponent in all_parts:
+		if part == null:
+			continue
+		if not PlayerProgress.is_unlocked(part) and part.unlock_condition != null:
+			result.append(part)
+	return result
 ```
 
 ---
@@ -635,35 +603,51 @@ Covers: "Acquire 10 items during a single shop."
 
 ### 6f. `SlotsFilledCondition`
 
-Snapshot check on current slot state.
+Snapshot check on streak slot state. Fires when all three streak categories
+are filled simultaneously.
 
 `res://scripts/unlock_conditions/slots_filled_condition.gd`:
 
 ```gdscript
 class_name SlotsFilledCondition
 extends UnlockCondition
-## Triggered on slots_state_changed. Checks whether a specific slot category
-## is fully populated.
-
-## Which slot grouping to test. See UnlockManager for what each value checks.
-@export_enum("All streak categories", "All modifier slots") var target_slots: int = 0
-
+## Triggered on slots_state_changed. Returns true when one streak modifier
+## from each of the three streak categories (WEDGE, COLOR, PARITY) is active
+## simultaneously.
 
 func is_satisfied(event_name: StringName, context: Dictionary) -> bool:
     if event_name != &"slots_state_changed":
         return false
-
-    match target_slots:
-        0:  # All streak categories
-            return context.get("all_streak_categories_filled", false)
-        1:  # All modifier slots
-            return context.get("all_modifier_slots_filled", false)
-    return false
+    return context.get("all_streak_categories_filled", false)
 ```
 
-Covers: "Fill all modifier slots", "Fill all streak slots".
+Covers: "Fill all streak slots".
 
-> **OPEN QUESTION FOR MAX:** the codebase has 3 streak categories (`WEDGE`, `COLOR`, `PARITY`) — those are unambiguously "all streak slots." But "modifier slots" doesn't have a current fixed count — `active_modifiers` grows freely. Before this subclass is built, decide: is "all modifier slots" referring to a future slot cap system, or is it shorthand for "all streak categories" (in which case the second enum value is unused)? Spec assumes the former and leaves a flag for it; the event source can leave `all_modifier_slots_filled` permanently false until the slot cap exists.
+### 6g. `RelicCountCondition`
+
+Threshold on the number of currently-active RELIC-kind modifiers.
+
+`res://scripts/unlock_conditions/relic_count_condition.gd`:
+
+```gdscript
+class_name RelicCountCondition
+extends UnlockCondition
+## Triggered on item_acquired. Checks how many RELIC-kind modifiers are
+## currently active. Used for "amass N items" milestones.
+
+@export var min_relic_count: int = 6
+
+
+func is_satisfied(event_name: StringName, context: Dictionary) -> bool:
+    if event_name != &"item_acquired":
+        return false
+    var count: int = context.get("active_relic_count", 0)
+    return count >= min_relic_count
+```
+
+Covers: "Hold N relic items at once" style milestones. RELIC kind only —
+board mutations (wedge swaps, color flips, wedge value changes) don't count
+since they fire once on acquire and don't persist.
 
 ---
 
@@ -696,7 +680,7 @@ var registry: DartComponentRegistry
 
 ## Bootstrap from main.gd: pass in the registry instance so we can walk it.
 func bind_registry(r: DartComponentRegistry) -> void:
-    registry = r
+	registry = r
 
 
 ## --- Event entry points ---
@@ -707,76 +691,76 @@ func bind_registry(r: DartComponentRegistry) -> void:
 ## leg_context is the dictionary returned by x01_game.process_throw(),
 ## enriched with winning-dart metadata by main.gd before this call.
 func on_leg_won(leg_context: Dictionary) -> void:
-    _legs_won_this_run += 1
-    PlayerProgress.increment_stat(&"legs_won", 1)
+	_legs_won_this_run += 1
+	PlayerProgress.increment_stat(&"legs_won", 1)
 
-    var checkout_total: int = leg_context.get("checkout_total", 0)
-    if checkout_total > 0:
-        PlayerProgress.set_stat_max(&"max_checkout_ever", checkout_total)
+	var checkout_total: int = leg_context.get("checkout_total", 0)
+	if checkout_total > 0:
+		PlayerProgress.set_stat_max(&"max_checkout_ever", checkout_total)
 
-    var context: Dictionary = leg_context.duplicate()
-    context["legs_won_this_run"] = _legs_won_this_run
+	var context: Dictionary = leg_context.duplicate()
+	context["legs_won_this_run"] = _legs_won_this_run
 
-    _evaluate(&"leg_won", context)
+	_evaluate(&"leg_won", context)
 
 
 ## Called when the player acquires any item (modifier or component).
 ## item_context: { "rarity": ScoringEnums.Rarity }
 func on_item_acquired(item_context: Dictionary) -> void:
-    _items_acquired_this_shop += 1
+	_items_acquired_this_shop += 1
 
-    var rarity: int = item_context.get("rarity", ScoringEnums.Rarity.COMMON)
-    if rarity != ScoringEnums.Rarity.COMMON:
-        _run_flags[&"only_commons_acquired_this_run"] = false
+	var rarity: int = item_context.get("rarity", ScoringEnums.Rarity.COMMON)
+	if rarity != ScoringEnums.Rarity.COMMON:
+		_run_flags[&"only_commons_acquired_this_run"] = false
 
-    _evaluate(&"item_acquired", item_context)
+	_evaluate(&"item_acquired", item_context)
 
 
 ## Called when the shop opens.
 func on_shop_opened() -> void:
-    _items_acquired_this_shop = 0
+	_items_acquired_this_shop = 0
 
 
 ## Called when the shop closes.
 func on_shop_closed() -> void:
-    var context: Dictionary = {
-        "items_acquired_this_shop": _items_acquired_this_shop,
-    }
-    _evaluate(&"shop_closed", context)
+	var context: Dictionary = {
+		"items_acquired_this_shop": _items_acquired_this_shop,
+	}
+	_evaluate(&"shop_closed", context)
 
 
 ## Called when streak slot state or modifier slot state changes.
 ## slot_context provides the snapshot keys SlotsFilledCondition reads.
 func on_slots_state_changed(slot_context: Dictionary) -> void:
-    _evaluate(&"slots_state_changed", slot_context)
+	_evaluate(&"slots_state_changed", slot_context)
 
 
 ## Called by main.gd at the start of every run. Resets run-scoped state.
 func on_run_started() -> void:
-    _legs_won_this_run = 0
-    _run_flags.clear()
-    # Optimistic-by-default: assume the constraint holds until violated.
-    _run_flags[&"only_commons_acquired_this_run"] = true
+	_legs_won_this_run = 0
+	_run_flags.clear()
+	# Optimistic-by-default: assume the constraint holds until violated.
+	_run_flags[&"only_commons_acquired_this_run"] = true
 
 
 ## Read a run-scoped flag. Returns false if never set.
 func get_run_flag(flag_name: StringName) -> bool:
-    return _run_flags.get(flag_name, false)
+	return _run_flags.get(flag_name, false)
 
 
 ## --- Internal evaluation ---
 
 ## Walk every locked component and grant any whose condition is satisfied.
 func _evaluate(event_name: StringName, context: Dictionary) -> void:
-    if registry == null:
-        return
+	if registry == null:
+		return
 
-    var locked: Array[DartComponent] = registry.get_locked_components()
-    for component: DartComponent in locked:
-        if component.unlock_condition == null:
-            continue
-        if component.unlock_condition.is_satisfied(event_name, context):
-            PlayerProgress.unlock(component)
+	var locked: Array[DartComponent] = registry.get_locked_components()
+	for component: DartComponent in locked:
+		if component.unlock_condition == null:
+			continue
+		if component.unlock_condition.is_satisfied(event_name, context):
+			PlayerProgress.unlock(component)
 ```
 
 ### Event context reference
@@ -800,9 +784,10 @@ The full set of keys each event provides. Event sources are responsible for popu
 
 **`item_acquired`**:
 
-| Key | Type |
-|-----|------|
-| `rarity` | ScoringEnums.Rarity |
+| Key | Type | Meaning |
+|-----|------|---------|
+| `rarity` | ScoringEnums.Rarity | rarity tier of the acquired item |
+| `active_relic_count` | int | how many RELIC-kind modifiers are active after this acquisition |
 
 **`shop_closed`**:
 
@@ -815,7 +800,6 @@ The full set of keys each event provides. Event sources are responsible for popu
 | Key | Type | Meaning |
 |-----|------|---------|
 | `all_streak_categories_filled` | bool | one streak modifier per `StreakCategory.WEDGE`, `COLOR`, and `PARITY` is active |
-| `all_modifier_slots_filled` | bool | reserved for future slot-cap system; leave false for now |
 
 ---
 
@@ -829,23 +813,30 @@ The full set of keys each event provides. Event sources are responsible for popu
 
 ### `scoring_modifier_manager.gd`
 
-- After `add_modifier()` succeeds, call `UnlockManager.on_item_acquired({"rarity": modifier.rarity_tier})`.
-- After `add_modifier()` finishes, if it changed streak slot occupancy, call `UnlockManager.on_slots_state_changed(_build_slots_context())` where `_build_slots_context()` returns:
+- After `add_modifier()` succeeds, call `UnlockManager.on_item_acquired({"rarity": modifier.rarity_tier, "active_relic_count": _count_active_relics()})`.
+- After `add_modifier()` finishes, if it changed streak slot occupancy, call `UnlockManager.on_slots_state_changed(_build_slots_context())`. The context builder and the relic counter:
   ```gdscript
+  func _count_active_relics() -> int:
+	  var count: int = 0
+	  for m: Resource in active_modifiers:
+		  if m is ScoringModifier and (m as ScoringModifier).kind == ScoringEnums.ModifierKind.RELIC:
+			  count += 1
+	  return count
+
+
   func _build_slots_context() -> Dictionary:
-      var categories: Dictionary = {}
-      for m: Resource in active_modifiers:
-          if m is ScoringModifier and m.streak_category != ScoringEnums.StreakCategory.NONE:
-              categories[m.streak_category] = true
-      var all_streak: bool = (
-          categories.has(ScoringEnums.StreakCategory.WEDGE)
-          and categories.has(ScoringEnums.StreakCategory.COLOR)
-          and categories.has(ScoringEnums.StreakCategory.PARITY)
-      )
-      return {
-          "all_streak_categories_filled": all_streak,
-          "all_modifier_slots_filled": false,  # placeholder until slot cap exists
-      }
+	  var categories: Dictionary = {}
+	  for m: Resource in active_modifiers:
+		  if m is ScoringModifier and m.streak_category != ScoringEnums.StreakCategory.NONE:
+			  categories[m.streak_category] = true
+	  var all_streak: bool = (
+		  categories.has(ScoringEnums.StreakCategory.WEDGE)
+		  and categories.has(ScoringEnums.StreakCategory.COLOR)
+		  and categories.has(ScoringEnums.StreakCategory.PARITY)
+	  )
+	  return {
+		  "all_streak_categories_filled": all_streak,
+	  }
   ```
 
 ### Shop scripts
@@ -973,8 +964,8 @@ Quick reference connecting Max's design list to the right subclass and configura
 | Win a leg on a streak-modified double | `LegWinHitCondition` | `required_ring = "Double"`, `required_modifier_category = "streak"` |
 | Win a leg on a double scoring > 50 | `LegWinHitCondition` | `required_ring = "Double"`, `min_winning_dart_score = 51` |
 | Win a leg on a double scoring > 100 | `LegWinHitCondition` | `required_ring = "Double"`, `min_winning_dart_score = 101` |
-| Fill all modifier slots | `SlotsFilledCondition` | `target_slots = 1` *(blocked on slot-cap design — see OPEN QUESTION in 6f)* |
-| Fill all streak slots | `SlotsFilledCondition` | `target_slots = 0` |
+| Hold 6+ relic items at once | `RelicCountCondition` | `min_relic_count = 6` |
+| Fill all streak slots | `SlotsFilledCondition` | *(no config — single-purpose)* |
 | Win 5 legs total | `CareerCountCondition` | `stat_name = &"legs_won"`, `threshold = 5` |
 | Win 10 legs total | `CareerCountCondition` | `stat_name = &"legs_won"`, `threshold = 10` |
 | Win 5 legs with only common items | `RunConstraintCondition` | `legs_won_this_run_threshold = 5`, `required_run_flag = &"only_commons_acquired_this_run"` |
@@ -997,62 +988,11 @@ Quick reference connecting Max's design list to the right subclass and configura
 
 ---
 
-## 13. Shell Files for New Locked Components (Content Deferred to Max)
+## 13. Future Extensions
 
-Claude Code creates these empty `.tres` files as scaffolding. Max fills them in via the Godot inspector after the system lands, following the section 10 checklist.
+Items deliberately deferred, listed here so future work has a head start:
 
-### What Claude Code creates
-
-Nine empty `DartComponent` `.tres` resources — three per slot:
-
-| File path | `component_type` field |
-|-----------|------------------------|
-| `res://resources/dart_components/barrels/_unfilled_barrel_1.tres` | `BARREL` |
-| `res://resources/dart_components/barrels/_unfilled_barrel_2.tres` | `BARREL` |
-| `res://resources/dart_components/barrels/_unfilled_barrel_3.tres` | `BARREL` |
-| `res://resources/dart_components/shafts/_unfilled_shaft_1.tres` | `SHAFT` |
-| `res://resources/dart_components/shafts/_unfilled_shaft_2.tres` | `SHAFT` |
-| `res://resources/dart_components/shafts/_unfilled_shaft_3.tres` | `SHAFT` |
-| `res://resources/dart_components/flights/_unfilled_flight_1.tres` | `FLIGHT` |
-| `res://resources/dart_components/flights/_unfilled_flight_2.tres` | `FLIGHT` |
-| `res://resources/dart_components/flights/_unfilled_flight_3.tres` | `FLIGHT` |
-
-### Field values to write into each shell
-
-- `id`: `&""` (empty — Max assigns following the slot-prefix convention in section 1)
-- `component_name`: `""` (empty)
-- `description`: `""` (empty)
-- `component_type`: the correct enum for the folder (`BARREL`, `SHAFT`, or `FLIGHT`)
-- `weight`: `0.0`
-- `rarity_tier`: `COMMON`
-- `default_unlocked`: `false`
-- `unlock_condition`: `null`
-- `texture`: `null`
-- All six stat bonuses: `0.0`
-- `throw_modifier`: `null`
-- `dart_outer_color`: default `Color(0.9, 0.85, 0.0)`
-- `dart_inner_color`: default `Color(0.2, 0.2, 0.2)`
-
-### Critical: do NOT register these shells
-
-Claude Code MUST NOT add any of these shells to the `DartComponentRegistry`'s `barrels`, `shafts`, or `flights` arrays. They remain unregistered until Max fills each one in and drags it into the registry manually. This is intentional — the registry validator would refuse to start the game if a registered component has an empty `id` or is `default_unlocked = false` with a null `unlock_condition`, both of which describe an unfilled shell.
-
-The leading `_unfilled_` prefix sorts these to the top of their folder in the FileSystem dock so Max can see at a glance what's pending. When Max fills a shell in, he renames the file to match its final `id` slug (e.g., `_unfilled_barrel_1.tres` → `barrel_quickdraw.tres`) before registering it.
-
-### Why this approach
-
-- Bundles system + content scaffolding in one PR while keeping every design decision (stats, names, balance) Max's.
-- Registry validator stays strict — no loosening to accommodate placeholder content.
-- Game remains runnable throughout the fill-in process; unregistered shells don't break anything.
-- Renaming a shell to its final slug is a single rename operation in the FileSystem dock; no folder moves needed.
-
----
-
-## 14. Future Extensions
-
-Items deliberately deferred from this spec, listed here so future work has a head start:
-
-- **Component slot cap / "modifier slots" semantics.** Section 6f flags this — needs design pass before the `all_modifier_slots_filled` flag means anything.
+- **Per-category caps on non-streak RELIC modifiers.** Today the only enforced slots are the 3 streak categories; `ColorBonus` and `OddEvenBonus` stack without limit. If you eventually want a single color-bonus slot, a single parity-bonus slot, etc., the enforcement goes in `scoring_modifier_manager.add_modifier()` (mirroring `get_streak_conflict()` for whatever the new categories are). `RelicCountCondition` is a coarse stand-in for now.
 - **Stable IDs on `ScoringModifier` and `ThrowModifier`.** Same `id: StringName` pattern, useful for save data and item-history tracking. Not built yet — copy the pattern from `DartComponent` when needed. Resist extracting a shared base class until at least two of them need it.
 - **Achievement-style overlays.** The `component_unlocked` signal could feed an achievements panel listing every component and its unlock status. Not in scope here.
 - **Migration handling in `PlayerProgress._load()`.** Currently it just loads or returns empty. If the save format ever needs to change, add versioning and a migration step there.

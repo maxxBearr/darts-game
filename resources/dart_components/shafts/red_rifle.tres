@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://d3xexveghjpbw"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_qfkhi"]
+[ext_resource type="Texture2D" uid="uid://b71wdfvbyqlxv" path="res://sprites/DartComponents/DartShafts/shaft-medium-2.png" id="2_r0t86"]
+[ext_resource type="Script" uid="uid://btyl0rdveun8p" path="res://scripts/unlock_conditions/slots_filled_condition.gd" id="3_hd4wq"]
+
+[sub_resource type="Resource" id="Resource_o6yku"]
+script = ExtResource("3_hd4wq")
+description = "Equip a streak modifier in all three slots "
+metadata/_custom_type_script = "uid://btyl0rdveun8p"
+
+[resource]
+script = ExtResource("1_qfkhi")
+id = &"red_rifle"
+component_name = "Red Rifle"
+description = "this medium length shaft has great reliability"
+component_type = 1
+weight = 0.25
+default_unlocked = false
+unlock_condition = SubResource("Resource_o6yku")
+texture = ExtResource("2_r0t86")
+h_range_bonus = 2.0
+v_range_bonus = 2.0
+h_accuracy_bonus = 8.0
+v_accuracy_bonus = 8.0

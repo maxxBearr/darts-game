@@ -1,6 +1,6 @@
 # Active Spec
 
-_No active spec right now. The most recent spec has been archived to `specs/2026-05-23-modifier-icons-and-streak-section.md`._
+_No active spec right now. The most recent spec has been archived to `specs/2026-05-23-dart-component-unlock-system.md`._
 
 ---
 

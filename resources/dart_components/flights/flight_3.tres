@@ -1,9 +1,0 @@
-[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://cp47irfdbixqv"]
-
-[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1_f3x8h"]
-[ext_resource type="Texture2D" uid="uid://b0b4sy6gjnvo1" path="res://sprites/DartComponents/DartFlights/flight-4.png" id="2_fqvwa"]
-
-[resource]
-script = ExtResource("1_f3x8h")
-texture = ExtResource("2_fqvwa")
-metadata/_custom_type_script = "uid://bqjgrqhnbb5uv"

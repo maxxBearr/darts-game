@@ -150,7 +150,43 @@ func add_modifier(modifier: Resource, config: Dictionary) -> Resource:
 	if modifier.timing == ScoringEnums.ModifierTiming.ON_ACQUIRE:
 		modifier.apply_to_board(effective_wedge_values, effective_wedge_colors, config)
 
+	UnlockManager.on_item_acquired({
+		"rarity": modifier.rarity_tier,
+		"active_relic_count": _count_active_relics(),
+	})
+	if modifier is ScoringModifier and (modifier as ScoringModifier).streak_category != ScoringEnums.StreakCategory.NONE:
+		UnlockManager.on_slots_state_changed(_build_slots_context())
+
 	return replaced
+
+
+## Count currently active RELIC-kind modifiers. Used by RelicCountCondition
+## to drive "amass N items" unlock conditions. BOARD_MUTATION modifiers don't
+## count — they fire once on acquire and don't persist as relics.
+func _count_active_relics() -> int:
+	var count: int = 0
+	for m: Resource in active_modifiers:
+		if m is ScoringModifier and (m as ScoringModifier).kind == ScoringEnums.ModifierKind.RELIC:
+			count += 1
+	return count
+
+
+## Build the context payload for slots_state_changed events.
+## Currently only enforces streak categories; non-streak relic counts are
+## handled by RelicCountCondition listening on item_acquired instead.
+func _build_slots_context() -> Dictionary:
+	var categories: Dictionary = {}
+	for m: Resource in active_modifiers:
+		if m is ScoringModifier and m.streak_category != ScoringEnums.StreakCategory.NONE:
+			categories[m.streak_category] = true
+	var all_streak: bool = (
+		categories.has(ScoringEnums.StreakCategory.WEDGE)
+		and categories.has(ScoringEnums.StreakCategory.COLOR)
+		and categories.has(ScoringEnums.StreakCategory.PARITY)
+	)
+	return {
+		"all_streak_categories_filled": all_streak,
+	}
 
 
 ## Get the effective face value for a wedge by index (0-19). For display/hover.
