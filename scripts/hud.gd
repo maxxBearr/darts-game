@@ -267,6 +267,39 @@ func show_bust(reason: String) -> void:
 	bust_label.visible = true
 
 
+## Show a centered "LEG WON!" banner that scales in and fades out.
+## Returns the tween so callers can chain callbacks after it finishes.
+func show_leg_won_banner() -> Tween:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var banner: Label = Label.new()
+	banner.text = "LEG WON!"
+	banner.add_theme_font_size_override("font_size", 48)
+	banner.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	banner.add_theme_constant_override("outline_size", 6)
+	banner.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	banner.size = Vector2(400.0, 80.0)
+	banner.position = Vector2((viewport_size.x - 400.0) / 2.0, (viewport_size.y - 80.0) / 2.0)
+	banner.pivot_offset = Vector2(200.0, 40.0)
+	banner.scale = Vector2(0.3, 0.3)
+	banner.modulate.a = 0.0
+	add_child(banner)
+
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(banner, "scale", Vector2(1.0, 1.0), 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.tween_property(banner, "modulate:a", 1.0, 0.15)
+	tween.set_parallel(false)
+	tween.tween_interval(0.8)
+	tween.set_parallel(true)
+	tween.tween_property(banner, "modulate:a", 0.0, 0.4).set_ease(Tween.EASE_IN)
+	tween.tween_property(banner, "position:y", banner.position.y - 30.0, 0.4).set_ease(Tween.EASE_IN)
+	tween.set_parallel(false)
+	tween.tween_callback(banner.queue_free)
+	return tween
+
+
 ## Show leg complete message with upgrade card choices.
 func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upgrades: Array[Dictionary]) -> void:
 	score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [leg, target, turns_used]
@@ -1327,9 +1360,9 @@ func update_setup_display(recommendation: Dictionary, has_toggleable_modifiers: 
 
 	var line: Label = Label.new()
 	if target.get("ring_name", "") == "Off Board":
-		line.text = "Aim off-board → preserves remaining (%d)" % remainder
+		line.text = "Aim off-board -> preserves remaining (%d)" % remainder
 	else:
-		line.text = "Aim %s → leaves you at %d" % [target_name, remainder]
+		line.text = "Aim %s -> leaves you at %d" % [target_name, remainder]
 	line.add_theme_font_size_override("font_size", checkout_font_size)
 	line.add_theme_color_override("font_color", checkout_setup_color)
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1392,4 +1425,4 @@ func _format_checkout_path(path: Array) -> String:
 
 		parts.append("%s (%s)" % [name, annotation])
 
-	return " → ".join(parts)
+	return " -> ".join(parts)

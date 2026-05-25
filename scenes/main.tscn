@@ -54,7 +54,6 @@ outline_color = Color(0, 0, 0, 1)
 
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
-debug_start_with_modifier = true
 next_dart_delay = 0.05
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
@@ -96,10 +95,24 @@ accuracy_red_color = Color(0.9019608, 0.2, 0.14901961, 0.12941177)
 
 [node name="HUD" type="CanvasLayer" parent="." unique_id=654376527]
 script = ExtResource("4_hud")
+modifier_square_size = null
 hover_tooltip_offset_y = 2.0
+perkup_lift_pixels = null
+perkup_anim_duration = null
 upgrade_button_opacity = 1.0
+upgrade_button_corner_radius = null
 checkout_font_size = 13
+checkout_text_color = null
+checkout_setup_color = null
+checkout_committed_color = null
+streak_icon_size = null
+streak_idle_opacity = null
+streak_disabled_opacity = null
+streak_section_title_text = null
+checkout_toggle_hint = null
 checkout_position = Vector2(975, 350)
+checkout_width = null
+stat_label_width = null
 
 [node name="LegLabel" type="Label" parent="HUD" unique_id=462079680]
 offset_left = 20.0

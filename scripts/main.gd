@@ -483,9 +483,9 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		_awaiting_next_leg = true
 		_notify_leg_won(result, response)
 		if score_tween != null and score_tween.is_valid():
-			score_tween.tween_callback(_show_leg_upgrades.bind(response))
+			score_tween.tween_callback(_show_leg_won_banner.bind(response))
 		else:
-			_show_leg_upgrades(response)
+			_show_leg_won_banner(response)
 	elif response["is_turn_over"]:
 		# Used all 3 darts without bust or win — hide helper until next turn
 		hud.hide_checkout_helper()
@@ -551,6 +551,12 @@ func _notify_leg_won(result: Dictionary, response: Dictionary) -> void:
 		"winning_turn_all_darts_scored": _turn_darts_scored == 3 and x01_game.darts_this_turn == 3,
 	}
 	UnlockManager.on_leg_won(leg_context)
+
+
+## Show the "LEG WON!" banner, then transition to upgrades after it finishes.
+func _show_leg_won_banner(response: Dictionary) -> void:
+	var banner_tween: Tween = hud.show_leg_won_banner()
+	banner_tween.tween_callback(_show_leg_upgrades.bind(response))
 
 
 ## Show the leg-complete upgrade UI or shop entry. Called after the score animation finishes.

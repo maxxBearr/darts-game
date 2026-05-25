@@ -961,7 +961,7 @@ func _update_perk_display(part: DartComponent, perk_label: Label) -> void:
 	if modifier.v_accuracy_bonus != 0.0:
 		bonus_parts.append("V Accuracy %+.0f" % modifier.v_accuracy_bonus)
 	if modifier.gaussian_spread_override > 0.0:
-		bonus_parts.append("Precision → %.2f" % modifier.gaussian_spread_override)
+		bonus_parts.append("Precision -> %.2f" % modifier.gaussian_spread_override)
 
 	if bonus_parts.size() > 0:
 		lines += ", ".join(bonus_parts) + "\n"
