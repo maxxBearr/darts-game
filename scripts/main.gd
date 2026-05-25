@@ -412,8 +412,6 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	var no_modifiers: Array[String] = []
 	hud.update_modifier_status(no_modifiers)
 
-	_run_total_darts += 1
-
 	# Score the throw (raw, before modifiers)
 	var result: Dictionary = dartboard.calculate_score(hit_position)
 
@@ -466,6 +464,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		hud.show_bust(response["bust_reason"])
 		hud.hide_checkout_helper()
 		if response["is_game_over"]:
+			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
 			if score_tween != null and score_tween.is_valid():
 				score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
@@ -475,6 +474,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
 	elif response["is_leg_won"]:
+		_run_total_darts += x01_game.darts_used_in_leg
 		# Leg complete — show golden 0, clear checkout highlights and helper
 		hud.update_remaining(0)
 		hud.set_remaining_checkout_available(true)
@@ -490,6 +490,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		# Used all 3 darts without bust or win — hide helper until next turn
 		hud.hide_checkout_helper()
 		if response["is_game_over"]:
+			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
 			if score_tween != null and score_tween.is_valid():
 				score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))

@@ -881,7 +881,7 @@ func update_streak_section(streak_modifiers: Array, effective_wedge_values: Arra
 		var line: HBoxContainer = HBoxContainer.new()
 		line.add_theme_constant_override("separation", 4)
 		line.mouse_filter = Control.MOUSE_FILTER_STOP
-		var lock_info: String = "Click to toggle" if streak_mod.toggleable else "Locked"
+		var lock_info: String = "Click to toggle" if streak_mod.toggleable else "Always on"
 		line.tooltip_text = "%s\n%s\n%s" % [streak_mod.modifier_name, streak_mod.description, lock_info]
 
 		# Small icon
@@ -990,7 +990,7 @@ func _on_modifier_hover(wrapper: Control) -> void:
 	var modifier: Resource = wrapper.get_meta("modifier")
 	if modifier:
 		var status: String = "ON" if modifier.enabled else "OFF"
-		var lock_info: String = "Click to toggle" if modifier.toggleable else "Locked"
+		var lock_info: String = "Click to toggle" if modifier.toggleable else "Always on"
 		modifier_tooltip.text = "%s [%s]\n%s\n%s" % [modifier.modifier_name, status, modifier.description, lock_info]
 		modifier_tooltip.visible = true
 
@@ -1072,7 +1072,7 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 		var modifier: Resource = modifiers[i]
 		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
 		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
-			var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[LOCKED]"
+			var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
 			button_text += "\n%s" % lock_tag
 		if replacement_info[i] != "":
 			button_text += "\n!! %s" % replacement_info[i]
@@ -1180,7 +1180,7 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 			var modifier: Resource = item["data"]
 			button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
 			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
-				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[LOCKED]"
+				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
 				button_text += "\n%s" % lock_tag
 			button_color = modifier.rarity_color
 			buttons[i].tooltip_text = modifier.description

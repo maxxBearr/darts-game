@@ -112,7 +112,7 @@ func _build_ui() -> void:
 
 func show_results(legs_won: int, total_darts: int) -> void:
 	_legs_won_label.text = "Legs Won: %d" % legs_won
-	_darts_used_label.text = "Darts Thrown: %d" % total_darts
+	_darts_used_label.text = "Darts Used: %d" % total_darts
 	visible = true
 
 
