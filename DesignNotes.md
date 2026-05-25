@@ -1,12 +1,16 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-23 after the Modifier Icons & Streak Section pass shipped.*
+*Canonical design doc. Last refreshed 2026-05-24 after the Flight Modifier Additions pass shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
 ## Status snapshot
+
+**Shipped 2026-05-24 (Flight Modifier Additions):**
+
+- **Two new flight components + reusable ability hooks** (`specs/2026-05-24-flight-modifier-additions.md`). Adds **Momentum Marksman** (throw-time accuracy scaling with the active streak count, but only when aiming at a streak-continuing target) and **Color Connoisseur** (shop-time bias toward color-flavored modifier types). Formalizes two reusable extension points: (1) a second `evaluate_throw_modifiers` pass that runs at aim placement so throw modifiers can read `declared_target` and `active_streak_modifiers` from context — `ThrowModifier.get_active_bonuses()` now accepts an optional context dict so subclasses can compute dynamic bonuses; (2) a new sibling `ShopBias` Resource on `DartComponent` (peer of `throw_modifier`) with a `get_weight_overrides() -> Dictionary` interface that `ModifierRegistry.generate_distinct_at_rarity` multiplies into pool weights at shop generation. New `ScoringModifier.would_continue_streak(target)` virtual lets throw-side code ask streak modifiers whether a candidate target would continue their streak. Streak-stacking shipped as **sum** — flag for revisit if playtest shows it scales too aggressively. The pattern is intentionally extensible: a deferred `ScoringHook` sibling will unlock on-score reactive fliers (retrigger-style) without touching the existing hooks.
 
 **Shipped 2026-05-23 (Dart Component Unlock System):**
 
@@ -277,6 +281,24 @@ All modifiers declare a `kind` (RELIC or BOARD_MUTATION). RELIC modifiers persis
 
 `ThrowModifier` is a parallel system to `ScoringModifier`. Where ScoringModifiers transform *scores*, ThrowModifiers transform *throw stats* (range, speed, accuracy) on a per-throw conditional basis. They live on dart components — when a component is equipped, its ThrowModifier (if any) is evaluated each throw against a game-state context (remaining score, current turn, current leg, darts this turn, etc.). Examples: "Nervous Sweater" gives +5 accuracy while score is above 50; "Ice Veins" gives +10 accuracy when checkout is possible. See `ThrowModifierGuide.txt` for full implementation spec.
 
+**Two-pass evaluation (added 2026-05-24).** Throw modifiers evaluate twice per throw — once at throw start (game-state-only context) and once at aim placement when `throw_mechanic` transitions to `VERTICAL_RELEASE`. The second pass overlays target-dependent bonuses on top of the first; its context dictionary additionally contains `declared_target: Dictionary` and `active_streak_modifiers: Array`. `ThrowModifier.get_active_bonuses()` accepts an optional `context: Dictionary = {}` so dynamic subclasses (Momentum Marksman) can compute bonuses from the placed target while static subclasses (Ice Veins, Nervous Sweater) ignore it. The aim-placed visual preview reflects second-pass bonuses automatically because the ghost ellipse recomputes each frame from the current `horizontal_accuracy` / `vertical_accuracy`.
+
+### ShopBias system (added 2026-05-24)
+
+`ShopBias` is a sibling Resource to `ThrowModifier`, attached to `DartComponent` via the optional `shop_bias` field. Where ThrowModifiers fire at throw time, ShopBiases fire at shop generation time. Subclasses override `get_weight_overrides() -> Dictionary` to return a `{ScriptType: float_multiplier}` map that `ModifierRegistry.generate_distinct_at_rarity` multiplies into pool weights inside its weighted-roll loop. `ColorShopBias` (used by the Color Connoisseur flight) maps the three color-flavored modifier scripts to an exported `color_weight_multiplier: float = 2.0`. The pattern is intentionally minimal — a future spot-spawning bias could extend the same base with a new override method, and the same sibling-Resource shape can host future hook types (e.g., the deferred `ScoringHook` for on-score reactive effects).
+
+### Ability Hook Extension Points (canonical pattern, formalized 2026-05-24)
+
+Each lifecycle moment a dart component might fire at gets its own sibling Resource on `DartComponent`. Don't bolt new hooks onto an existing base class; add a peer. Current siblings:
+
+- `throw_modifier: ThrowModifier` — throw-time conditional stat bonus.
+- `shop_bias: ShopBias` — shop-generation pool weight bias.
+- *(deferred)* `ScoringHook` — would fire inside `ScoringModifierManager.process_score` to unlock retrigger-style fliers and other on-score reactive effects.
+
+The rationale is the same as the scoring-vs-stat-upgrade split (see Architecture Rules): each hook has a different shape and a different lifecycle. Bundling them into one mega-class couples concerns that have nothing to do with each other and makes every new hook a shared-file edit. Sibling Resources let each hook evolve independently and let designers attach only the abilities a component needs.
+
+For throw-time effects that need *aim-time* context (e.g., target-aware accuracy bonuses), use the second-evaluation-pass pattern documented above rather than inventing a new hook. The pattern threads through `main.gd._on_aim_placed` and re-runs `evaluate_throw_modifiers` with extended context. Similarly, for "would this target continue any streak?" queries, use `ScoringModifier.would_continue_streak(target)` — each streak subclass implements its own check, non-streak modifiers default to false.
+
 ### Tutorial & Help System scripts (shipped 2026-05-22)
 
 - **`start_screen.gd`** (`StartScreen extends Control`) — Pre-game menu shown ahead of Assembly. Three primary buttons: Start Game, Play Tutorial, Rules of Darts. Also emits `stats_reference_pressed` for the deferred Stats Reference panel.
@@ -312,8 +334,11 @@ Key properties per component:
 - `unlock_condition: UnlockCondition` — optional resource describing the earn condition for locked components. Subclass list and recipes live in `DartComponentGuide.md` § 6 and `UnlockConditionRecipes.md`.
 - Six stat bonus floats: `h_range_bonus`, `v_range_bonus`, `h_speed_bonus`, `v_speed_bonus`, `h_accuracy_bonus`, `v_accuracy_bonus` (all default 0.0, only non-zero values shown in tooltips).
 - Optional `throw_modifier: ThrowModifier` — conditional ability evaluated each throw.
+- Optional `shop_bias: ShopBias` — shop-time pool weight bias (added 2026-05-24). Sibling to `throw_modifier`; evaluated by the shop when generating picks. Leave null for components with no shop influence. See the **Ability Hook Extension Points** section below for the broader pattern.
 
 Player-side unlock state lives in the `PlayerProgress` autoload, never in the resource itself — resources stay canonical, progression is per-save-file. `DartComponentRegistry._validate_components()` enforces ID non-emptiness, ID uniqueness across slots, and that no component is `default_unlocked = false` with a null `unlock_condition` (which would make it permanently unobtainable).
+
+**Flight is the run's archetype-defining slot** (formalized 2026-05-24). Barrel and shaft are stat-tuning slots — players combine many over a run. Flight is build-defining: exactly one equipped via `DartBuild.equipped_flight`, no swap mid-run. Each flight should justify itself as a "this run is about X" choice rather than a stat tweak, and new flights should carry tougher unlock conditions than barrels/shafts since they represent commitment. Defensive-only flight verbs need extra punch to feel worth a whole-run commitment.
 
 ### Balance System
 
@@ -670,3 +695,6 @@ Slides cover: board orientation, singles, doubles, triples, bullseye, x01 scorin
 - **`UnlockCondition` mirrors the `ThrowModifier` pattern: base Resource + virtual `is_satisfied()` + `.tres` instances.** Subclass per condition family (`LegWinHitCondition`, `LegStatCondition`, `CareerCountCondition`, `RunConstraintCondition`, `ShopAcquisitionCondition`, `SlotsFilledCondition`, `RelicCountCondition`). Considered a single enum-based condition with dispatch and rejected — loses type safety per condition family and crowds the inspector. Considered fully generic context-key threshold check, also rejected — no inspector guidance, no documentation of what a condition can express. Subclass-per-family hits the sweet spot for an inspector-driven workflow.
 - **Notifications queue; do not overwrite.** A single event (e.g., a clutch leg-win) can trip multiple unlock conditions at once. The `UnlockNotificationQueue` accepts `component_unlocked` signals into an internal queue and plays them sequentially with slide-in/display/slide-out tweens. Component data is read at display time, not signal time, so the toast can show the texture and component name without coupling the signal payload.
 - **Wedge Streak is always WHOLE_WEDGE — leniency dropped.** Any ring on the same numbered wedge counts (D20 → S20 → T20 streaks). Rarity drives scope only, like the other streak modifiers. Default `bonus_per_hit = 2` (vs 1 for color/parity) because consecutive-same-wedge throws are significantly harder than consecutive-color or consecutive-parity throws. All three streak types' `bonus_per_hit` are exported for inspector tuning.
+- **Flight is the run's singular archetype slot.** Exactly one equipped per run, no swap mid-run, intended as the build-defining commitment. Barrel and shaft are stat-tuning slots — players combine many; flight is closer to a class pick than a piece of equipment. Implications: flights should have substantial effects (not stat tweaks), should carry tougher unlock conditions than barrels/shafts, can fire at any lifecycle moment via the sibling-Resource ability hooks (throw-time, shop-time, future on-score), and defensive-only verbs need extra punch to feel worth a whole-run commitment. Without a build-defining slot, every run plays the same shape and "build variety" collapses to stat numbers.
+- **Ability hooks are sibling Resources on `DartComponent`, one per lifecycle moment.** Each new ability type — throw-time, shop-time, future on-score — gets its own optional `Resource` field on `DartComponent` (currently `throw_modifier` and `shop_bias`). Don't extend an existing base class to do unrelated things; create a peer. Lets each hook evolve independently and keeps the diff surface tight when adding a new ability type. The same rationale as the scoring-vs-stat-upgrade split: different lifecycle moments need different shapes. The second-evaluation-pass pattern (re-evaluating throw modifiers at aim placement so target-aware bonuses can compute from `declared_target` + `active_streak_modifiers`) is the canonical way to inject *aim-time* context into the throw-time hook without inventing a new one.
+- **Rethrow-style flight verbs are a design landmine.** Any "free retry on bad outcome" mechanic (rethrow on broken streak, charge-banked rethrows, etc.) creates an intentional-miss exploit: the player deliberately throws badly to bank the bonus, then uses the free retry on the original high-value target. The exploit can't be patched cleanly without hollowing out the verb — gating by intent inference is fragile, gating by charge caps just turns the exploit into a hoarded resource. The Momentum Marksman flight replaced an earlier "streak saver" rethrow design with a proactive scaling accuracy bonus that rewards keeping the streak alive in the first place. When new rethrow-style proposals surface, close the intentional-miss path before sketching anything else.
