@@ -80,11 +80,22 @@ func _build_mini_darts() -> void:
 		add_child(dart_row)
 		_dart_containers.append(dart_row)
 
+		_add_point_part(dart_row, mini_dart_height)
 		_add_mini_part(dart_row, _barrel_component, "Barrel")
 		_add_mini_part(dart_row, _shaft_component, "Shaft")
 		_add_mini_part(dart_row, _flight_component, "Flight")
 
 	_update_dart_modulate()
+
+
+func _add_point_part(container: HBoxContainer, height: float) -> void:
+	var tex_rect: TextureRect = TextureRect.new()
+	tex_rect.texture = preload("res://sprites/point.png")
+	tex_rect.custom_minimum_size = Vector2(height * 0.8, height)
+	tex_rect.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
+	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	container.add_child(tex_rect)
 
 
 func _add_mini_part(container: HBoxContainer, component: DartComponent, slot_name: String) -> void:
@@ -151,6 +162,7 @@ func set_shop_darts(total: int, remaining: int) -> void:
 		add_child(dart_row)
 		_dart_containers.append(dart_row)
 
+		_add_point_part(dart_row, dart_h)
 		_add_mini_part_sized(dart_row, _barrel_component, dart_h)
 		_add_mini_part_sized(dart_row, _shaft_component, dart_h)
 		_add_mini_part_sized(dart_row, _flight_component, dart_h)
