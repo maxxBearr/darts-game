@@ -64,6 +64,15 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 	return result
 
 
+func would_continue_streak(target: Dictionary) -> bool:
+	if _streak_count <= 0:
+		return false
+	if target.get("is_bull", false) or target.get("ring_name", "") == "Off Board":
+		return false
+	var wedge_index: int = target.get("wedge_index", -1)
+	return wedge_index >= 0 and wedge_index == _streak_wedge_index
+
+
 func _reset_streak() -> void:
 	_streak_wedge_index = -1
 	_streak_count = 0

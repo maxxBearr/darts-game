@@ -42,6 +42,10 @@ extends Resource
 ## components with no conditional ability.
 @export var throw_modifier: ThrowModifier
 
+## Optional shop-bias passive. Evaluated by the shop when generating picks.
+## Leave null for components with no shop influence.
+@export var shop_bias: ShopBias
+
 ## Dart marker outer ring color (used by flights to theme the on-board dart).
 @export var dart_outer_color: Color = Color(0.9, 0.85, 0.0)
 

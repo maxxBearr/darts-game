@@ -19,7 +19,7 @@ extends Control
 @export var accent_color: Color = Color(1.0, 0.85, 0.2)
 
 ## Size of the notification panel.
-@export var panel_size: Vector2 = Vector2(300.0, 80.0)
+@export var panel_size: Vector2 = Vector2(320.0, 80.0)
 
 var _queue: Array[DartComponent] = []
 var _showing: bool = false
@@ -33,6 +33,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	PlayerProgress.component_unlocked.connect(_on_component_unlocked)
 	_build_panel()
+
 
 
 func _build_panel() -> void:
@@ -54,20 +55,19 @@ func _build_panel() -> void:
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_panel.add_child(hbox)
 
-	_icon = TextureRect.new()
-	_icon.custom_minimum_size = Vector2(48.0, 48.0)
-	_icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-	_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_icon.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	hbox.add_child(_icon)
-
 	var vbox: VBoxContainer = VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 2)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(vbox)
 
+	_icon = TextureRect.new()
+	_icon.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
+	_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_icon.size_flags_horizontal = Control.SIZE_SHRINK_END
+	hbox.add_child(_icon)
+
 	_header_label = Label.new()
-	_header_label.text = "NEW COMPONENT UNLOCKED"
+	_header_label.text = "NEW COMPONENT\nUNLOCKED"
 	_header_label.add_theme_font_size_override("font_size", 11)
 	_header_label.add_theme_color_override("font_color", accent_color)
 	_header_label.clip_text = true

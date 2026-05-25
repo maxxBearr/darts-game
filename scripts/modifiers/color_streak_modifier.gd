@@ -61,6 +61,10 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 	return result
 
 
+func would_continue_streak(target: Dictionary) -> bool:
+	return _streak_count > 0 and target.get("segment_color", -1) == target_color
+
+
 func _reset_streak() -> void:
 	_streak_count = 0
 

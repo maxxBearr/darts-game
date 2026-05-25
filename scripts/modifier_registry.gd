@@ -100,7 +100,8 @@ static func generate_distinct(count: int) -> Array[ScoringModifier]:
 
 ## Generate N distinct modifiers all at a forced rarity tier.
 ## Used by the shop system where the hit spot's rarity determines the tier.
-static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity) -> Array[ScoringModifier]:
+## weight_overrides: optional {Script: float_multiplier} to bias pool weights.
+static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity, weight_overrides: Dictionary = {}) -> Array[ScoringModifier]:
 	var results: Array[ScoringModifier] = []
 
 	var available_indices: Array[int] = []
@@ -108,15 +109,17 @@ static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity)
 		available_indices.append(i)
 
 	for _n: int in range(mini(count, available_indices.size())):
-		var total_weight: int = 0
-		var weights: Array[int] = []
+		var total_weight: float = 0.0
+		var weights: Array[float] = []
 		for idx: int in available_indices:
-			var weight: int = MODIFIER_TYPES[idx].get_pool_weight()
-			weights.append(weight)
-			total_weight += weight
+			var base_weight: float = float(MODIFIER_TYPES[idx].get_pool_weight())
+			var multiplier: float = weight_overrides.get(MODIFIER_TYPES[idx], 1.0)
+			var w: float = base_weight * multiplier
+			weights.append(w)
+			total_weight += w
 
-		var roll: int = randi_range(1, total_weight)
-		var cumulative: int = 0
+		var roll: float = randf() * total_weight
+		var cumulative: float = 0.0
 		var chosen_local: int = 0
 		for i: int in range(weights.size()):
 			cumulative += weights[i]

@@ -188,7 +188,7 @@ func evaluate_throw_modifiers(context: Dictionary) -> Dictionary:
 
 	for modifier: ThrowModifier in _get_active_throw_modifiers():
 		if modifier.should_activate(context):
-			var bonuses: Dictionary = modifier.get_active_bonuses()
+			var bonuses: Dictionary = modifier.get_active_bonuses(context)
 			for key: String in bonuses.keys():
 				total_bonuses[key] += bonuses[key]
 			activated_names.append(modifier.modifier_name)

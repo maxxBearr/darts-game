@@ -52,8 +52,9 @@ func should_activate(context: Dictionary) -> bool:
 	return false
 
 
-## Returns a dictionary of all non-zero stat bonuses for tooltip display.
-func get_active_bonuses() -> Dictionary:
+## Returns a dictionary of all non-zero stat bonuses.
+## Subclasses may use context to compute dynamic values.
+func get_active_bonuses(_context: Dictionary = {}) -> Dictionary:
 	var bonuses: Dictionary = {}
 	if h_range_bonus != 0.0:
 		bonuses["horizontal_range"] = h_range_bonus

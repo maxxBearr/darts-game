@@ -67,6 +67,15 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 	return result
 
 
+func would_continue_streak(target: Dictionary) -> bool:
+	if _streak_count <= 0:
+		return false
+	var face_value: int = target.get("face_value", 0)
+	if face_value <= 0:
+		return false
+	return (face_value % 2 == 1) == target_is_odd
+
+
 func _reset_streak() -> void:
 	_streak_count = 0
 

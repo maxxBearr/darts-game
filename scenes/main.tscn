@@ -24,6 +24,8 @@
 [ext_resource type="Resource" uid="uid://28bbtty2f2jl" path="res://resources/dart_components/shafts/teal_tail.tres" id="19_y6deb"]
 [ext_resource type="Resource" uid="uid://xerli7coxhfg" path="res://resources/dart_components/shafts/purpler_piercer.tres" id="20_og1vs"]
 [ext_resource type="Resource" uid="uid://d3xexveghjpbw" path="res://resources/dart_components/shafts/red_rifle.tres" id="21_2wyq8"]
+[ext_resource type="Resource" uid="uid://c0j1ce2ptxu0n" path="res://resources/dart_components/flights/color_connoisseur.tres" id="24_2wyq8"]
+[ext_resource type="Resource" uid="uid://h4w8jjn7oqb4" path="res://resources/dart_components/flights/momentum_marksman.tres" id="25_vxglm"]
 
 [sub_resource type="LabelSettings" id="LabelSettings_info"]
 font_size = 22
@@ -52,6 +54,7 @@ outline_color = Color(0, 0, 0, 1)
 
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
+debug_start_with_modifier = true
 next_dart_delay = 0.05
 
 [node name="Dartboard" type="Node2D" parent="." unique_id=1463593562]
@@ -384,7 +387,7 @@ script = ExtResource("7_scoring_modifier_manager")
 script = ExtResource("8_registry")
 barrels = Array[ExtResource("10_dp3eg")]([ExtResource("11_standard_grip"), ExtResource("12_tungsten_heavy"), ExtResource("13_0ld40"), ExtResource("14_0ld40"), ExtResource("15_yc10j"), ExtResource("16_jscy8")])
 shafts = Array[ExtResource("10_dp3eg")]([ExtResource("14_medium_aluminum"), ExtResource("15_long_carbon"), ExtResource("19_y6deb"), ExtResource("20_og1vs"), ExtResource("21_2wyq8")])
-flights = Array[ExtResource("10_dp3eg")]([ExtResource("16_blue_whisp"), ExtResource("17_wide_sail")])
+flights = Array[ExtResource("10_dp3eg")]([ExtResource("16_blue_whisp"), ExtResource("17_wide_sail"), ExtResource("24_2wyq8"), ExtResource("25_vxglm")])
 
 [node name="DartBuild" type="Node" parent="." unique_id=955901845]
 script = ExtResource("9_dart_build")

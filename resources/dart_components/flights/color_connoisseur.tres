@@ -1,0 +1,36 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://c0j1ce2ptxu0n"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/shop_biases/color_bias.tres" id="2_shop_bias"]
+[ext_resource type="Texture2D" uid="uid://b0b4sy6gjnvo1" path="res://sprites/DartComponents/DartFlights/flight-4.png" id="3_qwknt"]
+[ext_resource type="Script" uid="uid://bh3hu5mfympcl" path="res://scripts/unlock_conditions/relic_count_condition.gd" id="4_d2gyx"]
+[ext_resource type="Script" uid="uid://droy11aamvg6x" path="res://scripts/throw_modifiers/throw_modifier.gd" id="4_f4sn2"]
+
+[sub_resource type="Resource" id="Resource_wdlno"]
+script = ExtResource("4_f4sn2")
+modifier_name = "Color Bonus Collector"
+description = "This flier is favors color modifiers, making them more likely to appear in choices pools"
+metadata/_custom_type_script = "uid://droy11aamvg6x"
+
+[sub_resource type="Resource" id="Resource_f4sn2"]
+script = ExtResource("4_d2gyx")
+description = "Aquire 6 or more bonus modifiers in a single run
+"
+metadata/_custom_type_script = "uid://bh3hu5mfympcl"
+
+[resource]
+script = ExtResource("1")
+id = &"flight_color_connoisseur"
+component_name = "Color Connoisseur"
+description = "This flier is favors color modifiers, making them more likely to appear in choices pools"
+component_type = 2
+default_unlocked = false
+unlock_condition = SubResource("Resource_f4sn2")
+texture = ExtResource("3_qwknt")
+h_range_bonus = 2.0
+h_speed_bonus = 2.0
+v_accuracy_bonus = 2.0
+throw_modifier = SubResource("Resource_wdlno")
+shop_bias = ExtResource("2_shop_bias")
+dart_outer_color = Color(0.6, 0.2, 0.8, 1)
+dart_inner_color = Color(0.24169257, 0.00035903134, 0.3508198, 1)

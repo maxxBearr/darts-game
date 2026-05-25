@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="MomentumMarksmanModifier" format=3]
+
+[ext_resource type="Script" path="res://scripts/throw_modifiers/momentum_marksman_modifier.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+accuracy_per_streak = 2.0
+modifier_name = "Momentum Marksman"
+description = "Accuracy scales with streak count when aiming at streak-continuing targets"
+active_color = Color(1.0, 0.85, 0.2, 1)

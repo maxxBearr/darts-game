@@ -67,6 +67,12 @@ func get_streak_display() -> String:
 	return ""
 
 
+## Return true if hitting target would continue this modifier's active streak.
+## Override in streak modifier subclasses.
+func would_continue_streak(_target: Dictionary) -> bool:
+	return false
+
+
 ## Snapshot internal streak state for speculative simulation.
 ## Override in streak modifier subclasses. Returns empty dict for non-streak modifiers.
 func save_streak_state() -> Dictionary:

@@ -888,12 +888,16 @@ func _on_shop_throw_completed(hit_position: Vector2) -> void:
 func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 	var picks: Array[Dictionary] = []
 
+	var weight_overrides: Dictionary = {}
+	if dart_build.equipped_flight != null and dart_build.equipped_flight.shop_bias != null:
+		weight_overrides = dart_build.equipped_flight.shop_bias.get_weight_overrides()
+
 	for _i: int in range(2):
 		# 50/50 chance of accuracy upgrade vs modifier
 		if randi_range(0, 1) == 0:
 			picks.append(_generate_shop_accuracy_pick(rarity))
 		else:
-			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity)
+			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity, weight_overrides)
 			if mods.size() > 0:
 				picks.append({"type": "modifier", "data": mods[0]})
 			else:
@@ -1362,6 +1366,31 @@ func _revert_temp_bonuses() -> void:
 	throw_mechanic.gaussian_spread = _original_gaussian_spread
 
 
+## Second-pass throw modifier evaluation after the player places the aim ellipse.
+## Reverts the first-pass bonuses, rebuilds context with declared_target and
+## active_streak_modifiers, then re-evaluates and reapplies.
+func _evaluate_aim_placed_bonuses(declared_target: Dictionary) -> void:
+	_revert_temp_bonuses()
+
+	var context: Dictionary = {
+		"remaining_score": x01_game.remaining_score,
+		"target_score": x01_game.target_score,
+		"darts_this_turn": x01_game.darts_this_turn,
+		"current_turn": x01_game.current_turn,
+		"current_leg": x01_game.current_leg,
+		"max_turns": x01_game.max_turns,
+		"declared_target": declared_target,
+		"active_streak_modifiers": scoring_modifier_manager.get_active_streak_modifiers(),
+	}
+
+	var result: Dictionary = dart_build.evaluate_throw_modifiers(context)
+	_temp_throw_bonuses = result["bonuses"]
+	_active_throw_modifier_names = result["activated"]
+	_apply_temp_bonuses()
+	_update_stats_display()
+	hud.update_modifier_status(_active_throw_modifier_names)
+
+
 ## Save throw_mechanic stats at the start of a run for later restoration.
 func _snapshot_base_stats() -> void:
 	_base_horizontal_range = throw_mechanic.horizontal_range
@@ -1631,6 +1660,9 @@ func _on_throw_state_changed(new_state: int) -> void:
 				dartboard.set_declared_target(target)
 			else:
 				dartboard.clear_declared_target()
+			# Second-pass throw modifier evaluation with target context
+			if not _in_shop and not _in_tutorial:
+				_evaluate_aim_placed_bonuses(target)
 		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
 			_disable_hover()
 			hud.show_instruction("Click or Space to lock horizontal")

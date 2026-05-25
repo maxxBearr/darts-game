@@ -1,0 +1,36 @@
+[gd_resource type="Resource" script_class="DartComponent" format=3 uid="uid://h4w8jjn7oqb4"]
+
+[ext_resource type="Script" uid="uid://bqjgrqhnbb5uv" path="res://scripts/dart_components/dart_component.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://bovrnpwcj427x" path="res://sprites/DartComponents/DartFlights/flight-3.png" id="2_aml5f"]
+[ext_resource type="Script" uid="uid://b6kpdgouvo2uc" path="res://scripts/throw_modifiers/momentum_marksman_modifier.gd" id="3_bp6ws"]
+[ext_resource type="Script" uid="uid://bpt06ne1ux73h" path="res://scripts/unlock_conditions/leg_win_hit_condition.gd" id="4_fl2n7"]
+
+[sub_resource type="Resource" id="Resource_jvwxg"]
+script = ExtResource("3_bp6ws")
+modifier_name = "Streak Sniper"
+description = "This flier catches fire on a streak, gaining increasingly better accuracy as streaks get longer. "
+
+[sub_resource type="Resource" id="Resource_ht8q4"]
+script = ExtResource("4_fl2n7")
+required_ring = "Double"
+min_winning_dart_score = 101
+description = "Win on a double scoring higher than 100"
+metadata/_custom_type_script = "uid://bpt06ne1ux73h"
+
+[resource]
+script = ExtResource("1")
+id = &"momentum_marksman"
+component_name = "Momentum Marksman"
+description = "This flier catches fire on a streak, gaining increasingly better accuracy as streaks get longer. "
+component_type = 2
+weight = 0.08000000000000007
+default_unlocked = false
+unlock_condition = SubResource("Resource_ht8q4")
+texture = ExtResource("2_aml5f")
+h_range_bonus = 1.0
+v_range_bonus = 1.0
+h_accuracy_bonus = 2.0
+v_accuracy_bonus = 2.0
+throw_modifier = SubResource("Resource_jvwxg")
+dart_outer_color = Color(0, 0, 0, 1)
+dart_inner_color = Color(0.13500348, 0.66943026, 0.6162106, 1)
