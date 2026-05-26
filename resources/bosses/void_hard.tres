@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/bosses/void_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"void_hard"
+display_name = "The Void"
+description = "18 random wedges become voids each turn."
+boss_script = ExtResource("2")
+tuning = {"void_count": 18}
+difficulty_tier = &"hard"

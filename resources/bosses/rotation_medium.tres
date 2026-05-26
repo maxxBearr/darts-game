@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/bosses/rotation_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"rotation_medium"
+display_name = "Rotation"
+description = "The board rotates 45-90° each turn."
+boss_script = ExtResource("2")
+tuning = {"min_rotation_deg": 45.0, "max_rotation_deg": 90.0}
+difficulty_tier = &"medium"

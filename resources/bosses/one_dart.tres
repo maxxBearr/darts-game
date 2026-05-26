@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/bosses/two_darts_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"one_dart"
+display_name = "One Dart"
+description = "You throw only 1 dart per turn."
+boss_script = ExtResource("2")
+tuning = {"dart_count": 1}
+difficulty_tier = &"hard"

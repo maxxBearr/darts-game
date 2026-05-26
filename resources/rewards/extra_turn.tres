@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="ExtraTurnReward" format=3]
+
+[ext_resource type="Script" path="res://scripts/rewards/extra_turn_reward.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+reward_id = &"extra_turn"
+display_name = "Extra Turn"
+description = "+1 turn per leg for the rest of the run."

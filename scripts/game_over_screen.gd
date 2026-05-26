@@ -111,8 +111,24 @@ func _build_ui() -> void:
 
 
 func show_results(legs_won: int, total_darts: int) -> void:
+	_title_label.text = title_text
+	_title_label.add_theme_color_override("font_color", title_color)
 	_legs_won_label.text = "Legs Won: %d" % legs_won
 	_darts_used_label.text = "Darts Used: %d" % total_darts
+	visible = true
+
+
+## Color of the victory title text.
+@export var victory_title_color: Color = Color(1.0, 0.85, 0.2)
+
+
+## Show a run victory screen with level name and dart count.
+func show_victory(level_name: String, total_darts: int, is_new_best: bool) -> void:
+	_title_label.text = "RUN WON!"
+	_title_label.add_theme_color_override("font_color", victory_title_color)
+	_legs_won_label.text = "%s Cleared!" % level_name
+	var best_text: String = " (New Best!)" if is_new_best else ""
+	_darts_used_label.text = "Darts Used: %d%s" % [total_darts, best_text]
 	visible = true
 
 

@@ -14,6 +14,26 @@ const _ColorStreak = preload("res://scripts/modifiers/color_streak_modifier.gd")
 const _EvenStreak = preload("res://scripts/modifiers/even_streak_modifier.gd")
 const _OddStreak = preload("res://scripts/modifiers/odd_streak_modifier.gd")
 
+## Rarity weight shift applied to all modifier rolls during the current run.
+## Set from main.gd based on LevelDefinition.rarity_weight_shift.
+static var current_rarity_shift: float = 0.0
+
+## Apply the current rarity shift to a [common, uncommon, rare] weight array.
+## Positive shift moves weight from common to rare; negative does the reverse.
+static func _shifted_weights(weights: Array[int]) -> Array[int]:
+	if current_rarity_shift == 0.0:
+		return weights
+	var shift_amount: int = int(absf(current_rarity_shift) * float(weights[0] + weights[1] + weights[2]))
+	var result: Array[int] = [weights[0], weights[1], weights[2]]
+	if current_rarity_shift > 0.0:
+		result[0] = maxi(result[0] - shift_amount, 1)
+		result[2] = result[2] + shift_amount
+	else:
+		result[2] = maxi(result[2] - shift_amount, 1)
+		result[0] = result[0] + shift_amount
+	return result
+
+
 const MODIFIER_TYPES: Array = [
 	_ColorBonus,
 	_WedgeValue,
@@ -46,7 +66,7 @@ static func generate_random() -> ScoringModifier:
 			chosen_type = MODIFIER_TYPES[i]
 			break
 
-	var rarity_weights: Array[int] = chosen_type.get_rarity_weights()
+	var rarity_weights: Array[int] = _shifted_weights(chosen_type.get_rarity_weights())
 	var rarity: ScoringEnums.Rarity = ScoringModifier.roll_rarity(rarity_weights)
 	return chosen_type.generate(rarity)
 
@@ -54,7 +74,7 @@ static func generate_random() -> ScoringModifier:
 ## Generate a random modifier of a specific type by index.
 static func generate_of_type(type_index: int) -> ScoringModifier:
 	var chosen_type = MODIFIER_TYPES[clampi(type_index, 0, MODIFIER_TYPES.size() - 1)]
-	var rarity_weights: Array[int] = chosen_type.get_rarity_weights()
+	var rarity_weights: Array[int] = _shifted_weights(chosen_type.get_rarity_weights())
 	var rarity: ScoringEnums.Rarity = ScoringModifier.roll_rarity(rarity_weights)
 	return chosen_type.generate(rarity)
 

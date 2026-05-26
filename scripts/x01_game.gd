@@ -12,6 +12,15 @@ extends Node
 ## How much the target increases each leg after a win.
 @export var target_increment: int = 100
 
+## Number of darts the player throws per turn. Default 3; bosses can modify.
+var darts_per_turn: int = 3
+
+## When true, triples (and Triple Bull) count as valid checkout rings.
+var allow_triple_checkout: bool = false
+
+## When true, any dart at exactly 0 wins (any ring), but busts end the run.
+var glass_cannon_active: bool = false
+
 # Game state
 var current_leg: int = 1
 var target_score: int = 101
@@ -64,12 +73,14 @@ func process_throw(result: Dictionary) -> Dictionary:
 	var points: int = result["total_score"]
 	var new_remaining: int = remaining_score - points
 
-	# Determine if this dart landed on a double
+	# Determine if this dart landed on a valid finishing ring
 	var ring_name: String = result["ring_name"]
 	var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
+	var is_triple: bool = ring_name == "Triple"
+	var is_valid_finish: bool = is_double or (allow_triple_checkout and is_triple) or glass_cannon_active
 
-	# Check win condition: exactly 0 remaining AND finished on a double
-	var is_leg_won: bool = new_remaining == 0 and is_double
+	# Check win condition: exactly 0 remaining AND valid finish ring
+	var is_leg_won: bool = new_remaining == 0 and is_valid_finish
 
 	# Check bust conditions
 	var is_bust: bool = false
@@ -79,10 +90,10 @@ func process_throw(result: Dictionary) -> Dictionary:
 		if new_remaining < 0:
 			is_bust = true
 			bust_reason = "Score would go below zero"
-		elif new_remaining == 1:
+		elif new_remaining == 1 and not glass_cannon_active:
 			is_bust = true
 			bust_reason = "Can't finish on 1"
-		elif new_remaining == 0 and not is_double:
+		elif new_remaining == 0 and not is_valid_finish:
 			is_bust = true
 			bust_reason = "Must finish on a double"
 
@@ -95,7 +106,7 @@ func process_throw(result: Dictionary) -> Dictionary:
 		remaining_score = new_remaining
 
 	# Calculate darts remaining this turn
-	var darts_remaining: int = 3 - darts_this_turn
+	var darts_remaining: int = darts_per_turn - darts_this_turn
 	# Bust or win ends the turn immediately regardless of darts left
 	if is_bust:
 		# Remaining darts in the busted turn are wasted
@@ -105,8 +116,8 @@ func process_throw(result: Dictionary) -> Dictionary:
 	# Determine if the turn is over
 	var is_turn_over: bool = darts_remaining <= 0 or is_bust or is_leg_won
 
-	# Determine if the entire run is over (out of turns without winning)
-	var is_game_over: bool = is_turn_over and current_turn >= max_turns and not is_leg_won
+	# Determine if the entire run is over (out of turns without winning, or Glass Cannon bust)
+	var is_game_over: bool = (is_turn_over and current_turn >= max_turns and not is_leg_won) or (is_bust and glass_cannon_active)
 
 	return {
 		"points_scored": points,
@@ -126,7 +137,7 @@ func process_throw(result: Dictionary) -> Dictionary:
 
 ## How many darts the player saved this leg (total budget minus consumed).
 func get_saved_darts() -> int:
-	var total: int = max_turns * 3
+	var total: int = max_turns * darts_per_turn
 	return maxi(total - darts_used_in_leg, 0)
 
 

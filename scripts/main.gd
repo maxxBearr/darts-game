@@ -12,6 +12,10 @@ extends Node2D
 ## When enabled, resets the first-run tutorial flag at startup for testing.
 @export var debug_reset_tutorial_seen: bool = false
 
+## When enabled, the run starts at the boss leg (target = max_score_target)
+## so you face a boss on the first leg. Useful for testing boss encounters.
+@export var debug_boss_immediately: bool = false
+
 ## Seconds to wait after a dart lands before auto-starting the next throw.
 ## Only applies within a turn — turn boundaries still require a button press.
 @export var next_dart_delay: float = 0.8
@@ -34,6 +38,11 @@ var tutorial_callout: TutorialCallout
 var tutorial_controller: TutorialController
 var ghost_dart_layer: GhostDartLayer
 var game_over_screen: GameOverScreen
+var level_select: LevelSelectScreen
+var boss_manager: BossManager
+
+## The level definition for the current run. Null during tutorial/legacy mode.
+var _current_level: LevelDefinition = null
 
 ## Whether the game is currently in tutorial sandbox mode.
 var _in_tutorial: bool = false
@@ -134,11 +143,20 @@ var _base_accuracy_skew_v: float = 0.0
 # The 3 generated upgrade choices for the current leg-complete screen
 var _current_upgrades: Array[Dictionary] = []
 
-## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker"
+## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker", "boss_reward_pick"
 var _leg_phase: String = ""
 
 ## The 3 generated modifier choices for the modifier pick phase.
 var _current_modifiers: Array[ScoringModifier] = []
+
+## Boss reward choices for the current reward pick phase.
+var _current_rewards: Array[RuleModifierReward] = []
+
+## All rewards picked during this run. Used for exclusion and reset.
+var _active_rewards: Array[RuleModifierReward] = []
+
+## Whether the current boss leg was a boss (for triggering reward flow after upgrades).
+var _boss_leg_just_cleared: bool = false
 
 ## The modifier awaiting wedge picker configuration.
 var _pending_modifier: ScoringModifier = null
@@ -194,6 +212,9 @@ var _shop_pick_items: Array[Dictionary] = []
 ## Extra lit spots beyond the dart count (breathing room for target choice).
 @export var shop_spot_slack: int = 3
 
+## Number of pick choices shown when a shop spot is hit. Default 2.
+var shop_pick_count: int = 2
+
 ## Duration of the zero-dart shop acknowledgment in seconds.
 @export var shop_zero_dart_duration: float = 2.5
 
@@ -215,6 +236,7 @@ func _ready() -> void:
 	hud.new_run_pressed.connect(_on_new_run)
 	hud.upgrade_selected.connect(_on_upgrade_selected)
 	hud.modifier_selected.connect(_on_modifier_selected)
+	hud.reward_selected.connect(_on_reward_selected)
 	hud.modifier_toggled.connect(_on_modifier_toggled)
 
 	# Connect assembly screen
@@ -384,9 +406,9 @@ func _start_new_throw() -> void:
 	hud.update_modifier_status(_active_throw_modifier_names)
 
 	# Update dart counter to show which dart we're on
-	var darts_remaining: int = 3 - x01_game.darts_this_turn
+	var darts_remaining: int = x01_game.darts_per_turn - x01_game.darts_this_turn
 	var is_last_turn: bool = x01_game.current_turn == x01_game.max_turns
-	hud.update_darts(darts_remaining, is_last_turn)
+	hud.update_darts(darts_remaining, is_last_turn, x01_game.darts_per_turn)
 	hud.show_instruction("Move to aim, click to place zone")
 	throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
 
@@ -419,7 +441,14 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	result = scoring_modifier_manager.process_score(result)
 
 	# Place a dart marker at the hit position
-	_place_dart(hit_position)
+	var dart_node: Node2D = _place_dart(hit_position)
+
+	# If the dart hit a voided wedge, tween it away into the void
+	var hit_wedge: int = result.get("wedge_index", -1)
+	if hit_wedge >= 0 and dartboard._boss_void_wedges.has(hit_wedge):
+		var void_tween: Tween = create_tween()
+		void_tween.tween_property(dart_node, "scale", Vector2.ZERO, 0.7).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+
 	AuidoManager.play_dart_thunk()
 
 	# Floating score number
@@ -457,11 +486,14 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	hud.update_turn_score(_turn_score)
 
 	# Update remaining score display
-	hud.update_remaining(response["remaining_score"])
+	hud.update_remaining(response["remaining_score"], x01_game.glass_cannon_active)
 
 	# Branch on what happened
 	if response["is_bust"]:
-		hud.show_bust(response["bust_reason"])
+		if x01_game.glass_cannon_active:
+			hud.show_bust("GLASS CANNON — RUN OVER")
+		else:
+			hud.show_bust(response["bust_reason"])
 		hud.hide_checkout_helper()
 		if response["is_game_over"]:
 			_run_total_darts += x01_game.darts_used_in_leg
@@ -508,7 +540,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			_start_next_dart_timer()
 
 	# Update dart counter
-	hud.update_darts(response["darts_remaining"], x01_game.current_turn == x01_game.max_turns)
+	hud.update_darts(response["darts_remaining"], x01_game.current_turn == x01_game.max_turns, x01_game.darts_per_turn)
 
 	# Re-enable hover so the player can inspect the board while deciding
 	_enable_hover()
@@ -536,7 +568,7 @@ func _notify_leg_won(result: Dictionary, response: Dictionary) -> void:
 			modifier_cats.append("streak")
 
 	var was_final: bool = (x01_game.current_turn == x01_game.max_turns
-		and x01_game.darts_this_turn == 3)
+		and x01_game.darts_this_turn == x01_game.darts_per_turn)
 
 	var leg_context: Dictionary = {
 		"target_score": response["target_score"],
@@ -549,7 +581,7 @@ func _notify_leg_won(result: Dictionary, response: Dictionary) -> void:
 		"checkout_total": _turn_score,
 		# Strict reading: all three darts of the winning turn must have scored.
 		# Excludes 1-dart and 2-dart finishes even if every dart thrown scored.
-		"winning_turn_all_darts_scored": _turn_darts_scored == 3 and x01_game.darts_this_turn == 3,
+		"winning_turn_all_darts_scored": _turn_darts_scored == x01_game.darts_per_turn and x01_game.darts_this_turn == x01_game.darts_per_turn,
 	}
 	UnlockManager.on_leg_won(leg_context)
 
@@ -562,8 +594,28 @@ func _show_leg_won_banner(response: Dictionary) -> void:
 
 ## Show the leg-complete upgrade UI or shop entry. Called after the score animation finishes.
 func _show_leg_upgrades(response: Dictionary) -> void:
+	# End the boss leg if one was active (clean up mutations before upgrades/victory)
+	_boss_leg_just_cleared = false
+	if boss_manager.is_boss_active():
+		boss_manager.end_boss_leg(_build_game_state(), true)
+		_sync_board_and_solver()
+		_boss_leg_just_cleared = true
+		hud.hide_boss_status()
+
+	# Check for run victory — player cleared the final leg of this level
+	if _current_level != null and response["target_score"] >= _current_level.max_score_target:
+		_show_run_won()
+		return
+
 	# Accumulate saved darts for the shop window
 	_saved_darts_accumulator += x01_game.get_saved_darts()
+
+	# Boss reward pick — show 3 rewards before normal upgrades/shop
+	if _boss_leg_just_cleared:
+		_leg_phase = "boss_reward_pick"
+		_current_rewards = RewardRegistry.generate_picks(3, _build_run_state())
+		hud.show_reward_choices(_current_rewards)
+		return
 
 	# Check if this is a shop leg (every Nth leg)
 	if response["current_leg"] % shop_cadence == 0:
@@ -628,6 +680,10 @@ func _on_next_turn() -> void:
 	_clear_darts()
 	x01_game.end_turn()
 	x01_game.start_turn()
+	if boss_manager.is_boss_active():
+		boss_manager.on_turn_start(_build_game_state())
+		_sync_board_and_solver()
+		_update_boss_status()
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	hud.update_streak_section(
 		scoring_modifier_manager.get_active_streak_modifiers(),
@@ -669,15 +725,90 @@ func _on_next_leg() -> void:
 		scoring_modifier_manager.get_active_streak_modifiers(),
 		scoring_modifier_manager.effective_wedge_values
 	)
-	_start_new_throw()
+
+	print("DEBUG: _on_next_leg — leg %d, is_boss_leg = %s" % [x01_game.current_leg, boss_manager.is_boss_leg(x01_game.current_leg)])
+	if boss_manager.is_boss_leg(x01_game.current_leg):
+		var game_state: Dictionary = _build_game_state()
+		var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
+		print("DEBUG: Boss started: %s" % boss_def.display_name)
+		boss_manager.on_turn_start(game_state)
+		_sync_board_and_solver()
+		_update_boss_status()
+		var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
+		announce_tween.tween_callback(_start_new_throw)
+	else:
+		_start_new_throw()
+
 	_update_checkout_highlights()
 	_update_checkout_helper()
 
 
 ## Show the game over overlay with run stats.
 func _show_game_over(current_leg: int) -> void:
+	if boss_manager.is_boss_active():
+		boss_manager.end_boss_leg(_build_game_state(), false)
+		_sync_board_and_solver()
+		hud.hide_boss_status()
 	_hide_gameplay_hud()
 	game_over_screen.show_results(current_leg - 1, _run_total_darts)
+
+
+## Show the run victory screen after clearing the final leg of a level.
+func _show_run_won() -> void:
+	_run_over = true
+	_hide_gameplay_hud()
+	print("DEBUG _show_run_won: resource_path = '%s', run_total_darts = %d" % [_current_level.resource_path, _run_total_darts])
+	var is_new_best: bool = not PlayerProgress.is_level_cleared(_current_level.resource_path) or _run_total_darts < PlayerProgress.get_fewest_darts(_current_level.resource_path)
+	PlayerProgress.record_level_clear(_current_level, _run_total_darts)
+	print("DEBUG: cleared_levels after record = %s" % str(PlayerProgress.cleared_levels))
+	game_over_screen.show_victory(_current_level.display_name, _run_total_darts, is_new_best)
+
+
+## Update the persistent boss status display and background tint on the HUD.
+func _update_boss_status() -> void:
+	if boss_manager.is_boss_active():
+		var def: BossDefinition = boss_manager.get_active_boss_definition()
+		var boss: Boss = boss_manager.get_active_boss()
+		hud.show_boss_status(def.display_name, boss.get_status_text(), def.status_color)
+		hud.show_boss_background_tint(def.background_tint)
+	else:
+		hud.hide_boss_status()
+
+
+## Build the game_state dictionary passed to boss lifecycle hooks.
+func _build_game_state() -> Dictionary:
+	return {
+		"x01_game": x01_game,
+		"scoring_modifier_manager": scoring_modifier_manager,
+		"dartboard": dartboard,
+		"hud": hud,
+	}
+
+
+## Build the run_state dictionary passed to reward apply/is_applicable.
+func _build_run_state() -> Dictionary:
+	return {
+		"x01_game": x01_game,
+		"scoring_modifier_manager": scoring_modifier_manager,
+		"main": self,
+		"active_rewards": _active_rewards,
+	}
+
+
+## Called when the player picks a boss reward.
+func _on_reward_selected(index: int) -> void:
+	if index < 0 or index >= _current_rewards.size():
+		return
+	var reward: RuleModifierReward = _current_rewards[index]
+	reward.apply(_build_run_state())
+	_active_rewards.append(reward)
+	_current_rewards.clear()
+	_boss_leg_just_cleared = false
+
+	# After reward pick, enter free shop
+	_leg_phase = "shop_enter"
+	var saved: int = _saved_darts_accumulator
+	hud.show_shop_entry(x01_game.current_leg, x01_game.target_score, x01_game.current_turn, saved)
 
 
 ## Reset all run state (shared by all post-game-over paths).
@@ -690,6 +821,22 @@ func _reset_run_state() -> void:
 	_in_shop = false
 	_saved_darts_accumulator = 0
 	_start_modifier_pending = false
+	_current_level = null
+	_active_rewards.clear()
+	_current_rewards.clear()
+	_boss_leg_just_cleared = false
+	x01_game.darts_per_turn = 3
+	x01_game.max_turns = 5
+	x01_game.allow_triple_checkout = false
+	x01_game.glass_cannon_active = false
+	scoring_modifier_manager.max_streak_slots = 3
+	scoring_modifier_manager.allow_triple_checkout = false
+	scoring_modifier_manager.glass_cannon_active = false
+	shop_cadence = 3
+	shop_pick_count = 2
+	ModifierRegistry.current_rarity_shift = 0.0
+	boss_manager.configure_for_level(null)
+	dartboard.clear_boss_overlays()
 	hud.update_turn_score(0)
 	hud.hide_picker()
 	hud.hide_target_tooltip()
@@ -1031,7 +1178,22 @@ func _end_shop(response: Dictionary) -> void:
 		_update_checkout_highlights()
 	)
 	tween.tween_property(dartboard, "position", center, shop_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	tween.tween_callback(_start_new_throw)
+	tween.tween_callback(_on_post_shop_leg_start)
+
+
+## Called after the shop exit transition to start the next leg (possibly a boss leg).
+func _on_post_shop_leg_start() -> void:
+	if boss_manager.is_boss_leg(x01_game.current_leg):
+		var game_state: Dictionary = _build_game_state()
+		var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
+		boss_manager.on_turn_start(game_state)
+		_sync_board_and_solver()
+		_update_boss_status()
+		_update_checkout_highlights()
+		var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
+		announce_tween.tween_callback(_start_new_throw)
+	else:
+		_start_new_throw()
 
 
 # ── Tutorial system ───────────────────────────────────────────────────────
@@ -1062,6 +1224,24 @@ func _setup_tutorial_system() -> void:
 	start_screen.rules_pressed.connect(_on_show_rules)
 	start_screen.visible = false
 	hud.add_child(start_screen)
+
+	# Level select screen — primary entry point, replaces start screen
+	level_select = LevelSelectScreen.new()
+	level_select.name = "LevelSelectScreen"
+	level_select.levels = [
+		preload("res://resources/levels/level_501.tres"),
+		preload("res://resources/levels/level_1001.tres"),
+		preload("res://resources/levels/level_1501.tres"),
+	]
+	level_select.level_selected.connect(_on_level_selected)
+	level_select.back_pressed.connect(_on_level_select_back)
+	level_select.visible = false
+	hud.add_child(level_select)
+
+	# Boss manager — handles boss scheduling and lifecycle
+	boss_manager = BossManager.new()
+	boss_manager.name = "BossManager"
+	add_child(boss_manager)
 
 	# Welcome modal — lives in the HUD canvas layer
 	welcome_modal = WelcomeModal.new()
@@ -1105,9 +1285,19 @@ func _setup_tutorial_system() -> void:
 ## Show the start screen, hiding other overlays.
 func _show_start_screen() -> void:
 	assembly_screen.visible = false
+	level_select.visible = false
 	start_screen.visible = true
 	welcome_modal.visible = false
 	rules_slideshow.visible = false
+	_hide_gameplay_hud()
+
+
+## Show the level select screen between start screen and assembly.
+func _show_level_select() -> void:
+	start_screen.visible = false
+	assembly_screen.visible = false
+	level_select.refresh()
+	level_select.visible = true
 	_hide_gameplay_hud()
 
 
@@ -1126,6 +1316,7 @@ func _hide_gameplay_hud() -> void:
 	hud.dart_indicator.visible = false
 	if hud._streak_section != null:
 		hud._streak_section.visible = false
+	hud.hide_boss_status()
 	hud.hide_all_buttons()
 	hud.upgrade_container.visible = false
 	hud.hide_checkout_helper()
@@ -1147,13 +1338,26 @@ func _show_gameplay_hud() -> void:
 
 ## Called when "Start Game" is pressed on the start screen.
 func _on_start_game() -> void:
-	start_screen.visible = false
+	_show_level_select()
+
+
+## Called when a level card is pressed on the level select screen.
+func _on_level_selected(level_def: LevelDefinition) -> void:
+	_current_level = level_def
+	level_select.visible = false
 	_show_assembly()
+
+
+## Called when the back button is pressed on the level select screen.
+func _on_level_select_back() -> void:
+	level_select.visible = false
+	_show_start_screen()
 
 
 ## Called when "Play Tutorial" is pressed from start screen or assembly.
 func _on_play_tutorial(source: String) -> void:
 	start_screen.visible = false
+	level_select.visible = false
 	assembly_screen.visible = false
 	welcome_modal.visible = false
 	_in_tutorial = true
@@ -1221,6 +1425,7 @@ func _hide_exit_tutorial_button() -> void:
 ## Show the dart assembly screen before starting a run.
 func _show_assembly() -> void:
 	start_screen.visible = false
+	level_select.visible = false
 	_show_gameplay_hud()
 	assembly_screen.show_assembly(_raw_stats)
 
@@ -1248,13 +1453,44 @@ func _on_run_confirmed() -> void:
 	hud.setup_modifier_status(modifier_info)
 
 	_run_total_darts = 0
+	x01_game.darts_per_turn = 3
+	x01_game.allow_triple_checkout = false
+	x01_game.glass_cannon_active = false
+	scoring_modifier_manager.allow_triple_checkout = false
+	scoring_modifier_manager.glass_cannon_active = false
+	ModifierRegistry.current_rarity_shift = _current_level.rarity_weight_shift if _current_level != null else 0.0
 	UnlockManager.bind_registry(dart_component_registry)
 	UnlockManager.on_run_started()
+	if _current_level != null:
+		boss_manager.configure_for_level(_current_level)
+		print("DEBUG: Level '%s' boss_pool size = %d, boss_count = %d" % [_current_level.display_name, _current_level.boss_pool.size(), _current_level.boss_count])
+		for i: int in range(_current_level.boss_pool.size()):
+			var r: Resource = _current_level.boss_pool[i]
+			print("  DEBUG: boss_pool[%d] = %s (type: %s)" % [i, r, r.get_class() if r != null else "null"])
 	x01_game.start_run()
+
+	# Debug: skip to the boss leg by jumping to the final leg's target
+	if debug_boss_immediately and _current_level != null:
+		var final_target: int = _current_level.max_score_target
+		x01_game.current_leg = (final_target - x01_game.starting_target) / x01_game.target_increment + 1
+		x01_game.target_score = final_target
+		x01_game.remaining_score = final_target
+		x01_game.score_at_turn_start = final_target
+
 	_update_all_hud()
 	_update_checkout_highlights()
 
-	if debug_start_with_modifier:
+	# Start boss if the initial leg is a boss leg (debug skip or future multi-boss levels)
+	if boss_manager.is_boss_leg(x01_game.current_leg):
+		var game_state: Dictionary = _build_game_state()
+		var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
+		boss_manager.on_turn_start(game_state)
+		_sync_board_and_solver()
+		_update_boss_status()
+		_update_all_hud()
+		var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
+		announce_tween.tween_callback(_start_new_throw)
+	elif debug_start_with_modifier:
 		_start_modifier_pending = true
 		_leg_phase = "modifier_pick"
 		_current_modifiers = []
@@ -1516,10 +1752,10 @@ func _apply_upgrade(upgrade: Dictionary) -> void:
 
 ## Update all HUD elements to reflect current game state.
 func _update_all_hud() -> void:
-	hud.update_leg(x01_game.current_leg, x01_game.target_score)
+	hud.update_leg(x01_game.current_leg, x01_game.target_score, boss_manager.is_boss_active())
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
-	hud.update_remaining(x01_game.remaining_score)
-	hud.update_darts(3 - x01_game.darts_this_turn, x01_game.current_turn == x01_game.max_turns)
+	hud.update_remaining(x01_game.remaining_score, x01_game.glass_cannon_active)
+	hud.update_darts(x01_game.darts_per_turn - x01_game.darts_this_turn, x01_game.current_turn == x01_game.max_turns, x01_game.darts_per_turn)
 	_update_stats_display()
 
 
@@ -1564,7 +1800,7 @@ func _update_checkout_helper() -> void:
 		return
 
 	var remaining: int = x01_game.remaining_score
-	var darts_left: int = 3 - x01_game.darts_this_turn
+	var darts_left: int = x01_game.darts_per_turn - x01_game.darts_this_turn
 
 	# Check if the player has any unlocked (toggleable) modifiers (for the hint)
 	var has_toggleable: bool = false
@@ -1632,6 +1868,13 @@ func _sync_board_state() -> void:
 	dartboard.queue_redraw()
 
 
+## Sync board state and rebuild the checkout solver after boss mutations.
+func _sync_board_and_solver() -> void:
+	_sync_board_state()
+	scoring_modifier_manager._build_solver_candidates()
+	scoring_modifier_manager.invalidate_preferred_remainders()
+
+
 ## Remove all dart markers from the board.
 func _clear_darts() -> void:
 	for child: Node in dart_container.get_children():
@@ -1639,7 +1882,7 @@ func _clear_darts() -> void:
 
 
 ## Create a visual dart marker at the landing position.
-func _place_dart(position: Vector2) -> void:
+func _place_dart(position: Vector2) -> Node2D:
 	var dart: Node2D = Node2D.new()
 	dart.position = position
 	dart.set_script(preload("res://scripts/dart_marker.gd"))
@@ -1647,6 +1890,7 @@ func _place_dart(position: Vector2) -> void:
 	dart.set("dart_inner_color", dart_build.dart_inner_color)
 	dart.set("dart_size", dart_size)
 	dart_container.add_child(dart)
+	return dart
 
 
 func _on_throw_state_changed(new_state: int) -> void:

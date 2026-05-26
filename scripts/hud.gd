@@ -8,6 +8,7 @@ signal new_run_pressed
 signal upgrade_selected(index: int)
 signal modifier_selected(index: int)
 signal modifier_toggled
+signal reward_selected(index: int)
 
 @onready var score_label: Label = $ScoreLabel
 @onready var instruction_label: Label = $InstructionLabel
@@ -131,6 +132,9 @@ var _streak_title_label: Label = null
 
 ## Whether upgrade buttons are in modifier selection mode.
 var _modifier_mode: bool = false
+var _reward_mode: bool = false
+var _boss_status_label: Label = null
+var _boss_bg_tint: ColorRect = null
 
 ## Current upgrades for hover preview (set during accuracy pick phase).
 var _preview_upgrades: Array[Dictionary] = []
@@ -205,8 +209,11 @@ func show_score(result: Dictionary) -> void:
 
 
 ## Update the remaining score display.
-func update_remaining(score: int) -> void:
-	remaining_label.text = str(score)
+func update_remaining(score: int, glass_cannon: bool = false) -> void:
+	if glass_cannon:
+		remaining_label.text = "%d  [GC]" % score
+	else:
+		remaining_label.text = str(score)
 
 
 ## Set the remaining score label to gold when a single-dart checkout exists,
@@ -230,8 +237,8 @@ func update_turn(turn: int, max_turns: int) -> void:
 
 
 ## Update the dart counter display and visual indicator.
-func update_darts(darts_remaining: int, is_last_turn: bool = false) -> void:
-	dart_label.text = "Dart %d/3" % [3 - darts_remaining]
+func update_darts(darts_remaining: int, is_last_turn: bool = false, darts_per_turn: int = 3) -> void:
+	dart_label.text = "Dart %d/%d" % [darts_per_turn - darts_remaining, darts_per_turn]
 	dart_indicator.set_darts_remaining(darts_remaining)
 	if darts_remaining == 1 and is_last_turn:
 		dart_label.text = "FINAL DART!"
@@ -257,8 +264,72 @@ func _shake_label(label: Label) -> void:
 
 
 ## Update the leg label display.
-func update_leg(leg: int, target: int) -> void:
+func update_leg(leg: int, target: int, is_boss: bool = false) -> void:
 	leg_label.text = "Leg %d — %d" % [leg, target]
+	if is_boss:
+		leg_label.add_theme_color_override("font_color", Color(0.9, 0.25, 0.2))
+	else:
+		leg_label.remove_theme_color_override("font_color")
+
+
+## Show the persistent boss status label with name, description, and status text.
+## Shifts gameplay labels down to make room.
+func show_boss_status(boss_name: String, status_text: String, color: Color) -> void:
+	if _boss_status_label == null:
+		_boss_status_label = Label.new()
+		_boss_status_label.name = "BossStatusLabel"
+		_boss_status_label.add_theme_font_size_override("font_size", boss_status_font_size)
+		_boss_status_label.add_theme_constant_override("outline_size", 2)
+		_boss_status_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.7))
+		_boss_status_label.size = Vector2(500.0, 24.0)
+		add_child(_boss_status_label)
+	_boss_status_label.text = "BOSS: %s — %s" % [boss_name, status_text]
+	_boss_status_label.add_theme_color_override("font_color", color)
+	_boss_status_label.position = Vector2(leg_label.position.x, boss_status_y)
+	if not _boss_status_label.visible:
+		_boss_status_label.visible = true
+		_shift_gameplay_labels(boss_label_offset)
+
+
+## Update just the status text portion of the boss status label.
+func update_boss_status_text(boss_name: String, status_text: String) -> void:
+	if _boss_status_label != null and _boss_status_label.visible:
+		_boss_status_label.text = "BOSS: %s — %s" % [boss_name, status_text]
+
+
+## Hide the boss status label and background tint. Restores label positions.
+func hide_boss_status() -> void:
+	if _boss_status_label != null and _boss_status_label.visible:
+		_boss_status_label.visible = false
+		_shift_gameplay_labels(-boss_label_offset)
+	if _boss_bg_tint != null:
+		_boss_bg_tint.visible = false
+
+
+## Shift the left-column gameplay labels vertically by the given amount.
+func _shift_gameplay_labels(offset: float) -> void:
+	remaining_label.position.y += offset
+	turn_label.position.y += offset
+	dart_label.position.y += offset
+	turn_score_label.position.y += offset
+
+
+## Show a full-screen background tint during boss legs.
+func show_boss_background_tint(tint: Color) -> void:
+	if tint.a <= 0.0:
+		if _boss_bg_tint != null:
+			_boss_bg_tint.visible = false
+		return
+	if _boss_bg_tint == null:
+		_boss_bg_tint = ColorRect.new()
+		_boss_bg_tint.name = "BossBgTint"
+		_boss_bg_tint.size = Vector2(1280.0, 720.0)
+		_boss_bg_tint.position = Vector2.ZERO
+		_boss_bg_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_boss_bg_tint)
+		move_child(_boss_bg_tint, 0)
+	_boss_bg_tint.color = tint
+	_boss_bg_tint.visible = true
 
 
 ## Show bust message and make the bust label visible.
@@ -269,12 +340,53 @@ func show_bust(reason: String) -> void:
 
 ## Show a centered "LEG WON!" banner that scales in and fades out.
 ## Returns the tween so callers can chain callbacks after it finishes.
+## Font size for the "LEG WON!" banner.
+@export var leg_won_font_size: int = 48
+
+## Color of the "LEG WON!" banner text.
+@export var leg_won_color: Color = Color(1.0, 0.85, 0.2)
+
+## Duration the leg-won banner stays visible before fading.
+@export var leg_won_hold_duration: float = 0.8
+
+## Duration of the leg-won banner scale-in animation.
+@export var leg_won_scale_in_duration: float = 0.3
+
+## Duration of the leg-won banner fade-out animation.
+@export var leg_won_fade_out_duration: float = 0.4
+
+## Font size for the boss announcement title.
+@export var boss_announce_title_font_size: int = 42
+
+## Font size for the boss announcement description.
+@export var boss_announce_desc_font_size: int = 20
+
+## Duration the boss announcement stays visible before fading.
+@export var boss_announce_hold_duration: float = 1.5
+
+## Duration of the boss announcement scale-in animation.
+@export var boss_announce_scale_in_duration: float = 0.35
+
+## Duration of the boss announcement fade-out animation.
+@export var boss_announce_fade_out_duration: float = 0.4
+
+## Font size for the persistent boss status label.
+@export var boss_status_font_size: int = 16
+
+## Y position for the persistent boss status label (below the leg label).
+@export var boss_status_y: float = 42.0
+
+## How many pixels to shift the left-column labels down during a boss leg
+## to make room for the boss status label.
+@export var boss_label_offset: float = 24.0
+
+
 func show_leg_won_banner() -> Tween:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
 	var banner: Label = Label.new()
 	banner.text = "LEG WON!"
-	banner.add_theme_font_size_override("font_size", 48)
-	banner.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	banner.add_theme_font_size_override("font_size", leg_won_font_size)
+	banner.add_theme_color_override("font_color", leg_won_color)
 	banner.add_theme_constant_override("outline_size", 6)
 	banner.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -288,15 +400,64 @@ func show_leg_won_banner() -> Tween:
 
 	var tween: Tween = create_tween()
 	tween.set_parallel(true)
-	tween.tween_property(banner, "scale", Vector2(1.0, 1.0), 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-	tween.tween_property(banner, "modulate:a", 1.0, 0.15)
+	tween.tween_property(banner, "scale", Vector2(1.0, 1.0), leg_won_scale_in_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.tween_property(banner, "modulate:a", 1.0, leg_won_scale_in_duration * 0.5)
 	tween.set_parallel(false)
-	tween.tween_interval(0.8)
+	tween.tween_interval(leg_won_hold_duration)
 	tween.set_parallel(true)
-	tween.tween_property(banner, "modulate:a", 0.0, 0.4).set_ease(Tween.EASE_IN)
-	tween.tween_property(banner, "position:y", banner.position.y - 30.0, 0.4).set_ease(Tween.EASE_IN)
+	tween.tween_property(banner, "modulate:a", 0.0, leg_won_fade_out_duration).set_ease(Tween.EASE_IN)
+	tween.tween_property(banner, "position:y", banner.position.y - 30.0, leg_won_fade_out_duration).set_ease(Tween.EASE_IN)
 	tween.set_parallel(false)
 	tween.tween_callback(banner.queue_free)
+	return tween
+
+
+## Show a boss arrival announcement with name and description. Returns the tween
+## so the caller can chain a callback after it finishes.
+func show_boss_announcement(boss_name: String, boss_description: String, title_color: Color = Color(0.9, 0.2, 0.2), desc_color: Color = Color(0.85, 0.75, 0.65)) -> Tween:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+
+	var container: VBoxContainer = VBoxContainer.new()
+	container.alignment = BoxContainer.ALIGNMENT_CENTER
+	container.add_theme_constant_override("separation", 8)
+	container.size = Vector2(500.0, 140.0)
+	container.position = Vector2((viewport_size.x - 500.0) / 2.0, (viewport_size.y - 140.0) / 2.0)
+	container.pivot_offset = Vector2(250.0, 70.0)
+	container.scale = Vector2(0.3, 0.3)
+	container.modulate.a = 0.0
+	add_child(container)
+
+	var name_label: Label = Label.new()
+	name_label.text = "BOSS: %s" % boss_name
+	name_label.add_theme_font_size_override("font_size", boss_announce_title_font_size)
+	name_label.add_theme_color_override("font_color", title_color)
+	name_label.add_theme_constant_override("outline_size", 5)
+	name_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.add_child(name_label)
+
+	var desc_label: Label = Label.new()
+	desc_label.text = boss_description
+	desc_label.add_theme_font_size_override("font_size", boss_announce_desc_font_size)
+	desc_label.add_theme_color_override("font_color", desc_color)
+	desc_label.add_theme_constant_override("outline_size", 3)
+	desc_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+	desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.add_child(desc_label)
+
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(container, "scale", Vector2(1.0, 1.0), boss_announce_scale_in_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.tween_property(container, "modulate:a", 1.0, boss_announce_scale_in_duration * 0.5)
+	tween.set_parallel(false)
+	tween.tween_interval(boss_announce_hold_duration)
+	tween.set_parallel(true)
+	tween.tween_property(container, "modulate:a", 0.0, boss_announce_fade_out_duration).set_ease(Tween.EASE_IN)
+	tween.tween_property(container, "position:y", container.position.y - 30.0, boss_announce_fade_out_duration).set_ease(Tween.EASE_IN)
+	tween.set_parallel(false)
+	tween.tween_callback(container.queue_free)
 	return tween
 
 
@@ -1043,7 +1204,10 @@ func _update_modifier_square_visual(wrapper: Control) -> void:
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.
 func _select_upgrade(index: int) -> void:
 	upgrade_container.visible = false
-	if _modifier_mode:
+	if _reward_mode:
+		_reward_mode = false
+		reward_selected.emit(index)
+	elif _modifier_mode:
 		_modifier_mode = false
 		modifier_selected.emit(index)
 	else:
@@ -1081,6 +1245,34 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
 		buttons[i].tooltip_text = modifier.description
 		buttons[i].visible = true
+	upgrade_container.visible = true
+	next_leg_button.visible = false
+
+
+## Show boss reward choices (up to 3 cards).
+func show_reward_choices(rewards: Array[RuleModifierReward]) -> void:
+	_reward_mode = true
+	_modifier_mode = false
+	_preview_upgrades.clear()
+	score_label.text = "Choose a boss reward!"
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
+	for i: int in range(3):
+		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
+			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
+		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
+			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
+		if i < rewards.size():
+			var reward: RuleModifierReward = rewards[i]
+			var button_text: String = "%s\n%s" % [reward.display_name, reward.description]
+			if reward.is_trade:
+				button_text += "\n[TRADE]"
+			buttons[i].text = button_text
+			var card_color: Color = Color(0.9, 0.7, 0.2) if not reward.is_trade else Color(0.9, 0.3, 0.2)
+			buttons[i].self_modulate = Color(card_color.r, card_color.g, card_color.b, 1.0)
+			buttons[i].tooltip_text = reward.description
+			buttons[i].visible = true
+		else:
+			buttons[i].visible = false
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 

@@ -14,7 +14,8 @@
       "Bash(Select-Object -ExpandProperty Name)",
       "Read(//Users/maximilianbernstein/**)",
       "Bash(echo \"---exit:$?---\")",
-      "Bash(ls -la /.zshrc)"
+      "Bash(ls -la /.zshrc)",
+      "Bash(grep -E \"\\\\.\\(gd|tscn|gdshader\\)$\")"
     ]
   }
 }

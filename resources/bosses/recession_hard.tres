@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/bosses/recession_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"recession_hard"
+display_name = "Recession"
+description = "One color's values reduced by 75% for the leg."
+boss_script = ExtResource("2")
+tuning = {"reduction_percent": 0.75}
+difficulty_tier = &"hard"

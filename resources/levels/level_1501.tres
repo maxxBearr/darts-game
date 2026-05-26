@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="LevelDefinition" format=3 uid="uid://ufck5u1lagn4"]
+
+[ext_resource type="Script" uid="uid://b3pyocheto7rc" path="res://scripts/levels/level_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://dh4dl6dm316ok" path="res://scripts/unlock_conditions/level_cleared_condition.gd" id="2"]
+[ext_resource type="Resource" path="res://resources/bosses/void_medium.tres" id="3"]
+[ext_resource type="Resource" path="res://resources/bosses/prism_medium.tres" id="4"]
+[ext_resource type="Resource" path="res://resources/bosses/recession_medium.tres" id="5"]
+[ext_resource type="Resource" path="res://resources/bosses/rotation_medium.tres" id="6"]
+[ext_resource type="Resource" path="res://resources/bosses/narrow_double_medium.tres" id="7"]
+[ext_resource type="Resource" path="res://resources/bosses/two_darts.tres" id="8"]
+
+[sub_resource type="Resource" id="unlock_1001"]
+script = ExtResource("2")
+required_level_path = "res://resources/levels/level_1001.tres"
+description = "Clear 1001 to unlock"
+metadata/_custom_type_script = ExtResource("2")
+
+[resource]
+script = ExtResource("1")
+max_score_target = 1501
+boss_count = 3
+boss_pool = Array[Resource]([ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8")])
+rarity_weight_shift = 0.025
+display_name = "1501"
+unlock_condition = SubResource("unlock_1001")

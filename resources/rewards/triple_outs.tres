@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="TripleOutsReward" format=3]
+
+[ext_resource type="Script" path="res://scripts/rewards/triple_outs_reward.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+reward_id = &"triple_outs"
+display_name = "Triple Outs"
+description = "Checkout on triples in addition to doubles."

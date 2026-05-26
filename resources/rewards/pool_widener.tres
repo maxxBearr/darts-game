@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="PoolWidenerReward" format=3]
+
+[ext_resource type="Script" path="res://scripts/rewards/pool_widener_reward.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+reward_id = &"pool_widener"
+display_name = "Pool Widener"
+description = "Shops show +1 option per pool."

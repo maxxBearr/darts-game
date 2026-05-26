@@ -64,6 +64,9 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## Should stand out from the default number_color so players can spot changes.
 @export var modified_number_color: Color = Color(0.2, 1.0, 0.4)
 
+## Color for wedge numbers reduced by a boss (e.g., Recession, Void).
+@export var boss_reduced_number_color: Color = Color(1.0, 0.25, 0.2)
+
 ## Color overlaid on the hovered board segment for highlighting.
 @export var hover_highlight_color: Color = Color(1.0, 1.0, 1.0, 0.15)
 
@@ -112,6 +115,14 @@ var effective_wedge_values: Array[int] = []
 ## Set by ScoringModifierManager. Each entry is a dict with "single" and "multi" keys.
 ## When empty, derives colors from wedge index (standard board colors).
 var effective_wedge_colors: Array[Dictionary] = []
+
+## Rotation offset in degrees applied to all wedge angles (rendering + hit detection).
+## Set by the Rotation boss. 0.0 = normal orientation.
+var board_rotation_offset: float = 0.0
+
+## Scale factor for the double ring width. 1.0 = normal, 0.5 = half width.
+## Set by the Narrow Double Ring boss. Moves the inner boundary outward.
+var double_ring_width_scale: float = 1.0
 
 ## Whether hover highlighting is currently enabled. Controlled by main.gd.
 var hover_enabled: bool = false
@@ -215,6 +226,57 @@ const RING_BOUNDS: Dictionary = {
 ## Child node for shop spot rendering — lets a shader apply to just the spots.
 var _shop_overlay: Node2D
 
+## Child node for boss visual overlays (voids, etc.).
+var _boss_overlay: Node2D
+
+## Wedge indices currently voided by a boss (drawn as dark segments).
+var _boss_void_wedges: Array[int] = []
+
+## Wedge indices that were voided last turn (fading out).
+var _boss_void_wedges_prev: Array[int] = []
+
+## Transition progress for void overlay (0 = old state, 1 = new state).
+var _void_transition_t: float = 1.0
+
+## Duration of the void transition animation.
+@export var void_transition_duration: float = 0.3
+
+## Wedge indices with boss-reduced values (shown in red instead of green).
+var boss_reduced_wedges: Array[int] = []
+
+## Duration for color transition animations (Prism boss).
+@export var color_transition_duration: float = 0.35
+
+## Progress of a color transition tween (0 = old, 1 = new). 1.0 = no transition.
+var _color_transition_t: float = 1.0
+
+## Previous wedge colors for blending during transition.
+var _prev_wedge_colors: Array[Dictionary] = []
+
+## Color used to draw voided wedge segments (base color under the swirl shader).
+@export var void_fill_color: Color = Color(0.05, 0.02, 0.1, 0.88)
+
+## Border color for voided wedge segments.
+@export var void_border_color: Color = Color(0.3, 0.1, 0.45, 0.7)
+
+## Border thickness for voided wedge segments.
+@export var void_border_thickness: float = 1.5
+
+## Swirl animation speed for void overlay.
+@export var void_swirl_speed: float = 0.4
+
+## Noise scale for void swirl pattern.
+@export var void_noise_scale: float = 10.0
+
+## Distortion amount for void swirl.
+@export var void_distortion: float = 0.9
+
+## Contrast for void swirl pattern.
+@export var void_contrast: float = 0.6
+
+## Glow strength for void swirl highlights.
+@export var void_glow_strength: float = 0.5
+
 
 func _ready() -> void:
 	_shop_overlay = Node2D.new()
@@ -226,6 +288,20 @@ func _ready() -> void:
 	_shop_overlay.material = mat
 	add_child(_shop_overlay)
 
+	_boss_overlay = Node2D.new()
+	_boss_overlay.draw.connect(_draw_boss_overlay)
+	var boss_shader: Shader = load("res://shaders/shop_spot.gdshader")
+	var boss_mat: ShaderMaterial = ShaderMaterial.new()
+	boss_mat.shader = boss_shader
+	boss_mat.set_shader_parameter("board_radius", board_radius)
+	boss_mat.set_shader_parameter("speed", void_swirl_speed)
+	boss_mat.set_shader_parameter("noise_scale", void_noise_scale)
+	boss_mat.set_shader_parameter("distortion", void_distortion)
+	boss_mat.set_shader_parameter("contrast", void_contrast)
+	boss_mat.set_shader_parameter("glow_strength", void_glow_strength)
+	_boss_overlay.material = boss_mat
+	add_child(_boss_overlay)
+
 
 func _draw() -> void:
 	# Draw surround ring (off-board area)
@@ -233,7 +309,7 @@ func _draw() -> void:
 
 	# Draw each wedge's rings from outermost to innermost
 	for wedge_idx: int in range(20):
-		var start_angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+		var start_angle_deg: float = _wedge_start_deg(wedge_idx)
 		var end_angle_deg: float = start_angle_deg + WEDGE_ANGLE_DEG
 
 		var single_color: Color
@@ -241,18 +317,23 @@ func _draw() -> void:
 		if effective_wedge_colors.size() == 20:
 			single_color = _segment_color_to_render(effective_wedge_colors[wedge_idx]["single"])
 			multi_color = _segment_color_to_render(effective_wedge_colors[wedge_idx]["multi"])
+			if _color_transition_t < 1.0 and _prev_wedge_colors.size() == 20:
+				var prev_single: Color = _segment_color_to_render(_prev_wedge_colors[wedge_idx]["single"])
+				var prev_multi: Color = _segment_color_to_render(_prev_wedge_colors[wedge_idx]["multi"])
+				single_color = prev_single.lerp(single_color, _color_transition_t)
+				multi_color = prev_multi.lerp(multi_color, _color_transition_t)
 		else:
 			var is_even: bool = wedge_idx % 2 == 0
 			single_color = wedge_a_single if is_even else wedge_b_single
 			multi_color = wedge_a_multi if is_even else wedge_b_multi
 
-		# Double ring
+		# Double ring (inner boundary narrows when Narrow Double Ring boss is active)
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, multi_color)
+			RING_DOUBLE_OUTER, _effective_double_inner(), multi_color)
 
-		# Outer single
+		# Outer single (expands outward to fill the gap when double ring is narrowed)
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, single_color)
+			_effective_double_inner(), RING_TRIPLE_OUTER, single_color)
 
 		# Triple ring
 		_draw_segment(start_angle_deg, end_angle_deg,
@@ -271,12 +352,12 @@ func _draw() -> void:
 	_draw_ring_wire(RING_SINGLE_BULL_OUTER)
 	_draw_ring_wire(RING_INNER_SINGLE_OUTER)
 	_draw_ring_wire(RING_TRIPLE_OUTER)
-	_draw_ring_wire(RING_OUTER_SINGLE_OUTER)
+	_draw_ring_wire(_effective_double_inner())
 	_draw_ring_wire(RING_DOUBLE_OUTER)
 
 	# Draw wire lines along wedge boundaries
 	for wedge_idx: int in range(20):
-		var angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+		var angle_deg: float = _wedge_start_deg(wedge_idx)
 		var angle_rad: float = deg_to_rad(angle_deg)
 		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
 		var inner_point: Vector2 = direction * board_radius * RING_SINGLE_BULL_OUTER
@@ -309,8 +390,8 @@ func _draw() -> void:
 	# Uses effective_wedge_values if available, so modified values are shown
 	var font: Font = ThemeDB.fallback_font
 	for wedge_idx: int in range(20):
-		# Center angle of this wedge (no offset — wedge 0 is centered at 0° / 12 o'clock)
-		var angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG
+		# Center angle of this wedge (rotation offset applied for Rotation boss)
+		var angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG + board_rotation_offset
 		var angle_rad: float = deg_to_rad(angle_deg)
 		# Position along that angle at the number radius
 		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
@@ -328,8 +409,11 @@ func _draw() -> void:
 		var text_width: float = font.get_string_size(number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size).x
 		var draw_pos: Vector2 = Vector2(pos.x - text_width / 2.0, pos.y + number_font_size / 2.0)
 
-		# Color-code: modified values show in a highlight color, originals in default
-		var text_color: Color = modified_number_color if is_modified else number_color
+		var text_color: Color = number_color
+		if boss_reduced_wedges.has(wedge_idx):
+			text_color = boss_reduced_number_color
+		elif is_modified:
+			text_color = modified_number_color
 		draw_string(font, draw_pos, number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size, text_color)
 
 	# Draw flash overlay on the hit segment (if active)
@@ -354,7 +438,7 @@ func flash_segment(global_hit_position: Vector2) -> void:
 		_flash_ring_name = "inner_single"
 	elif normalized_distance <= RING_TRIPLE_OUTER:
 		_flash_ring_name = "triple"
-	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
+	elif normalized_distance <= _effective_double_inner():
 		_flash_ring_name = "outer_single"
 	elif normalized_distance <= RING_DOUBLE_OUTER:
 		_flash_ring_name = "double"
@@ -365,14 +449,7 @@ func flash_segment(global_hit_position: Vector2) -> void:
 
 	# Determine which wedge index (not needed for bullseyes)
 	if _flash_ring_name != "double_bull" and _flash_ring_name != "single_bull":
-		var angle_rad: float = atan2(relative.x, -relative.y)
-		var angle_deg: float = rad_to_deg(angle_rad)
-		if angle_deg < 0.0:
-			angle_deg += 360.0
-		angle_deg = fmod(angle_deg - WEDGE_OFFSET_DEG, 360.0)
-		if angle_deg < 0.0:
-			angle_deg += 360.0
-		_flash_wedge_idx = int(angle_deg / WEDGE_ANGLE_DEG) % 20
+		_flash_wedge_idx = _get_wedge_index(relative)
 
 	# Animate the flash: start bright, tween alpha to 0
 	_flash_alpha = flash_color.a
@@ -409,21 +486,21 @@ func _draw_flash_segment(color: Color) -> void:
 			# Approximate as a full circle overlay for simplicity
 			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, color)
 		"inner_single":
-			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, color)
 		"triple":
-			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, color)
 		"outer_single":
-			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, color)
+			_draw_segment(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, color)
 		"double":
-			var start_deg: float = _flash_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, color)
+			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), color)
 
 
 ## Draw a single arc segment (wedge slice of a ring).
@@ -503,7 +580,7 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
 		segment_color = _lookup_segment_color(wedge_index, true)
-	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
+	elif normalized_distance <= _effective_double_inner():
 		ring_name = "Outer Single"
 		multiplier = 1
 		wedge_index = _get_wedge_index(relative)
@@ -543,8 +620,8 @@ func _get_wedge_index(relative: Vector2) -> int:
 	if angle_deg < 0.0:
 		angle_deg += 360.0
 
-	# Apply the 9-degree offset so wedge boundaries align
-	angle_deg = fmod(angle_deg - WEDGE_OFFSET_DEG, 360.0)
+	# Apply the 9-degree offset and rotation offset so wedge boundaries align
+	angle_deg = fmod(angle_deg - WEDGE_OFFSET_DEG - board_rotation_offset, 360.0)
 	if angle_deg < 0.0:
 		angle_deg += 360.0
 
@@ -615,9 +692,9 @@ func get_segment_centroid(wedge_index: int, ring_name: String) -> Vector2:
 			outer_norm = RING_TRIPLE_OUTER
 		"Outer Single", "outer_single":
 			inner_norm = RING_TRIPLE_OUTER
-			outer_norm = RING_OUTER_SINGLE_OUTER
+			outer_norm = _effective_double_inner()
 		"Double", "double":
-			inner_norm = RING_OUTER_SINGLE_OUTER
+			inner_norm = _effective_double_inner()
 			outer_norm = RING_DOUBLE_OUTER
 
 	var mid_r: float = board_radius * (inner_norm + outer_norm) / 2.0
@@ -659,7 +736,7 @@ func update_hover(global_mouse_pos: Vector2) -> Dictionary:
 		new_ring_name = "inner_single"
 	elif normalized_distance <= RING_TRIPLE_OUTER:
 		new_ring_name = "triple"
-	elif normalized_distance <= RING_OUTER_SINGLE_OUTER:
+	elif normalized_distance <= _effective_double_inner():
 		new_ring_name = "outer_single"
 	elif normalized_distance <= RING_DOUBLE_OUTER:
 		new_ring_name = "double"
@@ -714,25 +791,25 @@ func _draw_hover_segment() -> void:
 			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
 			draw_polyline(inner_points, hover_border_color, hover_border_thickness)
 		"inner_single":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_highlight_color)
 			_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_border_color, hover_border_thickness)
 		"triple":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_highlight_color)
 			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_border_color, hover_border_thickness)
 		"outer_single":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_OUTER_SINGLE_OUTER, RING_TRIPLE_OUTER, hover_border_color, hover_border_thickness)
+			_draw_segment(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, hover_highlight_color)
+			_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, hover_border_color, hover_border_thickness)
 		"double":
-			var start_deg: float = _hover_wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, hover_border_color, hover_border_thickness)
+			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), hover_highlight_color)
+			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), hover_border_color, hover_border_thickness)
 
 
 ## Draw a highlight on the declared target segment.
@@ -753,7 +830,7 @@ func _draw_target_highlight() -> void:
 			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
 			draw_polyline(inner_points, target_highlight_border_color, hover_border_thickness)
 	elif wedge_idx >= 0:
-		var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+		var start_deg: float = _wedge_start_deg(wedge_idx)
 		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 		var inner_norm: float = 0.0
 		var outer_norm: float = 0.0
@@ -766,9 +843,9 @@ func _draw_target_highlight() -> void:
 				outer_norm = RING_TRIPLE_OUTER
 			"Outer Single":
 				inner_norm = RING_TRIPLE_OUTER
-				outer_norm = RING_OUTER_SINGLE_OUTER
+				outer_norm = _effective_double_inner()
 			"Double":
-				inner_norm = RING_OUTER_SINGLE_OUTER
+				inner_norm = _effective_double_inner()
 				outer_norm = RING_DOUBLE_OUTER
 		if outer_norm > 0.0:
 			_draw_segment(start_deg, end_deg, outer_norm, inner_norm, target_highlight_color)
@@ -873,7 +950,7 @@ func _draw_picker_highlights() -> void:
 
 ## Draw a highlight overlay covering all rings of a single wedge.
 func _draw_full_wedge_highlight(wedge_idx: int, fill_color: Color, border_col: Color) -> void:
-	var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+	var start_deg: float = _wedge_start_deg(wedge_idx)
 	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 	_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, fill_color)
 	_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, border_col, hover_border_thickness)
@@ -893,9 +970,9 @@ func _draw_checkout_pulses() -> void:
 			draw_polyline(points, pulse_color, checkout_border_thickness)
 		elif segment_type == "wedge":
 			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+			var start_deg: float = _wedge_start_deg(wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_OUTER_SINGLE_OUTER, pulse_color, checkout_border_thickness)
+			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), pulse_color, checkout_border_thickness)
 
 
 # ── Tutorial highlight API ──────────────────────────────────────────────────
@@ -928,7 +1005,7 @@ func _draw_tutorial_highlights() -> void:
 				if RING_BOUNDS.has(ring_name):
 					var bounds: Array = RING_BOUNDS[ring_name]
 					for wedge_idx: int in range(20):
-						var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+						var start_deg: float = _wedge_start_deg(wedge_idx)
 						var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 						_draw_segment(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_color)
 						_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
@@ -942,7 +1019,7 @@ func _draw_tutorial_highlights() -> void:
 				var ring_name: String = spec.get("ring_name", "")
 				if RING_BOUNDS.has(ring_name):
 					var bounds: Array = RING_BOUNDS[ring_name]
-					var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+					var start_deg: float = _wedge_start_deg(wedge_idx)
 					var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 					_draw_segment(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_color)
 					_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
@@ -1043,7 +1120,7 @@ func _draw_shop_overlay() -> void:
 		var bounds: Array = RING_BOUNDS[ring_name]
 		var inner_norm: float = bounds[0]
 		var outer_norm: float = bounds[1]
-		var start_deg: float = wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG
+		var start_deg: float = _wedge_start_deg(wedge_idx)
 		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 
 		# Build segment polygon and draw on the overlay
@@ -1053,6 +1130,114 @@ func _draw_shop_overlay() -> void:
 		# Border
 		var border_points: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
 		_shop_overlay.draw_polyline(border_points, border_color, shop_border_thickness)
+
+
+## Set the wedge indices that should be drawn as voids by the boss overlay.
+## Animates the transition from old voids to new voids.
+func set_boss_void_wedges(wedges: Array[int]) -> void:
+	_boss_void_wedges_prev = _boss_void_wedges.duplicate()
+	_boss_void_wedges = wedges
+	boss_reduced_wedges = wedges.duplicate()
+	_void_transition_t = 0.0
+	var tween: Tween = create_tween()
+	tween.tween_method(_set_void_transition, 0.0, 1.0, void_transition_duration)
+
+func _set_void_transition(t: float) -> void:
+	_void_transition_t = t
+	_boss_overlay.queue_redraw()
+	queue_redraw()
+
+
+## Clear all boss visual overlays and reset boss-specific board modifications.
+func clear_boss_overlays() -> void:
+	_boss_void_wedges.clear()
+	_boss_void_wedges_prev.clear()
+	_void_transition_t = 1.0
+	_color_transition_t = 1.0
+	_prev_wedge_colors.clear()
+	boss_reduced_wedges.clear()
+	_boss_overlay.queue_redraw()
+	board_rotation_offset = 0.0
+	double_ring_width_scale = 1.0
+
+
+## Duration of the rotation animation in seconds.
+@export var rotation_anim_duration: float = 0.4
+
+## Animate the board rotation to a new offset. Used by Rotation boss.
+func set_board_rotation(offset_deg: float) -> void:
+	var tween: Tween = create_tween()
+	tween.tween_method(_apply_rotation, board_rotation_offset, offset_deg, rotation_anim_duration).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+
+
+func _apply_rotation(deg: float) -> void:
+	board_rotation_offset = deg
+	queue_redraw()
+	_boss_overlay.queue_redraw()
+
+
+## Animate a color transition from current colors to new colors (Prism boss).
+## Call this BEFORE updating effective_wedge_colors on the dartboard.
+func animate_color_transition() -> void:
+	_prev_wedge_colors.clear()
+	for c: Dictionary in effective_wedge_colors:
+		_prev_wedge_colors.append(c.duplicate())
+	_color_transition_t = 0.0
+	var tween: Tween = create_tween()
+	tween.tween_method(func(t: float) -> void:
+		_color_transition_t = t
+		queue_redraw()
+	, 0.0, 1.0, color_transition_duration)
+
+
+## Set the double ring width scale. Used by Narrow Double Ring boss.
+func set_double_ring_scale(scale: float) -> void:
+	double_ring_width_scale = scale
+	queue_redraw()
+
+
+## Compute the effective inner boundary of the double ring, accounting for narrowing.
+func _effective_double_inner() -> float:
+	return RING_DOUBLE_OUTER - (RING_DOUBLE_OUTER - RING_OUTER_SINGLE_OUTER) * double_ring_width_scale
+
+
+## Compute the angle for a wedge start position, including rotation offset.
+func _wedge_start_deg(wedge_idx: int) -> float:
+	return wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + board_rotation_offset
+
+
+## Draw boss overlay effects (voided wedges with transition support).
+func _draw_boss_overlay() -> void:
+	# Draw fading-out previous voids
+	if _void_transition_t < 1.0:
+		var fade_alpha: float = 1.0 - _void_transition_t
+		for wedge_idx: int in _boss_void_wedges_prev:
+			if _boss_void_wedges.has(wedge_idx):
+				continue
+			_draw_void_wedge(wedge_idx, fade_alpha)
+
+	# Draw current voids (fading in if transitioning)
+	var new_alpha: float = _void_transition_t
+	for wedge_idx: int in _boss_void_wedges:
+		_draw_void_wedge(wedge_idx, new_alpha)
+
+
+func _draw_void_wedge(wedge_idx: int, alpha: float) -> void:
+	var start_deg: float = _wedge_start_deg(wedge_idx)
+	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+	var fill: Color = Color(void_fill_color.r, void_fill_color.g, void_fill_color.b, void_fill_color.a * alpha)
+	var border: Color = Color(void_border_color.r, void_border_color.g, void_border_color.b, void_border_color.a * alpha)
+
+	for ring_name: String in RING_BOUNDS:
+		var bounds: Array = RING_BOUNDS[ring_name]
+		var inner_norm: float = bounds[0]
+		var outer_norm: float = bounds[1]
+
+		var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
+		_boss_overlay.draw_colored_polygon(points, fill)
+
+		var border_pts: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
+		_boss_overlay.draw_polyline(border_pts, border, void_border_thickness)
 
 
 ## Build a segment polygon (same geometry as _draw_segment but returns points).

@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="FrequentShoppingReward" format=3]
+
+[ext_resource type="Script" path="res://scripts/rewards/frequent_shopping_reward.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+reward_id = &"frequent_shopping"
+display_name = "Frequent Shopping"
+description = "Shops appear every 2 legs instead of 3."

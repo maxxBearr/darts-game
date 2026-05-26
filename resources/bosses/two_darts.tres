@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://c44tps7yvoc4b"]
+
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://cfcj37gx3jah7" path="res://scripts/bosses/two_darts_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"two_darts"
+display_name = "Two Darts"
+description = "You throw 2 darts per turn instead of 3."
+boss_script = ExtResource("2")
+tuning = {
+"dart_count": 2
+}
+difficulty_tier = &"medium"

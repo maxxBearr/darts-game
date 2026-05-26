@@ -27,6 +27,15 @@ var effective_wedge_colors: Array[Dictionary] = []
 ## but only PER_DART modifiers are called during process_score().
 var active_modifiers: Array[Resource] = []
 
+## Maximum number of streak modifier slots. Default 3 (one per category).
+var max_streak_slots: int = 3
+
+## When true, triples count as valid checkout finishes for the solver.
+var allow_triple_checkout: bool = false
+
+## When true, any ring counts as a valid checkout finish for the solver.
+var glass_cannon_active: bool = false
+
 ## Hit history for the current turn (cleared every turn via reset_for_turn).
 var hit_history_turn: Array[Dictionary] = []
 
@@ -394,6 +403,17 @@ func solve_checkout(remaining: int, darts_left: int) -> Array[Array]:
 	return raw_paths
 
 
+## Check if a ring name is a valid checkout finish given current reward rules.
+func _is_valid_finish(ring_name: String) -> bool:
+	if glass_cannon_active:
+		return ring_name != "Off Board"
+	if ring_name == "Double" or ring_name == "Double Bull":
+		return true
+	if allow_triple_checkout and ring_name == "Triple":
+		return true
+	return false
+
+
 func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary) -> Array[Array]:
 	if darts_left <= 0 or remaining <= 0:
 		return []
@@ -419,17 +439,16 @@ func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary) -> Arr
 		var scored: int = result["total_score"]
 
 		var ring_name: String = target["ring_name"]
-		var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
 
 		var step: Dictionary = {"target": target, "result": result}
 
-		if scored == remaining and is_double:
+		if scored == remaining and _is_valid_finish(ring_name):
 			# Checkout on this dart
 			paths.append([step])
 		elif scored < remaining and scored >= 0 and darts_left > 1:
 			var new_remaining: int = remaining - scored
-			# Prune: can't finish from 1
-			if new_remaining != 1:
+			# Prune: can't finish from 1 (unless Glass Cannon is active — any ring works)
+			if new_remaining != 1 or glass_cannon_active:
 				var sub_paths: Array[Array] = _solve_recursive(new_remaining, darts_left - 1, cache)
 				for sub: Array in sub_paths:
 					var full_path: Array = [step]
@@ -577,15 +596,12 @@ func _solve_first(remaining: int, darts_left: int, cache: Dictionary) -> bool:
 		var scored: int = result["total_score"]
 
 		var ring_name: String = target["ring_name"]
-		var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
 
-		if scored == remaining and is_double:
-			# Found a finishing dart at this remaining
+		if scored == remaining and _is_valid_finish(ring_name):
 			found = true
 		elif scored < remaining and scored >= 0 and darts_left > 1:
 			var new_remaining: int = remaining - scored
-			# Can't finish from 1 (no double sums to 1)
-			if new_remaining != 1:
+			if new_remaining != 1 or glass_cannon_active:
 				if _solve_first(new_remaining, darts_left - 1, cache):
 					found = true
 
@@ -755,35 +771,50 @@ func get_setup_recommendation(remaining: int) -> Dictionary:
 	return best_target
 
 
-## Calculate which double segments would win the leg at the given remaining score.
-## Runs each double through the full modifier pipeline in preview mode.
+## Calculate which segments would win the leg at the given remaining score.
+## Checks doubles (always), triples (if allow_triple_checkout), and all rings (if glass_cannon_active).
 func calculate_checkout_segments(remaining_score: int) -> Array[Dictionary]:
 	var checkout_segments: Array[Dictionary] = []
 
+	# Rings to check for wedge-based finishes
+	var finish_rings: Array[Dictionary] = [
+		{"ring_name": "Double", "multiplier": 2, "type": "wedge"},
+	]
+	if allow_triple_checkout or glass_cannon_active:
+		finish_rings.append({"ring_name": "Triple", "multiplier": 3, "type": "triple_wedge"})
+	if glass_cannon_active:
+		finish_rings.append({"ring_name": "Inner Single", "multiplier": 1, "type": "single_wedge"})
+		finish_rings.append({"ring_name": "Outer Single", "multiplier": 1, "type": "single_wedge"})
+
 	for wedge_idx: int in range(20):
 		var face_value: int = effective_wedge_values[wedge_idx]
-		var segment_color_value: int = -1
+		var single_color: int = -1
+		var multi_color: int = -1
 		if effective_wedge_colors.size() == 20:
-			segment_color_value = effective_wedge_colors[wedge_idx]["multi"]
+			single_color = effective_wedge_colors[wedge_idx]["single"]
+			multi_color = effective_wedge_colors[wedge_idx]["multi"]
 		else:
 			var is_even: bool = wedge_idx % 2 == 0
-			segment_color_value = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
+			single_color = ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
+			multi_color = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
 
-		var synthetic_result: Dictionary = {
-			"face_value": face_value,
-			"multiplier": 2,
-			"total_score": face_value * 2,
-			"ring_name": "Double",
-			"wedge_index": wedge_idx,
-			"segment_color": segment_color_value,
-			"is_bull": false,
-		}
+		for ring_info: Dictionary in finish_rings:
+			var mult: int = ring_info["multiplier"]
+			var is_multi: bool = mult > 1
+			var synthetic_result: Dictionary = {
+				"face_value": face_value,
+				"multiplier": mult,
+				"total_score": face_value * mult,
+				"ring_name": ring_info["ring_name"],
+				"wedge_index": wedge_idx,
+				"segment_color": multi_color if is_multi else single_color,
+				"is_bull": false,
+			}
+			var modified_result: Dictionary = process_score(synthetic_result, true)
+			if modified_result["total_score"] == remaining_score:
+				checkout_segments.append({"type": ring_info["type"], "wedge_idx": wedge_idx})
 
-		var modified_result: Dictionary = process_score(synthetic_result, true)
-		if modified_result["total_score"] == remaining_score:
-			checkout_segments.append({"type": "wedge", "wedge_idx": wedge_idx})
-
-	# Check double bull
+	# Check double bull (always a valid finish)
 	var bull_result: Dictionary = {
 		"face_value": 25,
 		"multiplier": 2,
@@ -796,5 +827,20 @@ func calculate_checkout_segments(remaining_score: int) -> Array[Dictionary]:
 	var modified_bull: Dictionary = process_score(bull_result, true)
 	if modified_bull["total_score"] == remaining_score:
 		checkout_segments.append({"type": "double_bull"})
+
+	# Check single bull (Glass Cannon only)
+	if glass_cannon_active:
+		var single_bull: Dictionary = {
+			"face_value": 25,
+			"multiplier": 1,
+			"total_score": 25,
+			"ring_name": "Single Bull",
+			"wedge_index": -1,
+			"segment_color": ScoringEnums.SegmentColor.GREEN,
+			"is_bull": true,
+		}
+		var modified_sb: Dictionary = process_score(single_bull, true)
+		if modified_sb["total_score"] == remaining_score:
+			checkout_segments.append({"type": "single_bull"})
 
 	return checkout_segments

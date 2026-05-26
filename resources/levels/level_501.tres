@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="LevelDefinition" format=3 uid="uid://711xa3su6t6i"]
+
+[ext_resource type="Script" uid="uid://b3pyocheto7rc" path="res://scripts/levels/level_definition.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/bosses/void_easy.tres" id="2"]
+[ext_resource type="Resource" path="res://resources/bosses/prism_easy.tres" id="3"]
+[ext_resource type="Resource" path="res://resources/bosses/recession_easy.tres" id="4"]
+
+[resource]
+script = ExtResource("1")
+boss_pool = Array[Resource]([ExtResource("2"), ExtResource("3"), ExtResource("4")])
+rarity_weight_shift = -0.025
