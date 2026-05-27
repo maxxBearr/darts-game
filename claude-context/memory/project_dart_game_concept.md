@@ -10,12 +10,14 @@ metadata:
 **Concept:** Balatro-style roguelike built around darts. Player customizes a dart from three components (barrel, shaft, flight — point was dropped) that affect six throw stats. Runs scale through x01 format (101 → 201 → 301...), with escalating score targets. Scoring modifiers acquired during the run change how the player sees and values the dartboard. The board stays the same; builds make you play it differently every run.
 
 **Four core design pillars:**
-1. **Throw Mechanic** — three-stage input (place aim ellipse → vertical release → horizontal release) where build stats affect each stage's precision. Skill axis on top: how close the locked release lands to the declared target's centroid drives a green/orange/red accuracy multiplier that shrinks or bloats the final dart's scatter. Gaussian distribution for the final landing sample.
+1. **Throw Mechanic** — three-stage input (place aim crosshair → vertical release → horizontal release) where build stats affect each stage's precision. The aim primitive first shipped as an ellipse and was reworked to a **crosshair on 2026-05-26** (independent H/V arms, distinct colors per axis, mouse-tracked with WASD fallback) — the throw state machine itself stayed identical. Skill axis on top: how close the locked release lands to the declared target's centroid drives a green/orange/red accuracy multiplier that shrinks or bloats the final dart's scatter. Zone distance is now **absolute pixels** divided by `accuracy_zone_reference_radius`, not ellipse-relative, so range upgrades don't reshape the zone bands. Gaussian distribution for the final landing sample.
 2. **Build System** — Mario Kart-style stat spreads on components + Armored Core-inspired balance threshold that forces tradeoffs.
 3. **Scoring Modifiers** — board-perception items: triples worth more, doubles worth 0, color bonuses, streak bonuses, wedge value boosts, etc.
 4. **Form (deck equivalent)** — future feature. Throwing style chosen at run start that changes fundamental feel of the throw mechanic.
 
 **Win/loss:** Leg 1 = 101, +100 each leg, 5 turns of 3 darts per leg, must double-out, standard bust rules. Fail to reach 0 in 5 turns → run over.
+
+**Run structure (level-gated as of 2026-05-26):** runs are no longer endless — the player picks a level (501, 1001, or 1501 starter set) and the level cap defines the final leg. Bosses appear every 5 legs (level determines how many), and clearing the level is the win state. See [[project-boss-level-system]] for the full system.
 
 **Run-progression structure (shipped 2026-05-21):** Every third leg, the post-leg upgrade pick is replaced by a **shop** — the player throws their accumulated spare darts at lit-up board spots to earn rarity-tiered upgrades. Per-leg 2-of-3 picks continue unchanged on non-shop legs. Spare darts = `total_darts_in_leg - used_darts`, summed across the three-leg window. See [shop spec](../../../../../Documents/GitHub/darts-game/specs/2026-05-21-shop-system.md).
 
@@ -25,4 +27,4 @@ metadata:
 
 **How to apply:** When discussing new features, check that they support at least one of the four pillars. New scoring modifiers should change how a player *reads* the board, not just add raw points. New build systems should respect the parts/balance dichotomy ([[project-balance-philosophy]], [[project-component-philosophy]]). Reward-delivery systems (shop-like beats) should keep the three calculating interactions active.
 
-See also: [[user-role]], [[feedback-godot-conventions]], [[project-balance-philosophy]], [[project-component-philosophy]], [[project-architecture-rules]], [[project-open-questions]], [[reference-design-notes]]
+See also: [[user-role]], [[feedback-godot-conventions]], [[project-balance-philosophy]], [[project-component-philosophy]], [[project-architecture-rules]], [[project-open-questions]], [[project-boss-level-system]], [[reference-design-notes]]

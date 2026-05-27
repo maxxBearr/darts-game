@@ -7,10 +7,12 @@
 - [Flight archetype slot](project_flight_archetype.md) — flight = singular archetype pick per run (no swap, build-around verb, harder unlocks, can fire at any lifecycle moment)
 - [Ability extension points](project_ability_extension_points.md) — sibling Resource per lifecycle moment on DartComponent; second-eval pass for target-aware throw bonuses; would_continue_streak hook
 - [Architecture rules](project_architecture_rules.md) — board shows effective values; hover off during active throw; scoring vs stat-upgrade split; ability hooks are sibling Resources
-- [Open design questions](project_open_questions.md) — six unresolved: dart count scaling, locked-modifier conflicts, absolute weight, shop run-end, meta-progression, rule-modifier category
+- [Open design questions](project_open_questions.md) — three unresolved: dart count base-scaling, locked-modifier conflicts, absolute weight axis. Several resolved 2026-05-26 via boss/level/reward shipping.
 - [Modifier lock system](project_modifier_lock_system.md) — 65% locked / 35% toggleable roll at generation; rarity is the power axis; locked is constraint not penalty; swap-anytime keeps commits leg-scale
 - [Dropped: rethrow design](project_dropped_rethrow_design.md) — rethrow-style verbs create intentional-miss exploits; don't propose without solving that path
 - [Tutorial system](project_tutorial_system.md) — Shipped 2026-05-22: Start Screen, 3-throw mechanics tutorial with in-context stat reveals + slider demos, rules slideshow + doubles drill, first-run welcome; Assembly Tutorial + Stats Reference deferred
-- [Component unlock system](project_component_unlock_system.md) — Shipped 2026-05-23: manual StringName IDs, PlayerProgress autoload, 7 UnlockCondition subclasses, queued notifications. Refs: DartComponentGuide.md, UnlockConditionRecipes.md
+- [Component unlock system](project_component_unlock_system.md) — Shipped 2026-05-23: manual StringName IDs, PlayerProgress autoload, 8 UnlockCondition subclasses (added LevelCleared 2026-05-26), queued notifications. Refs: DartComponentGuide.md, UnlockConditionRecipes.md
+- [Boss + level + reward system](project_boss_level_system.md) — Shipped 2026-05-26: per-leg bosses every 5 legs, 6 families with scaled variants, 3 starter levels (501/1001/1501), 8 rule-modifier rewards inc. Glass Cannon trade
+- [Audio system](project_audio_system.md) — Shipped 2026-05-26: AudioManager autoload with BaseButton auto-connect, music transitions via volume+pitch fade, progressive turn-end pitch tension. Filename typo "auido" — rename TBD
 - [Onboarding UX patterns](feedback_onboarding_ux_patterns.md) — Teach in context, visuals adjacent to text, hybrid slideshow + one interactive moment, real stats throughout, 3-step demo→guide→free
 - [Design Notes reference](reference_design_notes.md) — DesignNotes.md is canonical; ProjectOverview.txt is deprecated; CLAUDE.md holds active spec

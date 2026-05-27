@@ -17,7 +17,7 @@ If a modifier changes a wedge's value (e.g., +3 makes "10" display as "13"), the
 ---
 
 **Rule 2: Hover/inspect is OFF during active throw stages.**
-Hover tooltips are available between darts. They are *not* available during VERTICAL_RELEASE, HORIZONTAL_RELEASE, or RESOLVING. The current throw enum is `IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE` — there is no longer a separate POSITIONING state (the vertical-window placement was folded into AIMING when the ellipse-placement rework shipped).
+Hover tooltips are available between darts. They are *not* available during VERTICAL_RELEASE, HORIZONTAL_RELEASE, or RESOLVING. The current throw enum is `IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE` — there is no longer a separate POSITIONING state (the vertical-window placement was folded into AIMING when the ellipse-placement rework shipped). The aim primitive itself was reworked from ellipse to **crosshair on 2026-05-26**; the state machine and the hover-off rule were preserved verbatim. Accuracy-zone distance is now absolute pixels (`accuracy_zone_reference_radius`-normalized) rather than ellipse-relative.
 
 **Why:** Player needs to focus during active throw phases. Inspect-mode information is for planning, not for execution.
 
