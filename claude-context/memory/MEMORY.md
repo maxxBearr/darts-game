@@ -1,0 +1,16 @@
+- [User role](user_role.md) — Max: Godot/GDScript dev, design-first workflow, wants sparring not stenography
+- [GDScript conventions](feedback_godot_conventions.md) — static-type everything, comment frequently, exported vars with hover descriptions
+- [Session-end refresh](feedback_session_end_refresh.md) — at end of complete sessions, proactively offer to refresh memory + DesignNotes.md against diffs
+- [Dart Game concept](project_dart_game_concept.md) — Balatro-style dart roguelike: 3-component dart customization, x01 scaling format, scoring modifiers as run-defining items
+- [Balance philosophy](project_balance_philosophy.md) — "parts = ceiling, balance = delivery quality"; three zones (green/orange/red); imbalance can be correct
+- [Component philosophy](project_component_philosophy.md) — single DartComponent class, three slots, weight-stat correlation, sibling ability hooks (throw_modifier, shop_bias), flight is special
+- [Flight archetype slot](project_flight_archetype.md) — flight = singular archetype pick per run (no swap, build-around verb, harder unlocks, can fire at any lifecycle moment)
+- [Ability extension points](project_ability_extension_points.md) — sibling Resource per lifecycle moment on DartComponent; second-eval pass for target-aware throw bonuses; would_continue_streak hook
+- [Architecture rules](project_architecture_rules.md) — board shows effective values; hover off during active throw; scoring vs stat-upgrade split; ability hooks are sibling Resources
+- [Open design questions](project_open_questions.md) — six unresolved: dart count scaling, locked-modifier conflicts, absolute weight, shop run-end, meta-progression, rule-modifier category
+- [Modifier lock system](project_modifier_lock_system.md) — 65% locked / 35% toggleable roll at generation; rarity is the power axis; locked is constraint not penalty; swap-anytime keeps commits leg-scale
+- [Dropped: rethrow design](project_dropped_rethrow_design.md) — rethrow-style verbs create intentional-miss exploits; don't propose without solving that path
+- [Tutorial system](project_tutorial_system.md) — Shipped 2026-05-22: Start Screen, 3-throw mechanics tutorial with in-context stat reveals + slider demos, rules slideshow + doubles drill, first-run welcome; Assembly Tutorial + Stats Reference deferred
+- [Component unlock system](project_component_unlock_system.md) — Shipped 2026-05-23: manual StringName IDs, PlayerProgress autoload, 7 UnlockCondition subclasses, queued notifications. Refs: DartComponentGuide.md, UnlockConditionRecipes.md
+- [Onboarding UX patterns](feedback_onboarding_ux_patterns.md) — Teach in context, visuals adjacent to text, hybrid slideshow + one interactive moment, real stats throughout, 3-step demo→guide→free
+- [Design Notes reference](reference_design_notes.md) — DesignNotes.md is canonical; ProjectOverview.txt is deprecated; CLAUDE.md holds active spec
