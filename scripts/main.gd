@@ -1638,7 +1638,7 @@ func _revert_temp_bonuses() -> void:
 	throw_mechanic.gaussian_spread = _original_gaussian_spread
 
 
-## Second-pass throw modifier evaluation after the player places the aim ellipse.
+## Second-pass throw modifier evaluation after the player places the aim crosshair.
 ## Reverts the first-pass bonuses, rebuilds context with declared_target and
 ## active_streak_modifiers, then re-evaluates and reapplies.
 func _evaluate_aim_placed_bonuses(declared_target: Dictionary) -> void:

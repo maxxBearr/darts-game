@@ -76,9 +76,9 @@ var entry_source: String = "start_screen"
 @export var tutorial_strings: Dictionary = {
 	"welcome": "Welcome to the tutorial! We'll walk you through how throwing works — three quick throws and you'll have it down.",
 	"intro": "We'll throw at the bullseye.",
-	"aim_ellipse": "This is your [b]aim ellipse[/b]. Where your dart can possibly end up after the meters resolve. Bigger ellipse = wider range of outcomes.",
-	"reveal_range": "These two stats — [b]H Range[/b] and [b]V Range[/b] — control the size of your aim ellipse. Higher Range = smaller ellipse = more precise aim.",
-	"demo_range": "Try it — drag the sliders and watch the ellipse change. Each axis controls one dimension of the ellipse.",
+	"aim_crosshair": "This is your [b]aim crosshair[/b]. Where your dart can possibly end up after the meters resolve. Bigger crosshair = wider range of outcomes.",
+	"reveal_range": "These two stats — [b]H Range[/b] and [b]V Range[/b] — control the size of your aim crosshair. Higher Range = smaller crosshair = more precise aim.",
+	"demo_range": "Try it — drag the sliders and watch the crosshair change. Each axis controls one dimension of the crosshair.",
 	"ideal_aim": "The center of your target is the ideal spot. Time the meters to land as close to it as possible.",
 	"lock_vertical": "First you lock your [b]vertical[/b] position.",
 	"reveal_v_speed": "[b]V Speed[/b] controls how fast the vertical marker bounces. Higher = slower = easier to time.",
@@ -382,11 +382,11 @@ func _throw1_place_aim() -> void:
 	throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
 	throw_mechanic.force_lock_aim(target_centroid, target_result)
 	throw_mechanic.set_paused(true)
-	throw_mechanic.set_tutorial_pulse_target("aim_ellipse")
+	throw_mechanic.set_tutorial_pulse_target("aim_crosshair")
 
 	dartboard.set_declared_target(target_result)
 
-	callout.show_callout(tutorial_strings["aim_ellipse"], callout_position)
+	callout.show_callout(tutorial_strings["aim_crosshair"], callout_position)
 	_waiting_for_next = true
 	# Phase B: next beat reveals range stats instead of going straight to explain ideal
 	_set_beat_after_next("reveal_range")

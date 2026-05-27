@@ -1,5 +1,5 @@
 extends Node2D
-## Three-stage ellipse-based throw mechanic: place aim ellipse, vertical release,
+## Three-stage crosshair-based throw mechanic: place aim crosshair, vertical release,
 ## then horizontal release. Emits throw_completed with the final pixel position
 ## when all stages are done.
 
@@ -10,28 +10,28 @@ enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING,
 
 @export_group("Aim Range")
 
-## Controls horizontal range of the aim ellipse. Higher = tighter range.
+## Controls horizontal range of the aim crosshair. Higher = tighter range.
 ## 1 = worst (half-width equals max_aim_half_width).
 ## 100 = best (half-width equals min_aim_half_width).
 ## Typical gameplay range: 30 to 80.
 @export var horizontal_range: float = 8.0
 
-## Maximum aim ellipse half-width in pixels (at horizontal_range = 1). The worst possible horizontal spread.
+## Maximum aim crosshair half-width in pixels (at horizontal_range = 1). The worst possible horizontal spread.
 @export var max_aim_half_width: float = 270.0
 
-## Minimum aim ellipse half-width in pixels (at horizontal_range = 100). The tightest possible horizontal spread.
+## Minimum aim crosshair half-width in pixels (at horizontal_range = 100). The tightest possible horizontal spread.
 @export var min_aim_half_width: float = 8.0
 
-## Controls vertical range of the aim ellipse. Higher = tighter range.
+## Controls vertical range of the aim crosshair. Higher = tighter range.
 ## 1 = worst (half-height equals max_aim_half_height).
 ## 100 = best (half-height equals min_aim_half_height).
 ## Typical gameplay range: 30 to 70.
 @export var vertical_range: float = 5.0
 
-## Maximum aim ellipse half-height in pixels (at vertical_range = 1). The worst possible vertical spread.
+## Maximum aim crosshair half-height in pixels (at vertical_range = 1). The worst possible vertical spread.
 @export var max_aim_half_height: float = 270.0
 
-## Minimum aim ellipse half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
+## Minimum aim crosshair half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
 @export var min_aim_half_height: float = 5.0
 
 @export_group("Speed & Accuracy")
@@ -73,10 +73,16 @@ var accuracy_skew_v: float = 0.0
 
 @export_group("Throw Visual")
 
-## Semi-transparent color of the aim ellipse fill.
+## Color of the aim crosshair lines during AIMING.
 @export var aim_line_color: Color = Color(0.2, 0.5, 1.0, 0.3)
 
-## Speed at which WASD moves the aim ellipse during AIMING (pixels per second).
+## Color of the aim crosshair lines during meter phases (V/H release and resolving).
+@export var aim_dimmed_color: Color = Color(0.2, 0.5, 1.0, 0.2)
+
+## Line thickness of the aim crosshair in pixels.
+@export var aim_crosshair_thickness: float = 2.0
+
+## Speed at which WASD moves the aim crosshair during AIMING (pixels per second).
 @export var window_move_speed: float = 300.0
 
 ## Color of the marker circle (shared by vertical and horizontal markers).
@@ -171,11 +177,11 @@ var _input_blocked: bool = false
 ## normalized bounce_t so the tutorial controller can detect when meters reach freeze points.
 signal meter_position_changed(state: ThrowState, normalized_t: float)
 
-# When true, the aim ellipse and accuracy zone previews are drawn more prominently.
+# When true, the aim crosshair and accuracy zone previews are drawn more prominently.
 var _tutorial_visual_boost: bool = false
 
 # Which element's border should pulse during the tutorial.
-# "aim_ellipse", "accuracy_zone", "vertical_band", "marker", or "" (none).
+# "aim_crosshair", "accuracy_zone", "vertical_band", "marker", or "" (none).
 var _tutorial_pulse_target: String = ""
 
 # Pulse animation timer (incremented in _process when a pulse target is active).
@@ -227,13 +233,13 @@ var _h_meter_half_width: float = 0.0
 ## Reference to the dartboard node, set by main.gd.
 var dartboard: Node2D = null
 
-## Center of the placed aim ellipse (locked when player confirms placement).
+## Center of the placed aim crosshair (locked when player confirms placement).
 var _placed_center: Vector2 = Vector2.ZERO
 
-## Horizontal semi-axis of the aim ellipse (computed from horizontal_range at placement time).
+## Horizontal arm half-length of the aim crosshair (computed from horizontal_range at placement time).
 var _aim_half_width: float = 0.0
 
-## Vertical semi-axis of the aim ellipse (computed from vertical_range at placement time).
+## Vertical arm half-length of the aim crosshair (computed from vertical_range at placement time).
 var _aim_half_height: float = 0.0
 
 ## Whether mouse is currently controlling aim position (vs WASD).
@@ -270,13 +276,13 @@ func get_throw_state() -> ThrowState:
 	return _state
 
 
-## Compute the aim ellipse half-width in pixels from the horizontal_range stat (1-100).
+## Compute the aim crosshair half-width in pixels from the horizontal_range stat (1-100).
 func _get_aim_half_width() -> float:
 	var normalized: float = clampf((horizontal_range - 1.0) / 99.0, 0.0, 1.0)
 	return lerpf(max_aim_half_width, min_aim_half_width, normalized)
 
 
-## Compute the aim ellipse half-height in pixels from the vertical_range stat (1-100).
+## Compute the aim crosshair half-height in pixels from the vertical_range stat (1-100).
 func _get_aim_half_height() -> float:
 	var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
 	return lerpf(max_aim_half_height, min_aim_half_height, normalized)
@@ -451,7 +457,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			match _state:
 				ThrowState.AIMING:
-					_place_aim_ellipse()
+					_place_aim_crosshair()
 					get_viewport().set_input_as_handled()
 				ThrowState.VERTICAL_RELEASE:
 					_lock_vertical()
@@ -466,7 +472,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key.pressed and (key.keycode == KEY_ENTER or key.keycode == KEY_SPACE):
 			match _state:
 				ThrowState.AIMING:
-					_place_aim_ellipse()
+					_place_aim_crosshair()
 					get_viewport().set_input_as_handled()
 				ThrowState.VERTICAL_RELEASE:
 					_lock_vertical()
@@ -476,8 +482,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					_enter_resolving()
 
 
-## Lock the aim ellipse in place and transition to VERTICAL_RELEASE.
-func _place_aim_ellipse() -> void:
+## Lock the aim crosshair in place and transition to VERTICAL_RELEASE.
+func _place_aim_crosshair() -> void:
 	_placed_center = _aim_center
 	_aim_half_width = _get_aim_half_width()
 	_aim_half_height = _get_aim_half_height()
@@ -506,7 +512,7 @@ func _place_aim_ellipse() -> void:
 ## Lock the vertical position and transition to HORIZONTAL_RELEASE.
 func _lock_vertical() -> void:
 	_locked_release_y = _release_y
-	_h_meter_half_width = _get_ellipse_half_width_at_y(_locked_release_y)
+	_h_meter_half_width = _aim_half_width
 	_state = ThrowState.HORIZONTAL_RELEASE
 	_horizontal_bounce_t = 0.0
 	_horizontal_x = _placed_center.x
@@ -677,6 +683,20 @@ func _draw_crosshair(pos: Vector2, color: Color, size: float = 6.0, width: float
 	draw_line(pos + Vector2(0, -size), pos + Vector2(0, size), color, width)
 
 
+## Draw the aim crosshair with independent arm lengths and optional endpoint tick marks.
+func _draw_aim_crosshair(center: Vector2, h_arm_half: float, v_arm_half: float,
+		color: Color, width: float = 2.0, tick_size: float = 4.0) -> void:
+	draw_line(center + Vector2(-h_arm_half, 0.0), center + Vector2(h_arm_half, 0.0), color, width)
+	draw_line(center + Vector2(0.0, -v_arm_half), center + Vector2(0.0, v_arm_half), color, width)
+	if tick_size > 0.0:
+		for x_sign: float in [-1.0, 1.0]:
+			var tip: Vector2 = center + Vector2(x_sign * h_arm_half, 0.0)
+			draw_line(tip + Vector2(0.0, -tick_size), tip + Vector2(0.0, tick_size), color, width)
+		for y_sign: float in [-1.0, 1.0]:
+			var tip: Vector2 = center + Vector2(0.0, y_sign * v_arm_half)
+			draw_line(tip + Vector2(-tick_size, 0.0), tip + Vector2(tick_size, 0.0), color, width)
+
+
 ## Draw the bouncing marker dot with optional outline ring for visibility.
 func _draw_marker(pos: Vector2) -> void:
 	if marker_outline_thickness > 0.0:
@@ -684,38 +704,46 @@ func _draw_marker(pos: Vector2) -> void:
 	draw_circle(pos, marker_size, marker_color)
 
 
-## Draw the AIMING state: filled ellipse following cursor with crosshair.
+## Draw the AIMING state: crosshair following cursor showing aim range.
 func _draw_aiming() -> void:
 	var half_w: float = _get_aim_half_width()
 	var half_h: float = _get_aim_half_height()
 	var center: Vector2 = _aim_center - global_position
 
-	# Filled semi-transparent ellipse
-	_draw_filled_ellipse(center, half_w, half_h, aim_line_color)
-	# Ellipse outline (slightly more opaque)
-	_draw_ellipse_outline(center, half_w, half_h, Color(aim_line_color, minf(aim_line_color.a + 0.3, 1.0)))
-	# Crosshair at center
-	_draw_crosshair(center, Color(0.2, 0.5, 1.0, 0.7))
+	_draw_aim_crosshair(center, half_w, half_h, aim_line_color, aim_crosshair_thickness)
+	_draw_aim_crosshair(center, half_w, half_h,
+		Color(aim_line_color, minf(aim_line_color.a + 0.3, 1.0)), maxf(aim_crosshair_thickness - 1.0, 1.0), 0.0)
 
 
-## Draw the VERTICAL_RELEASE state: dimmed ellipse + ghost preview + vertical accuracy band + bouncing marker.
+## Draw the VERTICAL_RELEASE state: dimmed crosshair + ghost preview + vertical accuracy band + bouncing marker.
 func _draw_vertical_release() -> void:
 	var center: Vector2 = _placed_center - global_position
 	var pulse: Dictionary = _get_pulse_values()
 
-	# Aim ellipse
+	# Aim crosshair — H arm follows the bouncing marker's Y, always full width
+	var dimmed_w: float = maxf(aim_crosshair_thickness * 0.75, 1.0)
+	var marker_y_local: float = _release_y - global_position.y
+	var h_arm_center: Vector2 = Vector2(center.x, marker_y_local)
 	if _tutorial_visual_boost:
-		var aim_fill_a: float = 0.2
 		var aim_outline_a: float = 0.5
-		var aim_outline_w: float = 2.0
-		if _tutorial_pulse_target == "aim_ellipse":
-			aim_fill_a = 0.25
+		var aim_outline_w: float = aim_crosshair_thickness + 1.0
+		if _tutorial_pulse_target == "aim_crosshair":
 			aim_outline_a = pulse["alpha"]
-			aim_outline_w = pulse["width"]
-		_draw_filled_ellipse(center, _aim_half_width, _aim_half_height, Color(aim_line_color.r, aim_line_color.g, aim_line_color.b, aim_fill_a))
-		_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, aim_outline_a), aim_outline_w)
+			aim_outline_w = pulse["width"] + 1.0
+		var aim_color: Color = Color(aim_line_color, aim_outline_a)
+		draw_line(center + Vector2(0.0, -_aim_half_height), center + Vector2(0.0, _aim_half_height), aim_color, aim_outline_w)
+		draw_line(h_arm_center + Vector2(-_aim_half_width, 0.0), h_arm_center + Vector2(_aim_half_width, 0.0), aim_color, aim_outline_w)
 	else:
-		_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
+		var aim_color: Color = aim_dimmed_color
+		draw_line(center + Vector2(0.0, -_aim_half_height), center + Vector2(0.0, _aim_half_height), aim_color, dimmed_w)
+		draw_line(h_arm_center + Vector2(-_aim_half_width, 0.0), h_arm_center + Vector2(_aim_half_width, 0.0), aim_color, dimmed_w)
+		var tick: float = 3.0
+		for y_sign: float in [-1.0, 1.0]:
+			var tip: Vector2 = center + Vector2(0.0, y_sign * _aim_half_height)
+			draw_line(tip + Vector2(-tick, 0.0), tip + Vector2(tick, 0.0), aim_color, dimmed_w)
+		for x_sign: float in [-1.0, 1.0]:
+			var tip: Vector2 = h_arm_center + Vector2(x_sign * _aim_half_width, 0.0)
+			draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), aim_color, dimmed_w)
 
 	# Ghost accuracy preview at current marker position
 	var preview_pos: Vector2 = Vector2(_placed_center.x, _release_y)
@@ -737,38 +765,40 @@ func _draw_vertical_release() -> void:
 	_draw_ellipse_outline(ghost_local, ghost_h_half, ghost_v_half,
 		Color(ghost_color.r, ghost_color.g, ghost_color.b, outline_alpha), outline_width)
 
-	# Vertical accuracy glow band clipped to ellipse
-	var v_half: float = _get_vertical_accuracy_half()
-	var glow_y_min: float = _release_y - global_position.y - v_half
-	var glow_y_max: float = _release_y - global_position.y + v_half
-	var v_glow: Color = vertical_glow_color
-	if _tutorial_pulse_target == "vertical_band":
-		v_glow = Color(v_glow.r, v_glow.g, v_glow.b, pulse["alpha"] * 0.5)
-	_draw_h_band_clipped(center, _aim_half_width, _aim_half_height, glow_y_min, glow_y_max, v_glow)
-
 	# Bouncing marker dot
 	var marker_pos: Vector2 = Vector2(_placed_center.x, _release_y) - global_position
 	_draw_marker(marker_pos)
 
 
-## Draw the HORIZONTAL_RELEASE state: dimmed ellipse + ghost preview + locked V band + H band + intersection + marker.
+## Draw the HORIZONTAL_RELEASE state: dimmed crosshair (H arm at locked Y) + ghost preview + marker.
 func _draw_horizontal_release() -> void:
 	var center: Vector2 = _placed_center - global_position
+	var locked_y_local: float = _locked_release_y - global_position.y
+	var h_arm_center: Vector2 = Vector2(center.x, locked_y_local)
 	var pulse: Dictionary = _get_pulse_values()
 
-	# Aim ellipse
+	# Aim crosshair — V arm at center, H arm at locked Y with shortened width
+	var dimmed_w: float = maxf(aim_crosshair_thickness * 0.75, 1.0)
 	if _tutorial_visual_boost:
-		var aim_fill_a: float = 0.2
 		var aim_outline_a: float = 0.5
-		var aim_outline_w: float = 2.0
-		if _tutorial_pulse_target == "aim_ellipse":
-			aim_fill_a = 0.25
+		var aim_outline_w: float = aim_crosshair_thickness + 1.0
+		if _tutorial_pulse_target == "aim_crosshair":
 			aim_outline_a = pulse["alpha"]
-			aim_outline_w = pulse["width"]
-		_draw_filled_ellipse(center, _aim_half_width, _aim_half_height, Color(aim_line_color.r, aim_line_color.g, aim_line_color.b, aim_fill_a))
-		_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, aim_outline_a), aim_outline_w)
+			aim_outline_w = pulse["width"] + 1.0
+		var aim_color: Color = Color(aim_line_color, aim_outline_a)
+		draw_line(center + Vector2(0.0, -_aim_half_height), center + Vector2(0.0, _aim_half_height), aim_color, aim_outline_w)
+		draw_line(h_arm_center + Vector2(-_aim_half_width, 0.0), h_arm_center + Vector2(_aim_half_width, 0.0), aim_color, aim_outline_w)
 	else:
-		_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
+		var aim_color: Color = aim_dimmed_color
+		draw_line(center + Vector2(0.0, -_aim_half_height), center + Vector2(0.0, _aim_half_height), aim_color, dimmed_w)
+		draw_line(h_arm_center + Vector2(-_aim_half_width, 0.0), h_arm_center + Vector2(_aim_half_width, 0.0), aim_color, dimmed_w)
+		var tick: float = 3.0
+		for y_sign: float in [-1.0, 1.0]:
+			var tip: Vector2 = center + Vector2(0.0, y_sign * _aim_half_height)
+			draw_line(tip + Vector2(-tick, 0.0), tip + Vector2(tick, 0.0), aim_color, dimmed_w)
+		for x_sign: float in [-1.0, 1.0]:
+			var tip: Vector2 = h_arm_center + Vector2(x_sign * _aim_half_width, 0.0)
+			draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), aim_color, dimmed_w)
 
 	# Ghost accuracy preview at current marker position
 	var preview_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y)
@@ -790,38 +820,23 @@ func _draw_horizontal_release() -> void:
 	_draw_ellipse_outline(ghost_local, ghost_h_half, ghost_v_half,
 		Color(ghost_color.r, ghost_color.g, ghost_color.b, outline_alpha), outline_width)
 
-	# Locked vertical accuracy band (dimmed, from V release)
-	var v_half: float = _get_vertical_accuracy_half()
-	var v_y_min: float = _locked_release_y - global_position.y - v_half
-	var v_y_max: float = _locked_release_y - global_position.y + v_half
-	_draw_h_band_clipped(center, _aim_half_width, _aim_half_height, v_y_min, v_y_max, Color(vertical_glow_color, vertical_glow_color.a * 0.5))
-
-	# Horizontal accuracy glow band clipped to ellipse
-	var h_half: float = _get_horizontal_accuracy_half()
-	var h_x_min: float = _horizontal_x - global_position.x - h_half
-	var h_x_max: float = _horizontal_x - global_position.x + h_half
-	_draw_v_band_clipped(center, _aim_half_width, _aim_half_height, h_x_min, h_x_max, horizontal_glow_color)
-
-	# Intersection region highlighted
-	_draw_band_intersection(center, _aim_half_width, _aim_half_height, v_y_min, v_y_max, h_x_min, h_x_max, resolve_preview_color)
-
-	# Bouncing marker dot at intersection with locked Y
+	# Bouncing marker dot at locked Y
 	var marker_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y) - global_position
 	_draw_marker(marker_pos)
 
 
 # ── Tutorial scripting API ──────────────────────────────────────────────────
 
-## Enable or disable tutorial visual boost. When active, the aim ellipse is drawn
-## filled (not just a dim outline) and the accuracy zone preview is more opaque,
-## making zone colors clearly readable during the tutorial walkthrough.
+## Enable or disable tutorial visual boost. When active, the aim crosshair is drawn
+## thicker and the accuracy zone preview is more opaque, making zone colors clearly
+## readable during the tutorial walkthrough.
 func set_tutorial_visual_boost(enabled: bool) -> void:
 	_tutorial_visual_boost = enabled
 	queue_redraw()
 
 
 ## Set which element's border should pulse. Pass "" to stop pulsing.
-## Valid targets: "aim_ellipse", "accuracy_zone", "vertical_band", "marker".
+## Valid targets: "aim_crosshair", "accuracy_zone", "vertical_band", "marker".
 func set_tutorial_pulse_target(target: String) -> void:
 	_tutorial_pulse_target = target
 	_tutorial_pulse_time = 0.0
@@ -849,16 +864,14 @@ func set_input_blocked(blocked: bool) -> void:
 	_input_blocked = blocked
 
 
-## Recompute the cached aim ellipse dimensions and all dependent values from
+## Recompute the cached aim crosshair dimensions and all dependent values from
 ## the current range stats. Called by the tutorial Range slider demo so the
-## ellipse, marker position, and meter range all update live.
+## crosshair, marker position, and meter range all update live.
 func recompute_aim_dimensions() -> void:
 	_aim_half_width = _get_aim_half_width()
 	_aim_half_height = _get_aim_half_height()
-	# Recompute marker Y so it stays proportional within the new ellipse height
 	_release_y = _placed_center.y + sin(_bounce_t) * _aim_half_height
-	# Recompute H meter width at the current locked Y (ellipse width depends on height)
-	_h_meter_half_width = _get_ellipse_half_width_at_y(_locked_release_y)
+	_h_meter_half_width = _aim_half_width
 	_horizontal_x = _placed_center.x + sin(_horizontal_bounce_t) * _h_meter_half_width
 	queue_redraw()
 
@@ -884,7 +897,7 @@ func set_horizontal_bounce_t(value: float) -> void:
 
 
 ## Programmatically lock the AIM stage at a given position with a declared target.
-## Bypasses player input. Used by tutorial to auto-place the aim ellipse.
+## Bypasses player input. Used by tutorial to auto-place the aim crosshair.
 func force_lock_aim(global_pos: Vector2, target: Dictionary) -> void:
 	_aim_center = global_pos
 	_placed_center = global_pos
@@ -928,7 +941,7 @@ func force_lock_horizontal(t: float) -> void:
 ## Returns the screen-space X positions where the green, orange, and red zones
 ## begin and end on the H meter. Used by tutorial freeze beats and zone band drawing.
 func get_zone_boundary_h_positions(locked_y: float) -> Dictionary:
-	var h_half: float = _get_ellipse_half_width_at_y(locked_y)
+	var h_half: float = _aim_half_width
 	if h_half <= 0.0:
 		return {"green_min": _placed_center.x, "green_max": _placed_center.x,
 				"orange_max": _placed_center.x, "red_max": _placed_center.x}
@@ -1012,12 +1025,24 @@ func sample_scatter_points(locked_release_pos: Vector2, sample_count: int = 10, 
 	return points
 
 
-## Draw the RESOLVING state: dimmed ellipse + accuracy-scaled ellipse with color feedback + frozen marker.
+## Draw the RESOLVING state: dimmed crosshair + accuracy-scaled ellipse with color feedback + frozen marker.
 func _draw_resolving() -> void:
 	var center: Vector2 = _placed_center - global_position
 
-	# Dimmed placed ellipse outline
-	_draw_ellipse_outline(center, _aim_half_width, _aim_half_height, Color(aim_line_color, 0.2), 1.5)
+	# Dimmed crosshair — V arm at center, H arm at locked Y
+	var dimmed_w: float = maxf(aim_crosshair_thickness * 0.75, 1.0)
+	var locked_y_local: float = _locked_release_y - global_position.y
+	var h_arm_center: Vector2 = Vector2(center.x, locked_y_local)
+	var aim_color: Color = aim_dimmed_color
+	draw_line(center + Vector2(0.0, -_aim_half_height), center + Vector2(0.0, _aim_half_height), aim_color, dimmed_w)
+	draw_line(h_arm_center + Vector2(-_aim_half_width, 0.0), h_arm_center + Vector2(_aim_half_width, 0.0), aim_color, dimmed_w)
+	var tick: float = 3.0
+	for y_sign: float in [-1.0, 1.0]:
+		var tip: Vector2 = center + Vector2(0.0, y_sign * _aim_half_height)
+		draw_line(tip + Vector2(-tick, 0.0), tip + Vector2(tick, 0.0), aim_color, dimmed_w)
+	for x_sign: float in [-1.0, 1.0]:
+		var tip: Vector2 = h_arm_center + Vector2(x_sign * _aim_half_width, 0.0)
+		draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), aim_color, dimmed_w)
 
 	# Accuracy ellipse at the locked point with skew offset, scaled by target distance
 	var dist: float = _get_target_distance_normalized()

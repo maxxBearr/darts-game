@@ -18,7 +18,8 @@
       "Bash(grep -E \"\\\\.\\(gd|tscn|gdshader\\)$\")",
       "Bash(Select-Object FullName)",
       "Bash(Select-Object -ExpandProperty FullName)",
-      "Bash(findstr *)"
+      "Bash(findstr *)",
+      "Bash(grep -E \"\\\\.gd$\")"
     ]
   }
 }

@@ -142,8 +142,8 @@ const SLOT_COLORS: Dictionary = {
 }
 
 const STAT_DESCRIPTIONS: Dictionary = {
-	"horizontal_range": "Shrinks the aim ellipse horizontally. Also reduces the distance the horizontal marker travels, making it easier to time.",
-	"vertical_range": "Shrinks the aim ellipse vertically. Also reduces the distance the vertical marker travels, making it easier to time.",
+	"horizontal_range": "Shrinks the aim crosshair horizontally. Also reduces the distance the horizontal marker travels, making it easier to time.",
+	"vertical_range": "Shrinks the aim crosshair vertically. Also reduces the distance the vertical marker travels, making it easier to time.",
 	"horizontal_speed": "Slows the horizontal release marker. Higher = easier to time your click.",
 	"vertical_speed": "Slows the vertical release marker. Higher = easier to time your click.",
 	"horizontal_accuracy": "Tightens horizontal dart landing variance. Higher = dart lands closer to where you clicked.",
@@ -1036,36 +1036,34 @@ func _draw_zone_preview() -> void:
 	var v_glow: Color = throw_mechanic.vertical_glow_color if throw_mechanic else Color(1.0, 0.3, 0.3, 0.15)
 	var h_glow: Color = throw_mechanic.horizontal_glow_color if throw_mechanic else Color(0.3, 0.5, 1.0, 0.15)
 
-	## Aim ellipse (outer)
+	## Aim crosshair (outer)
 	var aim_outline_color: Color = Color(aim_base.r, aim_base.g, aim_base.b, minf(aim_base.a + 0.3, 1.0))
-	_draw_preview_ellipse_filled(center, aim_half_w, aim_half_h, aim_base)
-	_draw_preview_ellipse_outline(center, aim_half_w, aim_half_h, aim_outline_color)
+	_zone_preview.draw_line(center + Vector2(-aim_half_w, 0.0), center + Vector2(aim_half_w, 0.0), aim_outline_color, 1.5)
+	_zone_preview.draw_line(center + Vector2(0.0, -aim_half_h), center + Vector2(0.0, aim_half_h), aim_outline_color, 1.5)
+	var tick: float = 3.0
+	for x_sign: float in [-1.0, 1.0]:
+		var tip: Vector2 = center + Vector2(x_sign * aim_half_w, 0.0)
+		_zone_preview.draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), aim_outline_color, 1.0)
+	for y_sign: float in [-1.0, 1.0]:
+		var tip: Vector2 = center + Vector2(0.0, y_sign * aim_half_h)
+		_zone_preview.draw_line(tip + Vector2(-tick, 0.0), tip + Vector2(tick, 0.0), aim_outline_color, 1.0)
 
 	## Accuracy ellipse (inner)
 	var acc_outline_color: Color = Color(acc_base.r, acc_base.g, acc_base.b, minf(acc_base.a + 0.3, 1.0))
 	_draw_preview_ellipse_filled(center, acc_half_w, acc_half_h, acc_base)
 	_draw_preview_ellipse_outline(center, acc_half_w, acc_half_h, acc_outline_color)
 
-	## V speed line — horizontal line bouncing up and down, clipped to aim ellipse
+	## V speed line — horizontal line bouncing up and down along crosshair
 	var v_offset: float = sin(_v_bounce_t) * aim_half_h
 	var v_line_y: float = center.y + v_offset
-	var v_dy: float = v_offset / aim_half_h if aim_half_h > 0.0 else 0.0
-	var v_x_extent: float = aim_half_w * sqrt(maxf(1.0 - v_dy * v_dy, 0.0))
 	var v_line_color: Color = Color(v_glow.r, v_glow.g, v_glow.b, 0.7)
-	_zone_preview.draw_line(Vector2(center.x - v_x_extent, v_line_y), Vector2(center.x + v_x_extent, v_line_y), v_line_color, 1.5)
+	_zone_preview.draw_line(Vector2(center.x - aim_half_w, v_line_y), Vector2(center.x + aim_half_w, v_line_y), v_line_color, 1.5)
 
-	## H speed line — vertical line bouncing left and right, clipped to aim ellipse
+	## H speed line — vertical line bouncing left and right along crosshair
 	var h_offset: float = sin(_h_bounce_t) * aim_half_w
 	var h_line_x: float = center.x + h_offset
-	var h_dx: float = h_offset / aim_half_w if aim_half_w > 0.0 else 0.0
-	var h_y_extent: float = aim_half_h * sqrt(maxf(1.0 - h_dx * h_dx, 0.0))
 	var h_line_color: Color = Color(h_glow.r, h_glow.g, h_glow.b, 0.7)
-	_zone_preview.draw_line(Vector2(h_line_x, center.y - h_y_extent), Vector2(h_line_x, center.y + h_y_extent), h_line_color, 1.5)
-
-	## Crosshair at center
-	var cross_color: Color = Color(1.0, 1.0, 1.0, 0.4)
-	_zone_preview.draw_line(center + Vector2(-5.0, 0.0), center + Vector2(5.0, 0.0), cross_color, 1.0)
-	_zone_preview.draw_line(center + Vector2(0.0, -5.0), center + Vector2(0.0, 5.0), cross_color, 1.0)
+	_zone_preview.draw_line(Vector2(h_line_x, center.y - aim_half_h), Vector2(h_line_x, center.y + aim_half_h), h_line_color, 1.5)
 
 	## Labels
 	var aim_label_pos: Vector2 = center + Vector2(aim_half_w + 4.0, -8.0)
