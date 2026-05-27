@@ -460,9 +460,12 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	else:
 		AuidoManager.play_dart_thunk()
 
-	# Floating score number
+	# Process through X01 game logic early so the score animation knows if this is a winning dart
+	var response: Dictionary = x01_game.process_throw(result)
+
+	# Floating score number (gold if winning dart)
 	var recession_data: Dictionary = boss_manager.get_recession_data(hit_wedge)
-	var score_tween: Tween = _spawn_floating_score(hit_position, result, recession_data)
+	var score_tween: Tween = _spawn_floating_score(hit_position, result, recession_data, response["is_leg_won"])
 
 	# Flash the hit segment for visual feedback
 	dartboard.flash_segment(hit_position)
@@ -485,9 +488,6 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	else:
 		var face_value: int = result["face_value"]
 		hud.show_instruction("Hit: %s %d" % [ring_name, face_value])
-
-	# Process through X01 game logic (uses modified score)
-	var response: Dictionary = x01_game.process_throw(result)
 
 	# Accumulate turn score
 	_turn_score += result["total_score"]
@@ -513,8 +513,11 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			else:
 				_show_game_over(response["current_leg"])
 		else:
-			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
+			if score_tween != null and score_tween.is_valid():
+				score_tween.tween_callback(func() -> void: hud.next_turn_button.visible = true)
+			else:
+				hud.next_turn_button.visible = true
 	elif response["is_leg_won"]:
 		_run_total_darts += x01_game.darts_used_in_leg
 		# Leg complete — show golden 0, clear checkout highlights and helper
@@ -539,8 +542,11 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 			else:
 				_show_game_over(response["current_leg"])
 		else:
-			hud.next_turn_button.visible = true
 			_awaiting_next_turn = true
+			if score_tween != null and score_tween.is_valid():
+				score_tween.tween_callback(func() -> void: hud.next_turn_button.visible = true)
+			else:
+				hud.next_turn_button.visible = true
 	else:
 		# Darts remaining this turn — auto-advance after score animation + delay
 		_awaiting_next_dart = true
@@ -598,7 +604,7 @@ func _notify_leg_won(result: Dictionary, response: Dictionary) -> void:
 
 ## Show the "LEG WON!" banner, then transition to upgrades after it finishes.
 func _show_leg_won_banner(response: Dictionary) -> void:
-	AuidoManager.play_leg_win()
+	AuidoManager.play_leg_win(1.15)
 	AuidoManager.on_leg_won()
 	var banner_tween: Tween = hud.show_leg_won_banner()
 	banner_tween.tween_callback(_show_leg_upgrades.bind(response))
@@ -684,6 +690,7 @@ func _auto_next_dart() -> void:
 
 ## Player presses "Next Turn" — advance to next turn after bust or using all darts.
 func _on_next_turn() -> void:
+	AuidoManager.play_ui_click()
 	_awaiting_next_turn = false
 	_turn_score = 0
 	_turn_darts_scored = 0
@@ -709,6 +716,7 @@ func _on_next_turn() -> void:
 
 ## Player presses "Next Leg" — advance to next leg, enter shop, or leave shop.
 func _on_next_leg() -> void:
+	AuidoManager.play_ui_click()
 	if _leg_phase == "shop_enter":
 		var response: Dictionary = {
 			"current_leg": x01_game.current_leg,
@@ -2099,7 +2107,7 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 			hud.show_picker_prompt("Swap %d and %d? Click to confirm, Escape to cancel" % [val1, val2])
 
 
-func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}) -> Tween:
+func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
 	var score: int = result["total_score"]
 	if score == 0:
 		return null
@@ -2111,12 +2119,12 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_
 			multiplier_mods.append(mod)
 
 	if multiplier_mods.is_empty():
-		return _spawn_simple_floating_score(hit_position, result, recession_data)
+		return _spawn_simple_floating_score(hit_position, result, recession_data, is_leg_won)
 	else:
-		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data)
+		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data, is_leg_won)
 
 
-func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}) -> Tween:
+func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
 	var has_recession: bool = not recession_data.is_empty()
 	var actual_score: int = result["total_score"]
 	var display_score: int = actual_score
@@ -2130,6 +2138,10 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, rec
 	var label: Label = _create_score_label(display_score, hit_position, result)
 	label.pivot_offset = label.size / 2.0
 	add_child(label)
+
+	if is_leg_won:
+		label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+		AuidoManager.play_leg_win()
 
 	if has_recession:
 		var percent_text: String = "-%d%%" % int(recession_data["percent"] * 100)
@@ -2173,7 +2185,7 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, rec
 	return tween
 
 
-func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary], recession_data: Dictionary = {}) -> Tween:
+func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary], recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
 	var has_recession: bool = not recession_data.is_empty()
 	var face_value: int = result["face_value"]
 	var display_face: int = face_value
@@ -2226,6 +2238,12 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
 		if i < num_triggers - 1:
 			tween.tween_interval(0.1)
+
+	if is_leg_won:
+		tween.tween_callback(func() -> void:
+			main_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+			AuidoManager.play_leg_win()
+		)
 
 	if has_recession:
 		var actual_score: int = result["total_score"]

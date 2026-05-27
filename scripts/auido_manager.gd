@@ -56,7 +56,8 @@ func play_ui_click() -> void:
 	ui_click.play()
 
 
-func play_leg_win() -> void:
+func play_leg_win(pitch: float = 1.0) -> void:
+	leg_win_sound.pitch_scale = pitch
 	leg_win_sound.play()
 
 
