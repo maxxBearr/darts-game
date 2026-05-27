@@ -1,15 +1,21 @@
 [gd_scene format=3 uid="uid://da8fhdrthfrse"]
 
 [ext_resource type="Script" uid="uid://cmbf6t5pl1j4h" path="res://scripts/auido_manager.gd" id="1_br6uc"]
-[ext_resource type="AudioStream" uid="uid://bpm07kpn761hv" path="res://sounds/dart_hit1.mp3" id="2_xrkb2"]
+[ext_resource type="AudioStream" uid="uid://3njwlhd3wlkx" path="res://sounds/3dartsounds.wav" id="2_ilfjs"]
 [ext_resource type="AudioStream" uid="uid://7oh7pmay1mn6" path="res://sounds/dart_hit2.mp3" id="3_46k76"]
 [ext_resource type="AudioStream" uid="uid://cbst0vmvcf6tl" path="res://sounds/bonus_score_sound_effect.mp3" id="4_2jm2t"]
+[ext_resource type="AudioStream" uid="uid://df0gcgt2n43g1" path="res://sounds/ui_click.wav" id="5_ilfjs"]
+[ext_resource type="AudioStream" uid="uid://c5p8lgistwbqr" path="res://sounds/dart_missed_board.wav" id="6_ilfjs"]
+[ext_resource type="AudioStream" uid="uid://ljd7sau81t6n" path="res://sounds/leg_won_sound.wav" id="7_khg3p"]
+[ext_resource type="AudioStream" uid="uid://brb8oa505ngdu" path="res://sounds/Loop-Menu.wav" id="9_khg3p"]
+[ext_resource type="AudioStream" uid="uid://bhhk5muccjb0j" path="res://sounds/game_over.wav" id="9_w0x6a"]
+[ext_resource type="AudioStream" uid="uid://dtuwatnv5nrcx" path="res://sounds/backroundmusic1.mp3" id="10_2gc06"]
 
 [node name="AuidoManager" type="Node" unique_id=993361023]
 script = ExtResource("1_br6uc")
 
 [node name="DartThunk1" type="AudioStreamPlayer" parent="." unique_id=718304847]
-stream = ExtResource("2_xrkb2")
+stream = ExtResource("2_ilfjs")
 
 [node name="DartThunk2" type="AudioStreamPlayer" parent="." unique_id=13366770]
 stream = ExtResource("3_46k76")
@@ -17,3 +23,23 @@ stream = ExtResource("3_46k76")
 [node name="BonusScore" type="AudioStreamPlayer" parent="." unique_id=201550028]
 stream = ExtResource("4_2jm2t")
 pitch_scale = 0.9
+
+[node name="UIclick" type="AudioStreamPlayer" parent="." unique_id=787787212]
+stream = ExtResource("5_ilfjs")
+pitch_scale = 0.85
+
+[node name="hit_void_thunk" type="AudioStreamPlayer" parent="." unique_id=426206565]
+stream = ExtResource("6_ilfjs")
+
+[node name="leg_win_sound" type="AudioStreamPlayer" parent="." unique_id=1535283951]
+stream = ExtResource("7_khg3p")
+
+[node name="leg_lost_sound" type="AudioStreamPlayer" parent="." unique_id=986192137]
+stream = ExtResource("9_w0x6a")
+
+[node name="MenuMusic" type="AudioStreamPlayer" parent="." unique_id=1583877339]
+stream = ExtResource("9_khg3p")
+
+[node name="GameMusic" type="AudioStreamPlayer" parent="." unique_id=2141101009]
+stream = ExtResource("10_2gc06")
+volume_db = -13.0

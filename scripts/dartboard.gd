@@ -17,11 +17,15 @@ const WEDGE_ORDER: Array[int] = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 1
 const WEDGE_ANGLE_DEG: float = 18.0
 const WEDGE_OFFSET_DEG: float = -9.0
 
+@export_group("Board Layout")
+
 ## Board pixel radius — determines overall size of the dartboard on screen.
 @export var board_radius: float = 300.0
 
 ## Number of arc points per segment edge for smooth curves.
 @export var arc_points: int = 10
+
+@export_group("Wedge Colors")
 
 ## Color for even-index wedge single areas (black on a traditional board).
 @export var wedge_a_single: Color = Color(0.1, 0.1, 0.1)
@@ -41,6 +45,8 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## Double bull (inner bullseye) color.
 @export var bull_double_color: Color = Color(0.8, 0.1, 0.1)
 
+@export_group("Wire & Surround")
+
 ## Wire/border line color between segments.
 @export var wire_color: Color = Color(0.7, 0.7, 0.7)
 
@@ -52,6 +58,8 @@ const WEDGE_OFFSET_DEG: float = -9.0
 
 ## Surround ring outer radius multiplier (relative to board_radius).
 @export var surround_outer_multiplier: float = 1.15
+
+@export_group("Numbers")
 
 ## Font size for the wedge numbers displayed around the board.
 ## Adjust based on board_radius — 20 works well for a 300px radius board.
@@ -67,6 +75,8 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## Color for wedge numbers reduced by a boss (e.g., Recession, Void).
 @export var boss_reduced_number_color: Color = Color(1.0, 0.25, 0.2)
 
+@export_group("Hover Highlight")
+
 ## Color overlaid on the hovered board segment for highlighting.
 @export var hover_highlight_color: Color = Color(1.0, 1.0, 1.0, 0.15)
 
@@ -75,6 +85,8 @@ const WEDGE_OFFSET_DEG: float = -9.0
 
 ## Border thickness for the hovered segment outline in pixels.
 @export var hover_border_thickness: float = 2.0
+
+@export_group("Checkout Pulse")
 
 ## Color of the checkout pulse glow on valid finishing doubles.
 @export var checkout_pulse_color: Color = Color(1.0, 0.85, 0.2, 0.8)
@@ -95,6 +107,8 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## the numbers are drawn. Should be between RING_DOUBLE_OUTER (0.83) and
 ## surround_outer_multiplier (1.15). Default 0.93 centers them in the surround.
 @export var number_radius_multiplier: float = 0.93
+
+@export_group("Segment Flash")
 
 ## Color of the segment flash overlay on dart landing (white = bright flash).
 @export var flash_color: Color = Color(1.0, 1.0, 1.0, 0.6)
@@ -146,6 +160,8 @@ var declared_target: Dictionary = {}
 var picker_mode: bool = false
 var _picker_hover_wedge: int = -1
 var _picker_selected_wedges: Array[int] = []
+
+@export_group("Target & Picker")
 
 ## Color of the target segment highlight (shown during throw after placement).
 @export var target_highlight_color: Color = Color(1.0, 0.85, 0.2, 0.12)
@@ -229,6 +245,9 @@ var _shop_overlay: Node2D
 ## Child node for boss visual overlays (voids, etc.).
 var _boss_overlay: Node2D
 
+## Child node for recession damage overlay (separate shader from voids).
+var _recession_overlay: Node2D
+
 ## Wedge indices currently voided by a boss (drawn as dark segments).
 var _boss_void_wedges: Array[int] = []
 
@@ -238,20 +257,25 @@ var _boss_void_wedges_prev: Array[int] = []
 ## Transition progress for void overlay (0 = old state, 1 = new state).
 var _void_transition_t: float = 1.0
 
-## Duration of the void transition animation.
-@export var void_transition_duration: float = 0.3
-
 ## Wedge indices with boss-reduced values (shown in red instead of green).
 var boss_reduced_wedges: Array[int] = []
 
-## Duration for color transition animations (Prism boss).
-@export var color_transition_duration: float = 0.35
+## Wedge indices affected by recession boss (drawn with scuff/damage overlay).
+var _boss_recession_wedges: Array[int] = []
 
 ## Progress of a color transition tween (0 = old, 1 = new). 1.0 = no transition.
 var _color_transition_t: float = 1.0
 
 ## Previous wedge colors for blending during transition.
 var _prev_wedge_colors: Array[Dictionary] = []
+
+@export_group("Void Overlay")
+
+## Duration of the void transition animation.
+@export var void_transition_duration: float = 0.3
+
+## Duration for color transition animations (Prism boss).
+@export var color_transition_duration: float = 0.35
 
 ## Color used to draw voided wedge segments (base color under the swirl shader).
 @export var void_fill_color: Color = Color(0.05, 0.02, 0.1, 0.88)
@@ -277,6 +301,25 @@ var _prev_wedge_colors: Array[Dictionary] = []
 ## Glow strength for void swirl highlights.
 @export var void_glow_strength: float = 0.5
 
+@export_group("Recession Overlay")
+
+## Base color of the recession damage overlay polygons (fed to the recession shader).
+@export var recession_overlay_color: Color = Color(0.15, 0.05, 0.05, 0.35)
+
+## Drift speed of the recession scuff pattern.
+@export_range(0.0, 0.5, 0.01) var recession_noise_speed: float = 0.1
+
+## Noise frequency — higher values give finer grit.
+@export_range(5.0, 40.0, 0.5) var recession_noise_scale: float = 20.0
+
+## How pronounced the dark scuff patches are.
+@export_range(0.0, 1.0, 0.05) var recession_roughness: float = 0.65
+
+## Overall darkening strength of the recession effect.
+@export_range(0.0, 1.0, 0.05) var recession_intensity: float = 0.5
+
+@export_group("")
+
 
 func _ready() -> void:
 	_shop_overlay = Node2D.new()
@@ -301,6 +344,19 @@ func _ready() -> void:
 	boss_mat.set_shader_parameter("glow_strength", void_glow_strength)
 	_boss_overlay.material = boss_mat
 	add_child(_boss_overlay)
+
+	_recession_overlay = Node2D.new()
+	_recession_overlay.draw.connect(_draw_recession_overlay_cb)
+	var recession_shader: Shader = load("res://shaders/recession_overlay.gdshader")
+	var recession_mat: ShaderMaterial = ShaderMaterial.new()
+	recession_mat.shader = recession_shader
+	recession_mat.set_shader_parameter("board_radius", board_radius)
+	recession_mat.set_shader_parameter("speed", recession_noise_speed)
+	recession_mat.set_shader_parameter("noise_scale", recession_noise_scale)
+	recession_mat.set_shader_parameter("roughness", recession_roughness)
+	recession_mat.set_shader_parameter("intensity", recession_intensity)
+	_recession_overlay.material = recession_mat
+	add_child(_recession_overlay)
 
 
 func _draw() -> void:
@@ -1156,7 +1212,9 @@ func clear_boss_overlays() -> void:
 	_color_transition_t = 1.0
 	_prev_wedge_colors.clear()
 	boss_reduced_wedges.clear()
+	_boss_recession_wedges.clear()
 	_boss_overlay.queue_redraw()
+	_recession_overlay.queue_redraw()
 	board_rotation_offset = 0.0
 	double_ring_width_scale = 1.0
 
@@ -1238,6 +1296,24 @@ func _draw_void_wedge(wedge_idx: int, alpha: float) -> void:
 
 		var border_pts: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
 		_boss_overlay.draw_polyline(border_pts, border, void_border_thickness)
+
+
+## Set the wedge indices affected by the Recession boss (scuff/damage overlay).
+func set_boss_recession_wedges(wedges: Array[int]) -> void:
+	_boss_recession_wedges = wedges
+	_recession_overlay.queue_redraw()
+	queue_redraw()
+
+
+## Draw callback for the recession shader overlay node.
+func _draw_recession_overlay_cb() -> void:
+	for wedge_idx: int in _boss_recession_wedges:
+		var start_deg: float = _wedge_start_deg(wedge_idx)
+		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+		for ring_name: String in RING_BOUNDS:
+			var bounds: Array = RING_BOUNDS[ring_name]
+			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, bounds[1], bounds[0])
+			_recession_overlay.draw_colored_polygon(points, recession_overlay_color)
 
 
 ## Build a segment polygon (same geometry as _draw_segment but returns points).

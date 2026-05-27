@@ -1,7 +1,7 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://cbmqhqnoxn472"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/recession_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://qsl1n7rlu7bu" path="res://scripts/bosses/recession_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +9,7 @@ boss_id = &"recession_easy"
 display_name = "Recession"
 description = "One color's values reduced by 25% for the leg."
 boss_script = ExtResource("2")
-tuning = {"reduction_percent": 0.25}
-difficulty_tier = &"easy"
+tuning = {
+"reduction_percent": 0.25
+}
+background_tint = Color(0.25087476, 0.14190301, 0.053828552, 0.9647059)

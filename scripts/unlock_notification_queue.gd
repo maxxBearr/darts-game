@@ -61,6 +61,7 @@ func _build_panel() -> void:
 	hbox.add_child(vbox)
 
 	_icon = TextureRect.new()
+	_icon.custom_minimum_size = Vector2(48.0, 48.0)
 	_icon.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
 	_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_icon.size_flags_horizontal = Control.SIZE_SHRINK_END
@@ -81,7 +82,7 @@ func _build_panel() -> void:
 	_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_name_label)
 
-	var viewport_w: float = 1280.0
+	var viewport_w: float = get_viewport().get_visible_rect().size.x
 	_panel.position = Vector2(viewport_w, screen_margin.y)
 	_panel.visible = false
 	add_child(_panel)
@@ -108,7 +109,7 @@ func _show_next() -> void:
 	else:
 		_icon.visible = false
 
-	var viewport_w: float = 1280.0
+	var viewport_w: float = get_viewport().get_visible_rect().size.x
 	var on_x: float = viewport_w - panel_size.x - screen_margin.x
 	var off_x: float = viewport_w
 

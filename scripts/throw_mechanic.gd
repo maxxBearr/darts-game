@@ -8,6 +8,8 @@ signal state_changed(new_state: ThrowState)
 
 enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING, DONE }
 
+@export_group("Aim Range")
+
 ## Controls horizontal range of the aim ellipse. Higher = tighter range.
 ## 1 = worst (half-width equals max_aim_half_width).
 ## 100 = best (half-width equals min_aim_half_width).
@@ -31,6 +33,8 @@ enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING,
 
 ## Minimum aim ellipse half-height in pixels (at vertical_range = 100). The tightest possible vertical spread.
 @export var min_aim_half_height: float = 5.0
+
+@export_group("Speed & Accuracy")
 
 ## Controls vertical marker bounce speed. Higher = slower = easier to time.
 ## Range ~1.0 (hard) to 5.0 (easy).
@@ -66,6 +70,8 @@ enum ThrowState { IDLE, AIMING, VERTICAL_RELEASE, HORIZONTAL_RELEASE, RESOLVING,
 ## Vertical accuracy skew in pixels. Set by DartBuild based on balance.
 ## Positive = dart lands lower, Negative = dart lands higher.
 var accuracy_skew_v: float = 0.0
+
+@export_group("Throw Visual")
 
 ## Semi-transparent color of the aim ellipse fill.
 @export var aim_line_color: Color = Color(0.2, 0.5, 1.0, 0.3)
@@ -103,6 +109,8 @@ var accuracy_skew_v: float = 0.0
 ## At 0.4, roughly 95% of throws land in the inner 80% of the accuracy ellipse.
 @export_range(0.2, 0.6, 0.01) var gaussian_spread: float = 0.4
 
+@export_group("Accuracy Zones")
+
 ## Reference radius for accuracy zone distance normalization (in pixels).
 ## Distance from the target centroid is divided by this value to get the
 ## normalized distance. Uses absolute pixel distance — independent of ellipse
@@ -135,6 +143,8 @@ var accuracy_skew_v: float = 0.0
 
 ## Color of the accuracy zone when in the red (penalty) zone.
 @export var accuracy_red_color: Color = Color(0.9, 0.2, 0.15, 0.25)
+
+@export_group("Debug")
 
 ## When true, shows ghost-dart scatter preview during the RESOLVING stage.
 @export var live_scatter_preview: bool = false
@@ -170,6 +180,8 @@ var _tutorial_pulse_target: String = ""
 
 # Pulse animation timer (incremented in _process when a pulse target is active).
 var _tutorial_pulse_time: float = 0.0
+
+@export_group("Tutorial Pulse")
 
 ## Speed of the tutorial pulse animation.
 @export var tutorial_pulse_speed: float = 3.5

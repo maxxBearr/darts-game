@@ -8,6 +8,7 @@ signal new_run_pressed
 signal upgrade_selected(index: int)
 signal modifier_selected(index: int)
 signal modifier_toggled
+signal modifier_skipped
 signal reward_selected(index: int)
 
 @onready var score_label: Label = $ScoreLabel
@@ -31,8 +32,12 @@ signal reward_selected(index: int)
 @onready var modifier_tooltip: Label = $ModifierTooltip
 @onready var modifier_panel: HBoxContainer = $ModifierPanel
 
+@export_group("Modifier Panel")
+
 ## Size of each modifier square in the relic bar (pixels).
 @export var modifier_square_size: int = 40
+
+@export_group("Tooltips")
 
 ## Vertical offset above the crosshair for the hover tooltip (pixels).
 @export var hover_tooltip_offset_y: float = 50.0
@@ -42,6 +47,8 @@ signal reward_selected(index: int)
 
 ## Duration of the perk-up lift/drop animation in seconds.
 @export var perkup_anim_duration: float = 0.15
+
+@export_group("Upgrade Cards")
 
 ## Background opacity of upgrade/modifier pick buttons (0 = transparent, 1 = solid).
 @export_range(0.0, 1.0, 0.05) var upgrade_button_opacity: float = 0.85
@@ -76,8 +83,6 @@ signal reward_selected(index: int)
 
 ## Title shown above the streak section when at least one streak is owned.
 @export var streak_section_title_text: String = "— Streaks —"
-
-@export_group("Checkout Helper")
 
 ## Hint text shown when modifiers can be toggled.
 @export var checkout_toggle_hint: String = "Try toggling a modifier to recalculate"
@@ -118,6 +123,8 @@ const BAR_MAX_WIDTH: float = 120.0
 const BAR_HEIGHT: float = 12.0
 const STAT_MAX_VALUE: float = 100.0
 
+@export_group("Stat Panel")
+
 ## Width of stat name labels (shrink to pull labels closer to bars).
 @export var stat_label_width: float = 90.0
 
@@ -133,8 +140,10 @@ var _streak_title_label: Label = null
 ## Whether upgrade buttons are in modifier selection mode.
 var _modifier_mode: bool = false
 var _reward_mode: bool = false
+var _skip_modifier_button: Button = null
 var _boss_status_label: Label = null
 var _boss_bg_tint: ColorRect = null
+var _boss_bg_layer: CanvasLayer = null
 
 ## Current upgrades for hover preview (set during accuracy pick phase).
 var _preview_upgrades: Array[Dictionary] = []
@@ -180,6 +189,31 @@ func _ready() -> void:
 	_apply_upgrade_button_style(upgrade_button_1)
 	_apply_upgrade_button_style(upgrade_button_2)
 	_apply_upgrade_button_style(upgrade_button_3)
+
+	# Build skip modifier button (right of upgrade cards, independent of HBox layout)
+	_skip_modifier_button = Button.new()
+	_skip_modifier_button.name = "SkipModifierButton"
+	_skip_modifier_button.text = "Skip"
+	_skip_modifier_button.visible = false
+	_skip_modifier_button.custom_minimum_size = Vector2(100.0, 36.0)
+	_skip_modifier_button.anchor_left = 1.0
+	_skip_modifier_button.anchor_right = 1.0
+	_skip_modifier_button.anchor_top = 0.5
+	_skip_modifier_button.anchor_bottom = 0.5
+	_skip_modifier_button.offset_left = -130.0
+	_skip_modifier_button.offset_right = -10.0
+	_skip_modifier_button.offset_top = -18.0
+	_skip_modifier_button.offset_bottom = 18.0
+	_skip_modifier_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_apply_upgrade_button_style(_skip_modifier_button)
+	_skip_modifier_button.pressed.connect(func() -> void:
+		AuidoManager.play_ui_click()
+		_skip_modifier_button.visible = false
+		upgrade_container.visible = false
+		_modifier_mode = false
+		modifier_skipped.emit()
+	)
+	add_child(_skip_modifier_button)
 
 	# Start with all buttons and optional labels hidden
 	hide_all_buttons()
@@ -321,13 +355,14 @@ func show_boss_background_tint(tint: Color) -> void:
 			_boss_bg_tint.visible = false
 		return
 	if _boss_bg_tint == null:
+		_boss_bg_layer = CanvasLayer.new()
+		_boss_bg_layer.layer = -100
+		get_tree().root.add_child(_boss_bg_layer)
 		_boss_bg_tint = ColorRect.new()
 		_boss_bg_tint.name = "BossBgTint"
-		_boss_bg_tint.size = Vector2(1280.0, 720.0)
-		_boss_bg_tint.position = Vector2.ZERO
+		_boss_bg_tint.size = get_viewport().get_visible_rect().size
 		_boss_bg_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(_boss_bg_tint)
-		move_child(_boss_bg_tint, 0)
+		_boss_bg_layer.add_child(_boss_bg_tint)
 	_boss_bg_tint.color = tint
 	_boss_bg_tint.visible = true
 
@@ -465,6 +500,7 @@ func show_boss_announcement(boss_name: String, boss_description: String, title_c
 func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upgrades: Array[Dictionary]) -> void:
 	score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [leg, target, turns_used]
 	_preview_upgrades = upgrades
+	_skip_modifier_button.visible = false
 
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
 	for i: int in range(3):
@@ -1203,6 +1239,8 @@ func _update_modifier_square_visual(wrapper: Control) -> void:
 
 ## Handle upgrade button selection — hide cards, let main.gd decide what shows next.
 func _select_upgrade(index: int) -> void:
+	AuidoManager.play_ui_click()
+	_skip_modifier_button.visible = false
 	upgrade_container.visible = false
 	if _reward_mode:
 		_reward_mode = false
@@ -1245,6 +1283,7 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
 		buttons[i].tooltip_text = modifier.description
 		buttons[i].visible = true
+	_skip_modifier_button.visible = true
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 
@@ -1253,6 +1292,7 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 func show_reward_choices(rewards: Array[RuleModifierReward]) -> void:
 	_reward_mode = true
 	_modifier_mode = false
+	_skip_modifier_button.visible = false
 	_preview_upgrades.clear()
 	score_label.text = "Choose a boss reward!"
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
@@ -1352,6 +1392,7 @@ func show_shop_zero_darts() -> void:
 ## items is an Array[Dictionary] with {type: "modifier"|"upgrade", data: ...}.
 func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replacement_info: Array[String] = []) -> void:
 	_modifier_mode = true
+	_skip_modifier_button.visible = false
 	score_label.text = "You hit a spot! Pick one (%d dart%s left)" % [darts_remaining, "" if darts_remaining == 1 else "s"]
 
 	# Build preview data — upgrade dicts for accuracy items, empty for modifiers

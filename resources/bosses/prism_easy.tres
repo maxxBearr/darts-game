@@ -1,7 +1,7 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://ddk42n30lfafj"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/prism_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://dj8cvk1ufyqet" path="res://scripts/bosses/prism_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +9,7 @@ boss_id = &"prism_easy"
 display_name = "Prism"
 description = "Wedge colors reshuffle every 2 turns."
 boss_script = ExtResource("2")
-tuning = {"reshuffle_interval": 2}
-difficulty_tier = &"easy"
+tuning = {
+"reshuffle_interval": 2
+}
+background_tint = Color(0, 0.67058825, 0, 0.6901961)

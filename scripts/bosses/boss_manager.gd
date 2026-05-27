@@ -79,3 +79,18 @@ func get_active_boss() -> Boss:
 ## Get the definition of the currently active boss, or null.
 func get_active_boss_definition() -> BossDefinition:
 	return _active_boss_definition
+
+
+## Get recession info for a hit wedge. Returns empty dict if not recession-affected.
+func get_recession_data(wedge_index: int) -> Dictionary:
+	if _active_boss == null or not (_active_boss is RecessionBoss):
+		return {}
+	var rb: RecessionBoss = _active_boss as RecessionBoss
+	if not rb._affected_wedge_indices.has(wedge_index):
+		return {}
+	if wedge_index < 0 or wedge_index >= rb._original_wedge_values.size():
+		return {}
+	return {
+		"percent": rb.reduction_percent,
+		"original_face_value": rb._original_wedge_values[wedge_index],
+	}

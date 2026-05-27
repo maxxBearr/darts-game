@@ -1,13 +1,17 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://d4em8vnlu2oj8"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/void_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://puk0bv7ht64q" path="res://scripts/bosses/void_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
 boss_id = &"void_easy"
-display_name = "The Void"
 description = "6 random wedges become voids each turn."
 boss_script = ExtResource("2")
-tuning = {"void_count": 6}
-difficulty_tier = &"easy"
+tuning = {
+"void_count": 6
+}
+title_color = Color(0.429917, 0.1995306, 0.9999998, 1)
+description_color = Color(0.7908427, 0.6667168, 0.9969868, 1)
+status_color = Color(0.5455451, 0.4072942, 0.8489435, 1)
+background_tint = Color(0.019607844, 0.019607844, 0.019607844, 0.8627451)

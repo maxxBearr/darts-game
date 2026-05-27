@@ -2,8 +2,16 @@ extends Node2D
 ## Main scene controller. Orchestrates the dartboard, throw mechanic, X01 game logic, and HUD.
 ## Manages game flow: X01 run → legs → turns → darts → score → upgrades → repeat.
 
+@export_group("Gameplay")
+
 ## Radius of placed dart markers in pixels.
 @export var dart_size: float = 5.0
+
+## Seconds to wait after a dart lands before auto-starting the next throw.
+## Only applies within a turn — turn boundaries still require a button press.
+@export var next_dart_delay: float = 0.8
+
+@export_group("Debug")
 
 ## When enabled, the player picks a scoring modifier after building their dart,
 ## before the first throw — same UI as the post-leg modifier pick.
@@ -15,10 +23,6 @@ extends Node2D
 ## When enabled, the run starts at the boss leg (target = max_score_target)
 ## so you face a boss on the first leg. Useful for testing boss encounters.
 @export var debug_boss_immediately: bool = false
-
-## Seconds to wait after a dart lands before auto-starting the next throw.
-## Only applies within a turn — turn boundaries still require a button press.
-@export var next_dart_delay: float = 0.8
 
 @onready var dartboard: Node2D = $Dartboard
 @onready var throw_mechanic: Node2D = $ThrowMechanic
@@ -209,6 +213,8 @@ var _shop_lit_spots: Array[Dictionary] = []
 ## Each entry: {type: "modifier"|"upgrade", data: ScoringModifier|Dictionary}
 var _shop_pick_items: Array[Dictionary] = []
 
+@export_group("Shop")
+
 ## Extra lit spots beyond the dart count (breathing room for target choice).
 @export var shop_spot_slack: int = 3
 
@@ -236,6 +242,7 @@ func _ready() -> void:
 	hud.new_run_pressed.connect(_on_new_run)
 	hud.upgrade_selected.connect(_on_upgrade_selected)
 	hud.modifier_selected.connect(_on_modifier_selected)
+	hud.modifier_skipped.connect(_on_modifier_skipped)
 	hud.reward_selected.connect(_on_reward_selected)
 	hud.modifier_toggled.connect(_on_modifier_toggled)
 
@@ -445,14 +452,17 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# If the dart hit a voided wedge, tween it away into the void
 	var hit_wedge: int = result.get("wedge_index", -1)
-	if hit_wedge >= 0 and dartboard._boss_void_wedges.has(hit_wedge):
+	var hit_void: bool = hit_wedge >= 0 and dartboard._boss_void_wedges.has(hit_wedge)
+	if hit_void:
 		var void_tween: Tween = create_tween()
 		void_tween.tween_property(dart_node, "scale", Vector2.ZERO, 0.7).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-
-	AuidoManager.play_dart_thunk()
+		AuidoManager.play_void_hit()
+	else:
+		AuidoManager.play_dart_thunk()
 
 	# Floating score number
-	var score_tween: Tween = _spawn_floating_score(hit_position, result)
+	var recession_data: Dictionary = boss_manager.get_recession_data(hit_wedge)
+	var score_tween: Tween = _spawn_floating_score(hit_position, result, recession_data)
 
 	# Flash the hit segment for visual feedback
 	dartboard.flash_segment(hit_position)
@@ -588,6 +598,8 @@ func _notify_leg_won(result: Dictionary, response: Dictionary) -> void:
 
 ## Show the "LEG WON!" banner, then transition to upgrades after it finishes.
 func _show_leg_won_banner(response: Dictionary) -> void:
+	AuidoManager.play_leg_win()
+	AuidoManager.on_leg_won()
 	var banner_tween: Tween = hud.show_leg_won_banner()
 	banner_tween.tween_callback(_show_leg_upgrades.bind(response))
 
@@ -678,6 +690,7 @@ func _on_next_turn() -> void:
 	hud.update_turn_score(0)
 	scoring_modifier_manager.reset_for_turn()
 	_clear_darts()
+	AuidoManager.on_turn_ended(x01_game.current_turn)
 	x01_game.end_turn()
 	x01_game.start_turn()
 	if boss_manager.is_boss_active():
@@ -749,6 +762,7 @@ func _show_game_over(current_leg: int) -> void:
 		boss_manager.end_boss_leg(_build_game_state(), false)
 		_sync_board_and_solver()
 		hud.hide_boss_status()
+	AuidoManager.on_leg_lost()
 	_hide_gameplay_hud()
 	game_over_screen.show_results(current_leg - 1, _run_total_darts)
 
@@ -813,6 +827,7 @@ func _on_reward_selected(index: int) -> void:
 
 ## Reset all run state (shared by all post-game-over paths).
 func _reset_run_state() -> void:
+	AuidoManager.transition_to_menu_music()
 	_run_over = false
 	_turn_score = 0
 	_turn_darts_scored = 0
@@ -856,7 +871,9 @@ func _reset_run_state() -> void:
 
 ## Player presses "Return to Assembly" on the game over screen.
 func _on_game_over_to_assembly() -> void:
+	var level: LevelDefinition = _current_level
 	_reset_run_state()
+	_current_level = level
 	_show_assembly()
 
 
@@ -1451,6 +1468,7 @@ func _on_run_confirmed() -> void:
 				"active_color": part.throw_modifier.active_color,
 			})
 	hud.setup_modifier_status(modifier_info)
+	AuidoManager.transition_to_game_music()
 
 	_run_total_darts = 0
 	x01_game.darts_per_turn = 3
@@ -1569,6 +1587,17 @@ func _on_modifier_selected(index: int) -> void:
 		dartboard.set_picker_mode(true)
 		hud.show_picker_header("Swap two wedges")
 		hud.show_picker_prompt("Click to select the first wedge")
+
+
+## Player skips the scoring modifier pick.
+func _on_modifier_skipped() -> void:
+	_leg_phase = ""
+	if _start_modifier_pending:
+		_start_modifier_pending = false
+		_start_new_throw()
+	else:
+		hud.score_label.text = ""
+		hud.next_leg_button.visible = true
 
 
 ## Apply temporary throw modifier bonuses to throw_mechanic.
@@ -2069,7 +2098,7 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 			hud.show_picker_prompt("Swap %d and %d? Click to confirm, Escape to cancel" % [val1, val2])
 
 
-func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> Tween:
+func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}) -> Tween:
 	var score: int = result["total_score"]
 	if score == 0:
 		return null
@@ -2081,14 +2110,58 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary) -> Tween:
 			multiplier_mods.append(mod)
 
 	if multiplier_mods.is_empty():
-		return _spawn_simple_floating_score(hit_position, result)
+		return _spawn_simple_floating_score(hit_position, result, recession_data)
 	else:
-		return _spawn_trigger_animation(hit_position, result, multiplier_mods)
+		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data)
 
 
-func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary) -> Tween:
-	var label: Label = _create_score_label(result["total_score"], hit_position, result)
+func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}) -> Tween:
+	var has_recession: bool = not recession_data.is_empty()
+	var actual_score: int = result["total_score"]
+	var display_score: int = actual_score
+
+	if has_recession:
+		var original_face: int = recession_data["original_face_value"]
+		var reduced_face: int = result["face_value"]
+		if reduced_face > 0:
+			display_score = int(actual_score * float(original_face) / float(reduced_face))
+
+	var label: Label = _create_score_label(display_score, hit_position, result)
+	label.pivot_offset = label.size / 2.0
 	add_child(label)
+
+	if has_recession:
+		var percent_text: String = "-%d%%" % int(recession_data["percent"] * 100)
+		var scale_factor: float = 1.0 - recession_data["percent"]
+
+		var recession_label: Label = Label.new()
+		recession_label.text = percent_text
+		recession_label.z_index = 101
+		recession_label.add_theme_font_size_override("font_size", 22)
+		recession_label.add_theme_constant_override("outline_size", 3)
+		recession_label.add_theme_color_override("font_color", Color(1.0, 0.25, 0.2))
+		recession_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+		recession_label.position = hit_position + Vector2(50.0, -40.0)
+		recession_label.modulate.a = 0.0
+		add_child(recession_label)
+
+		var tween: Tween = create_tween()
+		tween.tween_interval(0.3)
+		tween.tween_property(recession_label, "modulate:a", 1.0, 0.1)
+		tween.tween_property(recession_label, "position", label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tween.tween_callback(func() -> void:
+			recession_label.queue_free()
+			label.text = str(actual_score)
+			label.scale = Vector2(scale_factor, scale_factor)
+			AuidoManager.play_void_hit()
+		)
+		tween.tween_interval(0.2)
+		tween.set_parallel(true)
+		tween.tween_property(label, "position", label.position + Vector2(25.0, -55.0), 0.8).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		tween.tween_property(label, "modulate:a", 0.0, 0.8).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tween.set_parallel(false)
+		tween.tween_callback(label.queue_free)
+		return tween
 
 	var tween: Tween = create_tween()
 	tween.set_parallel(true)
@@ -2099,9 +2172,14 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary) -> 
 	return tween
 
 
-func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary]) -> Tween:
+func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary], recession_data: Dictionary = {}) -> Tween:
+	var has_recession: bool = not recession_data.is_empty()
 	var face_value: int = result["face_value"]
-	var base_score: int = face_value * int(multiplier_mods[0]["old_value"])
+	var display_face: int = face_value
+	if has_recession:
+		display_face = recession_data["original_face_value"]
+
+	var base_score: int = display_face * int(multiplier_mods[0]["old_value"])
 	var main_label: Label = _create_score_label(base_score, hit_position, result, 30)
 	main_label.pivot_offset = main_label.size / 2.0
 	add_child(main_label)
@@ -2121,7 +2199,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		var angle: float = PI * (0.3 + 0.4 * float(i) / float(maxi(num_triggers - 1, 1)))
 		var offset: Vector2 = Vector2(cos(angle), -sin(angle)) * 50.0
 		var trigger_label: Label = Label.new()
-		trigger_label.text = "+%d" % face_value
+		trigger_label.text = "+%d" % display_face
 		trigger_label.position = hit_position + offset + Vector2(-10.0, -10.0)
 		trigger_label.z_index = 101
 		trigger_label.add_theme_font_size_override("font_size", 20)
@@ -2134,7 +2212,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		trigger_labels.append(trigger_label)
 
 	for i: int in range(num_triggers):
-		running_total += face_value
+		running_total += display_face
 		var final_total: int = running_total
 		var scale_bump: float = 1.0 + 0.1 * float(i + 1)
 		var trigger_lbl: Label = trigger_labels[i]
@@ -2147,6 +2225,35 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
 		if i < num_triggers - 1:
 			tween.tween_interval(0.1)
+
+	if has_recession:
+		var actual_score: int = result["total_score"]
+		var percent_text: String = "-%d%%" % int(recession_data["percent"] * 100)
+		var scale_factor: float = 1.0 - recession_data["percent"]
+
+		tween.tween_interval(0.15)
+		var recession_label: Label = Label.new()
+		recession_label.text = percent_text
+		recession_label.z_index = 101
+		recession_label.add_theme_font_size_override("font_size", 22)
+		recession_label.add_theme_constant_override("outline_size", 3)
+		recession_label.add_theme_color_override("font_color", Color(1.0, 0.25, 0.2))
+		recession_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+		recession_label.position = hit_position + Vector2(55.0, -45.0)
+		recession_label.modulate.a = 0.0
+		add_child(recession_label)
+
+		tween.tween_property(recession_label, "modulate:a", 1.0, 0.1)
+		tween.tween_property(recession_label, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tween.tween_callback(func() -> void:
+			recession_label.queue_free()
+			main_label.text = str(actual_score)
+			main_label.scale *= scale_factor
+			AuidoManager.play_void_hit()
+		)
+		var r_shake: Vector2 = Vector2(randf_range(-5.0, 5.0), randf_range(-4.0, 4.0))
+		tween.tween_property(main_label, "position", main_label.position + r_shake, 0.04)
+		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
 
 	tween.tween_interval(0.15)
 	tween.tween_callback(func() -> void: _trigger_anim_active = false)

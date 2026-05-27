@@ -7,7 +7,7 @@
 [ext_resource type="Resource" path="res://resources/bosses/recession_medium.tres" id="5"]
 [ext_resource type="Resource" path="res://resources/bosses/rotation_medium.tres" id="6"]
 [ext_resource type="Resource" path="res://resources/bosses/narrow_double_medium.tres" id="7"]
-[ext_resource type="Resource" path="res://resources/bosses/two_darts.tres" id="8"]
+[ext_resource type="Resource" uid="uid://c44tps7yvoc4b" path="res://resources/bosses/two_darts.tres" id="8"]
 
 [sub_resource type="Resource" id="unlock_1001"]
 script = ExtResource("2")

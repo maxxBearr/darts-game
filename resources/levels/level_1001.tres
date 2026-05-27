@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://dh4dl6dm316ok" path="res://scripts/unlock_conditions/level_cleared_condition.gd" id="2"]
 [ext_resource type="Resource" path="res://resources/bosses/void_easy.tres" id="3"]
 [ext_resource type="Resource" path="res://resources/bosses/prism_easy.tres" id="4"]
-[ext_resource type="Resource" path="res://resources/bosses/two_darts.tres" id="5"]
+[ext_resource type="Resource" uid="uid://c44tps7yvoc4b" path="res://resources/bosses/two_darts.tres" id="5"]
 [ext_resource type="Resource" path="res://resources/bosses/recession_easy.tres" id="6"]
 [ext_resource type="Resource" path="res://resources/bosses/void_medium.tres" id="7"]
 [ext_resource type="Resource" path="res://resources/bosses/prism_medium.tres" id="8"]

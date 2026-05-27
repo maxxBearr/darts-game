@@ -15,7 +15,10 @@
       "Read(//Users/maximilianbernstein/**)",
       "Bash(echo \"---exit:$?---\")",
       "Bash(ls -la /.zshrc)",
-      "Bash(grep -E \"\\\\.\\(gd|tscn|gdshader\\)$\")"
+      "Bash(grep -E \"\\\\.\\(gd|tscn|gdshader\\)$\")",
+      "Bash(Select-Object FullName)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(findstr *)"
     ]
   }
 }

@@ -39,6 +39,7 @@ func on_leg_start(game_state: Dictionary) -> void:
 
 	dartboard.effective_wedge_values = smm.effective_wedge_values
 	dartboard.boss_reduced_wedges = _affected_wedge_indices.duplicate()
+	dartboard.set_boss_recession_wedges(_affected_wedge_indices)
 	dartboard.queue_redraw()
 
 
@@ -52,6 +53,7 @@ func on_leg_end(game_state: Dictionary) -> void:
 
 	dartboard.effective_wedge_values = smm.effective_wedge_values
 	dartboard.boss_reduced_wedges.clear()
+	dartboard.set_boss_recession_wedges([])
 	dartboard.queue_redraw()
 	_affected_wedge_indices.clear()
 
