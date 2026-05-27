@@ -153,10 +153,10 @@ const STAT_DESCRIPTIONS: Dictionary = {
 const STAT_MAX_VALUE: float = 100.0
 
 const THROW_COLOR_ENTRIES: Array = [
-	["aim_line_color", "Aim Zone"],
-	["resolve_preview_color", "Accuracy Zone"],
-	["vertical_glow_color", "V Meter Glow"],
-	["horizontal_glow_color", "H Meter Glow"],
+	["v_arm_color", "V Arm"],
+	["v_arm_dimmed_color", "V Arm (Dimmed)"],
+	["h_arm_color", "H Arm"],
+	["h_arm_dimmed_color", "H Arm (Dimmed)"],
 	["marker_color", "Marker"],
 	["marker_outline_color", "Marker Outline"],
 ]
@@ -1031,22 +1031,22 @@ func _draw_zone_preview() -> void:
 	_draw_preview_dartboard(center)
 
 	## Read colors from throw_mechanic (with fallback defaults)
-	var aim_base: Color = throw_mechanic.aim_line_color if throw_mechanic else Color(0.2, 0.5, 1.0, 0.3)
-	var acc_base: Color = throw_mechanic.resolve_preview_color if throw_mechanic else Color(1.0, 0.9, 0.2, 0.25)
-	var v_glow: Color = throw_mechanic.vertical_glow_color if throw_mechanic else Color(1.0, 0.3, 0.3, 0.15)
-	var h_glow: Color = throw_mechanic.horizontal_glow_color if throw_mechanic else Color(0.3, 0.5, 1.0, 0.15)
+	var v_col: Color = throw_mechanic.v_arm_color if throw_mechanic else Color(1.0, 0.3, 0.3, 0.35)
+	var h_col: Color = throw_mechanic.h_arm_color if throw_mechanic else Color(0.2, 0.5, 1.0, 0.35)
+	var acc_base: Color = throw_mechanic.accuracy_neutral_color if throw_mechanic else Color(1.0, 0.9, 0.2, 0.25)
 
-	## Aim crosshair (outer)
-	var aim_outline_color: Color = Color(aim_base.r, aim_base.g, aim_base.b, minf(aim_base.a + 0.3, 1.0))
-	_zone_preview.draw_line(center + Vector2(-aim_half_w, 0.0), center + Vector2(aim_half_w, 0.0), aim_outline_color, 1.5)
-	_zone_preview.draw_line(center + Vector2(0.0, -aim_half_h), center + Vector2(0.0, aim_half_h), aim_outline_color, 1.5)
+	## Aim crosshair (outer) — per-arm colors
+	var h_bright: Color = Color(h_col, minf(h_col.a + 0.3, 1.0))
+	var v_bright: Color = Color(v_col, minf(v_col.a + 0.3, 1.0))
+	_zone_preview.draw_line(center + Vector2(-aim_half_w, 0.0), center + Vector2(aim_half_w, 0.0), h_bright, 1.5)
+	_zone_preview.draw_line(center + Vector2(0.0, -aim_half_h), center + Vector2(0.0, aim_half_h), v_bright, 1.5)
 	var tick: float = 3.0
 	for x_sign: float in [-1.0, 1.0]:
 		var tip: Vector2 = center + Vector2(x_sign * aim_half_w, 0.0)
-		_zone_preview.draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), aim_outline_color, 1.0)
+		_zone_preview.draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), h_bright, 1.0)
 	for y_sign: float in [-1.0, 1.0]:
 		var tip: Vector2 = center + Vector2(0.0, y_sign * aim_half_h)
-		_zone_preview.draw_line(tip + Vector2(-tick, 0.0), tip + Vector2(tick, 0.0), aim_outline_color, 1.0)
+		_zone_preview.draw_line(tip + Vector2(-tick, 0.0), tip + Vector2(tick, 0.0), v_bright, 1.0)
 
 	## Accuracy ellipse (inner)
 	var acc_outline_color: Color = Color(acc_base.r, acc_base.g, acc_base.b, minf(acc_base.a + 0.3, 1.0))
@@ -1056,19 +1056,19 @@ func _draw_zone_preview() -> void:
 	## V speed line — horizontal line bouncing up and down along crosshair
 	var v_offset: float = sin(_v_bounce_t) * aim_half_h
 	var v_line_y: float = center.y + v_offset
-	var v_line_color: Color = Color(v_glow.r, v_glow.g, v_glow.b, 0.7)
+	var v_line_color: Color = Color(v_col.r, v_col.g, v_col.b, 0.7)
 	_zone_preview.draw_line(Vector2(center.x - aim_half_w, v_line_y), Vector2(center.x + aim_half_w, v_line_y), v_line_color, 1.5)
 
 	## H speed line — vertical line bouncing left and right along crosshair
 	var h_offset: float = sin(_h_bounce_t) * aim_half_w
 	var h_line_x: float = center.x + h_offset
-	var h_line_color: Color = Color(h_glow.r, h_glow.g, h_glow.b, 0.7)
+	var h_line_color: Color = Color(h_col.r, h_col.g, h_col.b, 0.7)
 	_zone_preview.draw_line(Vector2(h_line_x, center.y - aim_half_h), Vector2(h_line_x, center.y + aim_half_h), h_line_color, 1.5)
 
 	## Labels
 	var aim_label_pos: Vector2 = center + Vector2(aim_half_w + 4.0, -8.0)
 	var acc_label_pos: Vector2 = center + Vector2(acc_half_w + 4.0, 4.0)
-	_zone_preview.draw_string(ThemeDB.fallback_font, aim_label_pos, "aim", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, aim_outline_color)
+	_zone_preview.draw_string(ThemeDB.fallback_font, aim_label_pos, "aim", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, h_bright)
 	_zone_preview.draw_string(ThemeDB.fallback_font, acc_label_pos, "accuracy", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, acc_outline_color)
 
 
