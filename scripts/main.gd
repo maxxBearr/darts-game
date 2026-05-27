@@ -1238,6 +1238,7 @@ func _setup_tutorial_system() -> void:
 	start_screen.name = "StartScreen"
 	start_screen.start_game_pressed.connect(_on_start_game)
 	start_screen.play_tutorial_pressed.connect(_on_play_tutorial.bind("start_screen"))
+	start_screen.stats_walkthrough_pressed.connect(_on_play_tutorial.bind("start_screen", TutorialController.TutorialMode.STATS_ONLY))
 	start_screen.rules_pressed.connect(_on_show_rules)
 	start_screen.visible = false
 	hud.add_child(start_screen)
@@ -1372,7 +1373,7 @@ func _on_level_select_back() -> void:
 
 
 ## Called when "Play Tutorial" is pressed from start screen or assembly.
-func _on_play_tutorial(source: String) -> void:
+func _on_play_tutorial(source: String, mode: TutorialController.TutorialMode = TutorialController.TutorialMode.FULL) -> void:
 	start_screen.visible = false
 	level_select.visible = false
 	assembly_screen.visible = false
@@ -1383,7 +1384,7 @@ func _on_play_tutorial(source: String) -> void:
 	# Show an exit button during the tutorial
 	_show_exit_tutorial_button()
 
-	tutorial_controller.start_mechanics_tutorial(source)
+	tutorial_controller.start_mechanics_tutorial(source, mode)
 
 
 ## Called when the tutorial finishes (player chose "Play a real game" or "Back to start").

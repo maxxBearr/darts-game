@@ -104,7 +104,7 @@ func _build_ui() -> void:
 
 	# Got it button
 	_button = Button.new()
-	_button.text = "Got it"
+	_button.text = "Set"
 	_button.add_theme_font_size_override("font_size", button_font_size)
 	_button.custom_minimum_size = Vector2(80.0, 30.0)
 	_button.pressed.connect(func() -> void: dismissed.emit())

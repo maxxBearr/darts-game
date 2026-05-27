@@ -5,6 +5,7 @@ extends Control
 
 signal start_game_pressed
 signal play_tutorial_pressed
+signal stats_walkthrough_pressed
 signal rules_pressed
 signal stats_reference_pressed
 
@@ -50,6 +51,7 @@ var _tutorial_button: Button
 var _rules_button: Button
 var _stats_button: Button
 var _background: ColorRect
+var _chooser_panel: Panel = null
 
 
 func _ready() -> void:
@@ -97,9 +99,9 @@ func _build_ui() -> void:
 	_start_button.pressed.connect(func() -> void: start_game_pressed.emit())
 	button_container.add_child(_start_button)
 
-	# Play Tutorial button
+	# Play Tutorial button — opens a sub-menu chooser
 	_tutorial_button = _create_menu_button("Play Tutorial", Color(0.3, 0.5, 1.0))
-	_tutorial_button.pressed.connect(func() -> void: play_tutorial_pressed.emit())
+	_tutorial_button.pressed.connect(_show_tutorial_chooser)
 	button_container.add_child(_tutorial_button)
 
 	# Rules of Darts button
@@ -143,3 +145,76 @@ func _create_menu_button(text: String, accent: Color) -> Button:
 	button.add_theme_stylebox_override("pressed", pressed_style)
 
 	return button
+
+
+func _show_tutorial_chooser() -> void:
+	if _chooser_panel == null:
+		_build_chooser()
+	_chooser_panel.visible = true
+
+
+func _hide_tutorial_chooser() -> void:
+	if _chooser_panel != null:
+		_chooser_panel.visible = false
+
+
+func _build_chooser() -> void:
+	var viewport_size: Vector2 = Vector2(1280.0, 720.0)
+
+	_chooser_panel = Panel.new()
+	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.06, 0.06, 0.1, 0.96)
+	panel_style.border_color = Color(0.4, 0.45, 0.6, 0.8)
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(10)
+	panel_style.set_content_margin_all(20)
+	_chooser_panel.add_theme_stylebox_override("panel", panel_style)
+	_chooser_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var vbox: VBoxContainer = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", int(button_spacing))
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.position = Vector2(20.0, 20.0)
+	vbox.size = Vector2(button_width, 0.0)
+	_chooser_panel.add_child(vbox)
+
+	var title: Label = Label.new()
+	title.text = "Choose Tutorial"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color(0.9, 0.9, 0.85))
+	title.custom_minimum_size = Vector2(button_width, 30.0)
+	vbox.add_child(title)
+
+	var full_btn: Button = _create_menu_button("Full Tutorial", Color(0.3, 0.5, 1.0))
+	full_btn.pressed.connect(func() -> void:
+		_hide_tutorial_chooser()
+		play_tutorial_pressed.emit()
+	)
+	vbox.add_child(full_btn)
+
+	var stats_btn: Button = _create_menu_button("Stats Walkthrough Only", Color(0.5, 0.4, 0.8))
+	stats_btn.pressed.connect(func() -> void:
+		_hide_tutorial_chooser()
+		stats_walkthrough_pressed.emit()
+	)
+	vbox.add_child(stats_btn)
+
+	var back_btn: Button = Button.new()
+	back_btn.text = "Back"
+	back_btn.add_theme_font_size_override("font_size", 14)
+	back_btn.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+	back_btn.flat = true
+	back_btn.custom_minimum_size = Vector2(0.0, 30.0)
+	back_btn.pressed.connect(_hide_tutorial_chooser)
+	vbox.add_child(back_btn)
+
+	var panel_width: float = button_width + 40.0
+	var panel_height: float = 30.0 + (button_height + button_spacing) * 2.0 + 30.0 + 40.0
+	_chooser_panel.size = Vector2(panel_width, panel_height)
+	_chooser_panel.position = Vector2(
+		(viewport_size.x - panel_width) / 2.0,
+		buttons_center_y - panel_height / 2.0
+	)
+	_chooser_panel.visible = false
+	add_child(_chooser_panel)

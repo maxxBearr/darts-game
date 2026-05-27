@@ -126,7 +126,7 @@ const STAT_MAX_VALUE: float = 100.0
 @export_group("Stat Panel")
 
 ## Width of stat name labels (shrink to pull labels closer to bars).
-@export var stat_label_width: float = 90.0
+@export var stat_label_width: float = 75.0
 
 var _stat_bars: Dictionary = {}
 var _stat_value_labels: Dictionary = {}
@@ -608,6 +608,7 @@ func _build_stat_bars() -> void:
 		var name_lbl: Label = Label.new()
 		name_lbl.text = STAT_DISPLAY_NAMES[key] + ":"
 		name_lbl.custom_minimum_size = Vector2(stat_label_width, BAR_HEIGHT + 2.0)
+		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		name_lbl.size_flags_horizontal = 0
 		name_lbl.add_theme_font_size_override("font_size", 12)
 		row.add_child(name_lbl)
