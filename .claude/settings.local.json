@@ -19,7 +19,8 @@
       "Bash(Select-Object FullName)",
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(findstr *)",
-      "Bash(grep -E \"\\\\.gd$\")"
+      "Bash(grep -E \"\\\\.gd$\")",
+      "Bash(xargs grep -l \"crosshair\\\\|aim\")"
     ]
   }
 }

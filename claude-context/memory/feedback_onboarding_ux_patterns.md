@@ -1,6 +1,6 @@
 ---
 name: feedback-onboarding-ux-patterns
-description: "Design patterns Max validated during the tutorial system pass — teach in context not in a separate reference, visuals belong next to the text explaining them, hybrid slideshow + one interactive moment beats pure slideshow, real stats throughout tutorials."
+description: "Design patterns Max validated through tutorial-system playtest iterations — teach in context, visuals adjacent to text, hybrid slideshow + one interactive moment, real stats throughout, three-step pedagogy (with two valid shapes), experience before semantics for action-driven mechanics."
 metadata: 
   node_type: memory
   type: feedback
@@ -11,7 +11,7 @@ A set of design patterns that Max landed on (and validated through playtest iter
 
 **Pattern 1: Teach in context, not in a separate reference panel.**
 
-Showing what a stat does *next to the thing it controls*, at the moment it matters, beats listing it on a separate reference panel. The first cut of the spec had a persistent Stats Reference as a primary teaching tool; after Phase A shipped, Max immediately saw that folding stat reveals into the mechanics tutorial (range bars appear when the ellipse appears, accuracy bars appear when the scatter shows) was much more effective. The standalone reference was demoted to "look it up later" tool.
+Showing what a stat does *next to the thing it controls*, at the moment it matters, beats listing it on a separate reference panel. The first cut of the spec had a persistent Stats Reference as a primary teaching tool; after Phase A shipped, Max immediately saw that folding stat reveals into the mechanics tutorial (range bars appear when the crosshair appears, accuracy bars appear when the scatter shows) was much more effective. The standalone reference was demoted to "look it up later" tool.
 
 **Why:** Players don't read reference panels with the same attention they pay to a thing in front of them. Context binds the explanation to the visual; a separated panel forces the player to maintain two mental models.
 
@@ -41,20 +41,37 @@ For multi-concept content (rules of darts: wedge layout + ring scoring + bullsey
 
 **Pattern 4: Real stats throughout tutorials — no "easy mode" tutorial values.**
 
-The tutorial sandbox uses the player's actual base stats (default exports on first run, equipped build on Assembly replay). Tutorial throw 3 must feel identical to throw 1 of the first real leg. Demos that temporarily mutate stats (the H Range / H Speed / H Accuracy sliders) snapshot before and restore after.
+The tutorial sandbox uses the player's actual base stats (default exports on first run, equipped build on Assembly replay). Tutorial throw 3 must feel identical to throw 1 of the first real leg. Demos that temporarily mutate stats (the slider demos in the 2026-05-27 revamp's throw 3) snapshot before and restore at tutorial end — adjustments stay live during the tutorial but never bleed into real runs.
 
 **Why:** A tutorial with diverged "tutorial-friendly" stats teaches the player a feel that doesn't match the real game. They notice — not consciously, but as a "the dart doesn't behave like it did in the tutorial" itch. Trust is fragile; lying about feel breaks it. Side benefit: replaying the tutorial after upgrades becomes a "feel my current build" tool for free.
 
-**How to apply:** Any future tutorial, demo mode, or sandbox should use real player stats. If a demo needs to mutate a value to teach a concept, wrap the mutation in snapshot/restore. The patterns to copy are `main.gd::_snapshot_base_stats` / `_restore_raw_stats` and the per-stat snapshot/restore in `tutorial_controller.gd`.
+**How to apply:** Any future tutorial, demo mode, or sandbox should use real player stats. If a demo needs to mutate a value to teach a concept, wrap the mutation in start-of-tutorial snapshot + end-of-tutorial restore (the 2026-05-27 model — `_base_stats` captured in `start_mechanics_tutorial`, restored in `stop_tutorial`). The teardown stack pattern in `tutorial_controller.gd` handles mid-flow skip cleanup correctly.
 
 ---
 
-**Pattern 5: Three is the sweet spot for "demonstrate → guide → free" walkthroughs.**
+**Pattern 5: Three-step walkthroughs work — pick the right three-step shape for the mechanic.**
 
-The mechanics tutorial uses three throws: one autopilot demo, one guided ("try to land in green"), one free. One throw is "look at this" not "you did this." Five+ overstays welcome. Three is enough to demonstrate, attempt, and confirm without bloating.
+Two valid three-step shapes have shipped for tutorial walkthroughs:
 
-**Why:** The middle "guided" step is where the player actually applies what they saw. Without it, the demo isn't internalized. The final "free" step proves they have it. Skipping either weakens the arc.
+- **DEMO → GUIDED → FREE** (original 2026-05-22 mechanics tutorial). Player watches autopilot demo, then attempts a guided throw, then a free throw. Canonical "watch then try" pedagogy. Good for mechanics that are visually complex or where mistakes feel high-stakes.
+- **DISCOVER → DO → UNDERSTAND** (2026-05-27 revamp). Player throws cold with freeze-and-explain at each stage (DISCOVER), then a free throw (DO), then an optional stats deep-dive (UNDERSTAND). Stronger for action-driven mechanics where the player learns by *doing* rather than watching. Trades the demo's cold-start absorption for a feeling of empowerment from throw 1.
 
-**How to apply:** When designing other walkthrough-style tutorials (e.g., the deferred Assembly Tutorial), default to three-step structure unless there's a specific reason for more or fewer.
+The 2026-05-22 version had too much reading and not enough doing in throw 1 — the demo + slider explanations + scatter freezes preceded any input. The 2026-05-27 revamp moved the player into doing from throw 1 and pushed stat semantics into an opt-out checkpoint. Playtest will tell us if the new shape sticks.
+
+**Why three:** One throw is "look at this" not "you did this." Five+ overstays welcome. Three is enough to demonstrate (or discover), attempt, and confirm without bloating. The middle step is where the player applies what they saw; without it, the demo isn't internalized.
+
+**How to apply:** Default to three. For an action mechanic where the player can be productive on the first attempt with mid-flow callouts (the crosshair, post-revamp), prefer DISCOVER → DO → UNDERSTAND. For a high-stakes mechanic where mistakes are scary or the loop is hard to read without seeing it run (the original ellipse aim, pre-crosshair), prefer DEMO → GUIDED → FREE. If the mechanic's stats are semantically rich, push the stat-teach into an opt-out third step rather than bundling it with the mechanic-teach.
+
+---
+
+**Pattern 6: Experience before semantics for action-driven mechanics.**
+
+The 2026-05-22 mechanics tutorial bundled the throw mechanic teach with the stat teach — sliders for H Range, H Speed, H Accuracy fired during throw 1 alongside the mechanic explanation. Players walled. Playtest evidence: cognitive load was spent before the player even got to the "doing" part. The 2026-05-27 revamp split these: throws 1-2 teach the throw loop with stat bars *visible but unexplained*, throw 3 layers stat semantics on top of the now-felt mechanic.
+
+**Why:** Abstract stat semantics ("V Speed controls how fast the vertical meter bounces") don't bind to anything if the player hasn't yet felt the vertical meter bounce. Concrete sensory experience first, abstract semantic layer second. The bars being silently visible during throws 1-2 plants seed-curiosity ("those bars are doing *something*"); throw 3 cashes it in.
+
+**How to apply:** Any future tutorial that teaches both a mechanic and the stats that shape that mechanic should let the player experience the mechanic first with stats visible-but-unexplained, then teach the stat semantics afterward as a separate beat. Avoid front-loading stat semantics before mechanic experience.
+
+---
 
 See also: [[project-tutorial-system]], [[user-role]]

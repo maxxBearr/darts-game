@@ -1,135 +1,158 @@
-# Tutorial Revamp: Discover → Do → Understand
+# Checkout Helper — Suggestion Refinement
 
-**Status:** Active spec, designed 2026-05-27. Implementation TBD (Claude Code pass).
-**Predecessor:** `specs/2026-05-22-tutorial-and-help-system.md` — the original tutorial system. This spec replaces the **mechanics tutorial** portion only; the rules slideshow, doubles drill, welcome modal, and Start Screen entry points outside of "Play Tutorial" remain unchanged.
+**Spec date:** 2026-05-27
+**Status:** Designed, ready for implementation
+**Scope:** Tighten `get_setup_recommendation()` in `scoring_modifier_manager.gd` and the corresponding `update_setup_display()` in `hud.gd` so the suggestion line gives useful advice across the full range of remaining scores. Solver itself (`solve_checkout`) and the per-throw path display are untouched. Builds on the shipped checkout helper (`specs/2026-05-22-checkout-helper.md`).
 
-## Scope
+## Summary
 
-**In scope:**
-- Complete rewrite of the mechanics tutorial flow in `scripts/tutorial_controller.gd` to a new three-throw structure: **DISCOVER** (guided throw with freeze-and-explain) → **DO** (free uninterrupted throw) → **UNDERSTAND** (stats walkthrough with live slider demos).
-- Copy pass throughout the mechanics tutorial to reference the crosshair (the aim primitive shipped 2026-05-26 on the current branch) instead of the old ellipse language.
-- New Start Screen sub-menu: clicking "Play Tutorial" opens a chooser between **Full Tutorial** and **Stats Walkthrough Only**.
-- New launch mode on `tutorial_controller.gd` to support entering the tutorial directly at throw 3 (the stats walkthrough) without replaying throws 1-2.
-- New persistent **Skip Stats Walkthrough** button visible during throw 3 beats (whether reached via auto-continue from throw 2 or via the stats-only menu entry).
+The checkout solver itself works well. The setup recommendation — the single-line suggestion shown when no checkout exists this turn — does not, in two distinct ways:
 
-**Out of scope:**
-- The rules slideshow (`scripts/rules_slideshow.gd`), doubles drill, and mini dartboard. Untouched.
-- The welcome modal (`scripts/welcome_modal.gd`) and `user://settings.cfg` first-run persistence. Untouched.
-- The Start Screen "Rules" entry. Untouched.
-- The Assembly screen tutorial (still deferred per prior spec).
-- The persistent Stats Reference panel (still deferred per prior spec).
-- Auditing ellipse-vs-crosshair language *outside* the mechanics tutorial — e.g., if the rules slideshow still references the ellipse, that's a separate later pass.
+- **Far-from-checkout states** (e.g., turn 1 dart 1 of a 401 leg) currently fall through to the off-board preservation fallback. Off-board is recommended whenever no scoring dart can land the player at a remainder inside `_preferred_remainders`. That cache only covers 2..180, so any state above ~240 triggers the fallback even when scoring is unambiguously the right call.
+- **Mid-zone states** (e.g., 166, where no 3-dart checkout exists but the player should be reducing toward one) ranking can pick a small fat single (S1 → 165) over a high-scoring trip (T20 → 106). Within-tier tiebreaks today are `this_throw_fatness` then `-new_remaining`, both of which bias toward "play safe and keep the remainder high" — the opposite of what setup is supposed to do.
 
-## Design context
+Refactor the recommendation into four explicitly named modes, each with its own trigger condition, ranker, and display string. Modes are evaluated in order; first match wins.
 
-The current mechanics tutorial (shipped 2026-05-22) used a **DEMO → GUIDED → FREE** three-throw structure where throw 1 was an autopilot demo with progressive stat-bar reveals and three slider demos (H Range, H Speed, H Accuracy). Post-ship playtest surfaced two consistent problems:
+---
 
-1. **Too much reading, not enough doing in throw 1.** Players sat through the autopilot demo plus three slider demos plus accuracy zone freeze-frames before they ever made their first input. By the time they got to throws 2-3 the cognitive load from throw 1 was already spent. Playtest evidence showed players bouncing or zoning out before they got to the doing part.
-2. **Stat content was bundled with the mechanic teach.** Players who just wanted to "try a throw" got walled by stat explanations they hadn't earned context for yet. New players' mental model of *what* the meters do came after their mental model of *why the bars matter* — which is backwards.
+## 1. Mode Taxonomy
 
-Additionally, the aim primitive was reworked from the ellipse to a crosshair on 2026-05-26, so the existing tutorial copy is stale on the language of the aim itself. The rewrite is a natural moment to fold both fixes into one pass.
+The solver already covers "can finish this turn." When `solve_checkout()` returns paths, that path display continues unchanged. When it returns empty, the suggestion line picks one of four modes:
 
-The new structure separates **what the player does** (throws 1-2) from **why their stats matter** (throw 3), and gives the player concrete sensory experience with the throw mechanic *before* layering abstract stat semantics on top. The stats walkthrough is replayable as a standalone unit so returning or curious players can dig in without redoing the mechanics throws.
+| # | Mode | Trigger | Output |
+|---|---|---|---|
+| 2 | Endgame setup | A scoring dart can land the player at a 1-dart-finishable remainder next turn (Tier 0 today) | Concrete target + resulting remainder |
+| 3 | Score-reduction | Even the best scoring dart cannot reach `_preferred_remainders` | Generic "score more points" line — no target |
+| 4 | Mid-zone setup | Some scoring dart reaches `_preferred_remainders` (but no 1-dart finish next turn) | Concrete target + resulting remainder |
+| 5 | Off-board preservation | Every scoring dart would strictly worsen the state (bust irrecoverably or push to remaining=1) | "Aim off-board — any scoring dart busts" |
 
-## Design positions
+The numbering preserves the existing Tier 0 / Tier 1 terminology where it maps cleanly: Mode 2 is current Tier 0. Mode 4 is current Tier 1 with corrected tiebreaks. Modes 3 and 5 are new (or refactored from the existing fallback).
 
-1. **Throw 1 is DISCOVER, not DEMO.** The player throws cold with freeze-and-explain at each stage transition. There is no autopilot. Input locks during explanation copy and frees for the next action — Max explicitly notes input-lock moments in the design so the player reads first, acts second. This trades the "watch then try" canonical pedagogy of the prior tutorial for a "guided discovery" model. The crosshair is easier to describe verbally than the ellipse was, which makes mid-flow callouts feasible where they were awkward before.
+---
 
-2. **Throws 1-2 carry no stat explanations; bars are visible the whole time but unexplained.** The HUD stat bars live on the right of the screen during throws 1-2 just as they do in a real run. Players form a fuzzy "those bars are doing something" mental model from exposure alone. Throw 3 cashes this in by explicitly teaching what they mean. This avoids the prior tutorial's mistake of front-loading stat semantics before the player has experience to anchor them to.
+## 2. Mode 3 — Score-Reduction
 
-3. **Throw 3 auto-continues from throw 2, with a persistent Skip button.** Rather than offer the stats walkthrough as opt-in, we offer it as opt-out — the player flows straight from throw 2's resolution into throw 3's setup, with a clearly-visible **Skip Stats Walkthrough** button surfaced at the transition and persistent for the rest of the tutorial. The design lean is to bias toward exposure on the assumption that more players will benefit from stat context than will resent being walked through it. Players who are veterans or want to bail can do so in one click.
+The missing mode. Fires when the player is far enough from checkout that no setup-style recommendation is honest.
 
-4. **Throw 3 is densely packed by design.** It contains four slider demos (V Speed, H Speed, V Accuracy, H Accuracy) plus the accuracy-zone-breathing teach during H meter sweep plus the live ghost-dart scatter teach. This is intentional — start dense, trim from playtest. Adding beats back later is worse than removing them.
+### 2a. Trigger
 
-5. **The accuracy-zone-breathing during H meter sweep replaces the three-position scatter freeze.** The prior tutorial showed three discrete scatter clusters (green/orange/red) at frozen positions. The new tutorial uses the live `accuracy_zone_reference_radius`-normalized zone resizing — as the H meter sweeps the crosshair across the board, the accuracy zone visibly tightens near the target centroid and bloats away from it. This is a continuous spatial gradient teach, more memorable than three discrete freeze-frames and closer to what the player actually sees during real play.
+Compute, once per modifier-state change, `_max_single_dart_score` — the highest `total_score` produced by any scoring candidate through `process_score(synth, true)` under turn-fresh streak state. Cached on `ScoringModifierManager` alongside `_preferred_remainders` and `_one_dart_finishable`, invalidated by the same `invalidate_preferred_remainders()` call.
 
-6. **Default stats / equipped build invariant preserved.** Per `feedback-onboarding-ux-patterns` Pattern 4, the tutorial uses real stats throughout: default `throw_mechanic` exports on first run, the player's equipped build on Assembly replay. No tutorial-only override and no "0 index components" hard-code — exposure to the unexplained bars is sufficient and any override would risk the "tutorial felt different from the real game" trust-break Pattern 4 exists to prevent.
+Also cache `_max_preferred_remainder` = `_preferred_remainders.max()` (or 0 if empty). Cheap.
 
-7. **Stats Walkthrough Only is a true checkpoint.** When entered via the Start Screen sub-menu, the player drops directly into throw 3 setup with the Skip button immediately visible. State setup matches what throw 3 would see after throw 2 — the throw_mechanic, hud, and dartboard are in the same state they'd be in mid-flow. This requires `tutorial_controller.gd` to parameterize its launch path.
+Mode 3 trigger:
 
-8. **Sub-menu over a fourth Start Screen button.** The Stats Walkthrough Only entry lives behind a sub-chooser surfaced when "Play Tutorial" is clicked, not as a sibling button to Play Tutorial / Rules. Keeps the Start Screen lean at three top-level buttons; trades one extra click for screen cleanliness. Discoverability is acceptable because anyone who completed throw 2 and skipped throw 3 already knows the stats walkthrough exists.
+```
+remaining - _max_single_dart_score > _max_preferred_remainder
+```
 
-## System description: beat-by-beat
+When true, no scoring dart this throw can reach a 3-dart-finishable next-turn remainder. The 82-candidate sweep is skipped entirely — the trigger is O(1) once the two cached values exist.
 
-The beat sequencer in `tutorial_controller.gd` orchestrates a series of beats. Each beat declares an **input-lock state** (input blocked vs. allowed), a **callout** (text + position + optional arrow + Next button or wait condition), and an **advance trigger** (Next button click, meter stop, throw resolve, etc.). The pattern is preserved from the prior tutorial — only the beat content changes.
+### 2b. Display
 
-### Throw 1: DISCOVER
+Single-line suggestion, no target named:
 
-The player makes their first throw with freeze-and-explain at each stage transition. Input is locked during explanation copy and freed when the next action is expected.
+> Score more points to enter checkout range
 
-1. **Intro callout.** "Welcome to the throw mechanic. You'll do three darts — first one we'll walk through together." Next button. Input locked.
-2. **Aim phase.** "Move the crosshair with your mouse. Left-click to lock on a target." Crosshair input freed; everything else stays locked.
-3. **Target selected.** Game pauses. "Nice — you picked [target]. See that marker moving up and down the vertical arm of the crosshair? Click or press space to set the height of your throw." Next button. Game un-pauses after Next; V meter input freed.
-4. **V meter stopped.** Game pauses. "Good. Now do the same along the horizontal arm — stop the meter to lock in your aim." Next button. H meter input freed after Next.
-5. **H meter stopped.** Game pauses. "This bubble around your locked aim is your **accuracy zone** — your dart could land anywhere inside it." Next button. Game stays paused.
-6. **10-dart scatter reveal.** Ghost-dart layer fires `throw_mechanic.sample_scatter_points(10, ...)`. "Here's where ten darts would land in this zone." Next button. Game stays paused.
-7. **Resolve.** Game resumes; the dart resolves at its actual sampled position. No callout — the resolution speaks for itself.
+No "leaves you at N" suffix — irrelevant when N is hundreds away from checkout. No target name — picking one is just noise (player knows what to throw when there's no setup constraint), and skipping the target computation is the perf win.
 
-### Throw 2: DO
+Title bar above the line remains `— Setup —` for consistency with the other modes' panel layout.
 
-The player throws without interruption. This beat validates that throw 1's discovery stuck.
+### 2c. Why no recommended target
 
-1. **Intro callout.** "Now try an uninterrupted throw — you've got it." Next button. Input locked until dismissed.
-2. **Free throw.** Input fully free; player executes the throw end-to-end with no callouts.
-3. **Dart resolves.** Auto-continue to the throw 2 → throw 3 transition (see below).
+Per design call: when the situation calls for "just score," any recommendation beyond that is either obvious (T20) or actively confusing if modifiers have shifted top scoring (the player will read the wrong message into a "T18" recommendation under a swapped-value board). Better to stay silent on the specific target.
 
-### Transition: Throw 2 → Throw 3
+---
 
-A short bridge beat. Skip button surfaces here and remains visible until the tutorial ends.
+## 3. Mode 4 — Mid-Zone Setup
 
-1. **Transition callout.** "Nice throw. Let's look at how your stats shape what just happened." A persistent **Skip Stats Walkthrough** button appears in a fixed corner (recommend top-right, but Max to confirm placement) and remains visible for the rest of the tutorial. A Continue button advances; clicking Skip ends the tutorial cleanly.
+Triggered when Mode 2 has no candidate but at least one scoring dart lands `new_remaining` inside `_preferred_remainders`. Logic and candidate sweep are the existing Tier 1 — what changes is the ranking.
 
-### Throw 3: UNDERSTAND
+### 3a. Ranking change
 
-The stats walkthrough. Dense by design. All slider demos use the existing snapshot/restore pattern — values are mutated for the demo only, then restored before the actual throw input resumes.
+Current key: `[tier, next_turn_fatness, this_throw_fatness, -new_remaining]`.
 
-1. **Intro callout.** "One more throw. Pick a target like before." Crosshair input freed.
-2. **Target selected.** Game pauses. V Speed slider demo: "Try dragging this slider — watch how the vertical meter changes speed." V Speed bar live-updates. V meter is visible but not yet running so the player can see speed change as a preview. Next button when ready. Slider snapshot-restores on Next.
-3. **V meter active.** "Okay, time the meter to set your vertical aim." V meter input freed at true V Speed.
-4. **V meter stopped.** Game pauses. H Speed slider demo, same shape as step 2 but for H Speed (shorter copy — same idea). Next button when ready. Snapshot-restore on Next.
-5. **H meter active.** "Now watch your accuracy zone — as the crosshair sweeps closer to your target, the zone tightens. Farther away, it bloats. Stop the meter when you're aimed where you want." H meter input freed; accuracy zone breathes in real time as the meter sweeps the crosshair across the board.
-6. **H meter stopped.** Game pauses. "This is your final accuracy zone — your H and V accuracy stats decide how tight or loose your dart's landing scatter is." V Accuracy and H Accuracy sliders both shown; ghost-dart scatter updates live as either slider moves (use `throw_mechanic.sample_scatter_points` per-frame as in the prior tutorial). Next button when ready. Snapshot-restore on Next.
-7. **Resolve.** Game resumes; dart resolves at its actual sampled position with true stats.
-8. **Completion callout.** "Tutorial complete — you're ready for a real run." Single button: Finish. Skip button hides. Tutorial state tears down.
+New key: `[next_turn_fatness, new_remaining]`. (Lower wins; `tier` was redundant because mode selection already gates this.)
 
-## Phases
+Two deletions:
 
-Recommended Claude Code chunking, each phase independently testable.
+- **Drop `this_throw_fatness`.** It was rewarding small singles because they're "fat targets." But the recommended *this-throw target* doesn't need to be fat — it needs to set up a fat *finishing* dart next turn. `next_turn_fatness` already captures that.
+- **Flip `-new_remaining` to `new_remaining`.** Lower remainder = closer to checkout = better setup, all else equal. The original `-new_remaining` direction was the same "higher remainder is more dart slack" misconception the V1 setup logic already corrected away from at the Tier 0/1 boundary.
 
-### Phase 1: Rewrite mechanics tutorial flow
+`next_turn_fatness` stays as the primary tiebreak — that's still about how reliably next turn finishes, which is the real definition of setup quality.
 
-The bulk of the work. Replace the existing beat sequence in `scripts/tutorial_controller.gd` with the new three-throw structure described above. All beats with their input-lock states, callouts, and advance triggers. All copy updated to crosshair language. Stat bars visible from throw 1 onward (no hidden-bars phase). Slider demos in throw 3 use the existing `tutorial_slider.gd` widget and the snapshot/restore pattern. The ghost-dart scatter renderer (`scripts/ghost_dart_layer.gd`) is reused for both throw 1's 10-dart reveal and throw 3's live accuracy scatter. The dartboard's tutorial highlights (`dartboard.gd::set_tutorial_highlight`) and the throw mechanic's tutorial hooks (`set_paused`, `set_scripted_mode`, `force_lock_*`, `meter_position_changed`, `get_zone_boundary_h_positions`, `sample_scatter_points`, `set_input_blocked`) are unchanged. The auto-continue from throw 2 to throw 3 is implemented here, but the Skip button is deferred to Phase 3.
+### 3b. Setup quality metric upgrade — explicitly deferred
 
-**Acceptance:** A fresh run from Start Screen → Play Tutorial routes into throw 1, walks through all beats, and lands cleanly on the completion screen. All copy reads as crosshair language. Stat bars are visible from throw 1 onward. Snapshot/restore preserves player stats on slider demos.
+A richer metric (count of 3-dart paths from `new_remaining`, or whether 2-dart-finishable beats 3-dart-finishable) was considered. Deferred for perf reasons: it would require running the full `solve_checkout` on every candidate's resulting remainder, multiplying solver work by ~80 per recommendation call. The two-deletion change above is expected to fix the observed bug at near-zero cost. Revisit only if playtest still finds bad mid-zone suggestions.
 
-### Phase 2: Sub-menu and stats-only entry mode
+---
 
-Add a chooser dialog surfaced when the Start Screen's Play Tutorial button is clicked. Two buttons in the chooser: **Full Tutorial** (current behavior — routes into Phase 1's throw 1) and **Stats Walkthrough Only** (routes directly into throw 3's setup). Parameterize `tutorial_controller.gd` with a launch mode (recommend an enum `TutorialMode { FULL, STATS_ONLY }`) on its entry function, defaulting to FULL. The STATS_ONLY mode skips throws 1-2 entirely and initializes the controller in the same state throw 3 would normally see at its start. Welcome modal's first-run route continues to use FULL.
+## 4. Mode 5 — Off-Board Preservation, Tightened
 
-**Acceptance:** Clicking Play Tutorial opens a small chooser. Full Tutorial works identically to Phase 1. Stats Walkthrough Only drops the player into throw 3's intro callout with no replay of throws 1-2. State is clean — the player can complete or skip the stats walkthrough and return to menu without artifacts.
+Today, off-board fires whenever Mode 2 and Mode 4 are both empty. That's the source of the 401 bug — it's a fallback, not a condition.
 
-### Phase 3: Skip Stats Walkthrough button
+New trigger, evaluated only after Modes 2/3/4 have all been ruled out:
 
-Persistent UI element visible from the throw 2 → throw 3 transition onward (or from the start of throw 3 when entered via Stats Walkthrough Only). Recommend a corner-anchored button (top-right) with clear "Skip Stats Walkthrough" labeling. On click: tear down throw 3 state, restore any in-flight slider snapshots, route the player back to the Start Screen (no completion celebration — they bailed, not finished). Button is hidden during throws 1-2 entirely.
+```
+For every scoring candidate, new_remaining is < 2 or scored > remaining (bust)
+```
 
-**Acceptance:** Skip button is visible from throw 2 → 3 transition onward, hidden before. Clicking it immediately returns to Start Screen with no state leakage. Re-entering the tutorial after a skip works cleanly.
+In practice this happens at very low remainings where the only legal scoring options would bust without recovery, or push to remaining=1.
 
-## Architectural notes
+If Mode 5 fires, the display string sharpens to reflect that scoring is *actively harmful*, not just suboptimal:
 
-- **All "live update" code is reused.** `tutorial_slider.gd`, `ghost_dart_layer.gd`, `throw_mechanic`'s tutorial-mode hooks, the dartboard highlight API, and `hud.gd::set_stat_bar_visibility` (used in the prior tutorial for progressive bar reveal — likely unused or differently-used in the new flow since bars stay visible) all stay. Only the beat sequencer in `tutorial_controller.gd` is rewritten.
-- **The new launch mode pattern.** Adding `TutorialMode` to the controller's entry function is the cleanest place to fork. The controller's existing init flow becomes the FULL path; a new branch handles STATS_ONLY by jumping to throw 3's entry beat. Avoid duplicating beat content — both paths share the same throw 3 beat sequence.
-- **Skip button is a new persistent overlay.** It's not a tutorial beat — it's a sibling UI element controlled by the tutorial controller's lifecycle. Add a `CanvasLayer` or `Control` child to the tutorial controller, visible from a `_show_skip_button()` call at the appropriate beat. Hide it on tutorial teardown.
-- **State cleanup must handle truncated flows.** Phase 2 (skipping throws 1-2 entirely) and Phase 3 (mid-throw-3 skip) both produce non-canonical exit paths. The teardown logic must restore any snapshotted stats, unpause the game, hide tutorial overlays, and return to a clean menu state. The existing snapshot/restore patterns are the model — extend them where needed.
-- **Skip button placement is a small UX call.** Recommend top-right corner with a subtle but legible button style. Worth a quick visual confirmation before merging — Max may want to specify exact placement / styling.
-- **Stat bar visibility for throws 1-2.** With bars visible throughout, `hud.gd::set_stat_bar_visibility(stat_keys, is_visible)` may become unused for the new flow. Don't remove the API — the rules slideshow or future tutorials may want it. Just stop calling it from the new controller.
+> Aim off-board — any scoring dart busts
 
-## Open future hooks
+(Compared to the current `"Aim off-board -> preserves remaining (N)"`, which reads as a generic strategy. Post-refactor, off-board should feel like a last resort, not a routine recommendation.)
 
-- **"Just Mechanics" tutorial mode.** Currently the only opt-out from the stats walkthrough is the Skip button mid-flow. If playtest shows players consistently skipping, consider adding a third sub-menu option ("Just Mechanics — No Stats") that routes into throws 1-2 and then ends cleanly. Easy to add: just another `TutorialMode` enum value.
-- **Stats Reference panel (deferred from prior spec).** Still deferred. The new stats walkthrough is the primary teaching surface; a persistent reference panel could land later as a "look it up" complement. `start_screen.stats_reference_pressed` signal still exists and is still unhandled.
-- **Assembly tutorial (deferred from prior spec).** Still deferred. The new structure doesn't change anything about whether or when the Assembly tutorial happens.
-- **Per-throw replay.** Currently the only replay granularity is "Full Tutorial" or "Stats Only." A finer-grained replay (e.g., "redo just the V meter explanation") is possible by parameterizing the entry beat index, but is overkill for now.
-- **Ellipse references in rules slideshow.** Out of scope for this spec but a known follow-up. The rules slideshow may still reference the old ellipse aim — a focused copy-only pass on `rules_slideshow.gd` (and any other lingering references) lands later.
+---
+
+## 5. Display Strings
+
+All four mode strings exported on `hud.gd` for tuning (per project convention). Current `update_setup_display()` branches on `target.ring_name == "Off Board"`; new branching is on a mode enum passed from `main.gd`:
+
+| Mode | String template |
+|---|---|
+| 2, 4 | `"Aim %s -> leaves you at %d"` (unchanged) |
+| 3 | `"Score more points to enter checkout range"` |
+| 5 | `"Aim off-board — any scoring dart busts"` |
+
+The `Dictionary` returned from `get_setup_recommendation()` grows a `mode` key (enum: `ENDGAME_SETUP`, `SCORE_REDUCTION`, `MID_ZONE_SETUP`, `OFF_BOARD_PRESERVE`). `update_setup_display()` reads `mode` and picks the template. Target/remainder fields are populated only for modes that need them.
+
+---
+
+## 6. Performance Notes
+
+Max flagged buffering during late-game turns. The refactor should be perf-positive on average:
+
+- **Mode 3 short-circuit.** For every turn where `remaining > _max_preferred_remainder + _max_single_dart_score`, the 82-candidate sweep (each with a `speculative_score` call) is skipped entirely. In a 501 leg this covers most of turns 1–2 and frequently turn 3. In a 1001 leg, more.
+- **`_max_single_dart_score` is cached** alongside the existing `_preferred_remainders` / `_one_dart_finishable` caches and invalidated by the same `invalidate_preferred_remainders()` entry point — no new invalidation hooks.
+- **Mode 4 deletes work, doesn't add it.** Two fewer fields in the sort key.
+- **Setup quality metric upgrade is explicitly deferred** to avoid the per-candidate `solve_checkout` cost.
+
+No new precompute. No new caches beyond the single `int` for `_max_single_dart_score`.
+
+---
+
+## Deferred / Out of Scope
+
+- **Setup quality metric upgrade for Mode 4** (counting paths, 2-dart vs 3-dart preference). Held back for perf; revisit only if the simpler tiebreak fix still produces bad mid-zone suggestions in playtest.
+- **Multi-dart setup planning.** V1 still recommends one dart at a time; same scope boundary as the original spec.
+- **Streak-aware preferred remainder list (V2).** Carried forward unchanged from the original spec's deferred list.
+- **Mode 3 displaying a soft target hint.** Considered "Score points — aim T20 (60)" hybrid. Rejected: Max's call is silence on target in Mode 3, both for clarity and perf.
+
+---
+
+## Implementation Notes
+
+- Mode enum on `ScoringModifierManager` (or a small adjacent script): `ENDGAME_SETUP = 0`, `SCORE_REDUCTION = 1`, `MID_ZONE_SETUP = 2`, `OFF_BOARD_PRESERVE = 3`. Static-typed throughout per project convention.
+- `get_setup_recommendation()` rewritten to evaluate modes in priority order (Mode 2 first, Mode 3 trigger check second so the candidate loop can be skipped, Mode 4 third, Mode 5 last). Return dict grows a `mode` key.
+- `_max_single_dart_score: int` and `_max_preferred_remainder: int` cached on `ScoringModifierManager`. Computed during the same pass as `_compute_one_dart_finishable()` to share the candidate sweep. Both invalidated by `invalidate_preferred_remainders()`.
+- `_max_preferred_remainder` derived as the last element of `_preferred_remainders` (already sorted ascending by the 2..180 loop in `compute_preferred_remainders`).
+- `update_setup_display()` in `hud.gd` reads `recommendation["mode"]` and picks the string template. Existing `Off Board` ring-name branch goes away — mode is now the dispatch field.
+- All four template strings exported with hover descriptions per project convention. Mode 3 string default: `"Score more points to enter checkout range"`. Mode 5 string default: `"Aim off-board — any scoring dart busts"`.
+- `main.gd` `_update_checkout_helper()` is unchanged — it still calls `get_setup_recommendation()` and passes the dict straight to the HUD.
+- Spec follow-up after ship: update `DesignNotes.md` § "Setup recommendation" to reflect the four-mode model (currently documents the two-tier model from the original spec).
 
 ---
 

@@ -465,6 +465,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				ThrowState.HORIZONTAL_RELEASE:
 					get_viewport().set_input_as_handled()
 					_enter_resolving()
+		elif key.pressed and key.keycode == KEY_ESCAPE and _state == ThrowState.VERTICAL_RELEASE:
+			_cancel_to_aiming()
+			get_viewport().set_input_as_handled()
 
 
 ## Lock the aim crosshair in place and transition to VERTICAL_RELEASE.
@@ -491,6 +494,19 @@ func _place_aim_crosshair() -> void:
 
 	_state = ThrowState.VERTICAL_RELEASE
 	state_changed.emit(ThrowState.VERTICAL_RELEASE)
+	queue_redraw()
+
+
+## Cancel the vertical meter and return to the AIMING state.
+func _cancel_to_aiming() -> void:
+	_aim_center = _placed_center
+	_declared_target = {}
+	_target_centroid = _aim_center
+	_bounce_t = 0.0
+	_mouse_controls_aim = false
+	_last_mouse_pos = get_global_mouse_position()
+	_state = ThrowState.AIMING
+	state_changed.emit(ThrowState.AIMING)
 	queue_redraw()
 
 

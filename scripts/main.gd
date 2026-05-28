@@ -1939,10 +1939,16 @@ func _on_throw_state_changed(new_state: int) -> void:
 	match new_state:
 		throw_mechanic.ThrowState.AIMING:
 			_enable_hover()
+			dartboard.clear_declared_target()
+			_revert_temp_bonuses()
+			_update_stats_display()
+			var no_modifiers: Array[String] = []
+			hud.update_modifier_status(no_modifiers)
+			hud.show_instruction("Move to aim, click to place zone")
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
 			_disable_hover()
 			hud.clear_modifier_perkup()
-			hud.show_instruction("Click or Space to lock vertical")
+			hud.show_instruction("Click or Space to lock vertical  |  Esc to undo target")
 			# Declare target and show highlight
 			var target: Dictionary = throw_mechanic._declared_target
 			if not target.is_empty():

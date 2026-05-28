@@ -1,12 +1,16 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-24 after the Flight Modifier Additions pass shipped.*
+*Canonical design doc. Last refreshed 2026-05-27 after the Tutorial Revamp pass shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
 ## Status snapshot
+
+**Shipped 2026-05-27 (Tutorial Revamp):**
+
+- **Mechanics tutorial restructured to DISCOVER → DO → UNDERSTAND** (`specs/2026-05-27-tutorial-revamp.md`). Replaces the original DEMO → GUIDED → FREE structure after playtest revealed throw 1 had too much reading before any doing. New shape: throw 1 is the player throwing cold with freeze-and-explain at each stage (input locked during callouts, meters bouncing visibly during reads); throw 2 is a free uninterrupted throw; throw 3 is an opt-out stats walkthrough with three paired slider demos (V Range + V Speed, H Range + H Speed, V Accuracy + H Accuracy) and the accuracy-zone-breathing teach during the H meter sweep. Stat bars are visible-but-unexplained from throw 1 (exposure-first, explanation-last). Throw 3 auto-continues from throw 2 with a persistent **Skip Stats Walkthrough** button surfaced at the transition. New `TutorialMode { FULL, STATS_ONLY }` enum on `tutorial_controller.gd`; Start Screen's Play Tutorial button now opens a sub-menu chooser (Full Tutorial / Stats Walkthrough Only / Back) so returning players can replay just the stats throw without redoing the mechanics. All tutorial copy lives in an `@export var tutorial_strings: Dictionary` for inspector tuning. Three new `throw_mechanic` hooks added: `set_tutorial_visual_boost(bool)`, `set_tutorial_pulse_target(string)`, `recompute_aim_dimensions()` (for live Range slider updates). Slider behavior: player drags, clicks "Set," and the throw proceeds with the adjusted value — restore-to-base happens on `stop_tutorial` (finish or skip), protecting real-run stats. Rules slideshow, doubles drill, and welcome modal unchanged; ellipse references in `rules_slideshow.gd` deferred to a focused later pass.
 
 **Shipped 2026-05-24 (Flight Modifier Additions):**
 
