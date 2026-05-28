@@ -20,7 +20,8 @@
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(findstr *)",
       "Bash(grep -E \"\\\\.gd$\")",
-      "Bash(xargs grep -l \"crosshair\\\\|aim\")"
+      "Bash(xargs grep -l \"crosshair\\\\|aim\")",
+      "Bash(xargs grep -l \"shop\\\\|upgrade\\\\|skip\")"
     ]
   }
 }

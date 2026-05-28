@@ -732,7 +732,7 @@ func get_segment_centroid(wedge_index: int, ring_name: String) -> Vector2:
 		return global_position
 
 	# For wedge segments, compute center angle and midpoint radius
-	var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG
+	var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + board_rotation_offset
 	var center_angle_rad: float = deg_to_rad(center_angle_deg)
 	var direction: Vector2 = Vector2(sin(center_angle_rad), -cos(center_angle_rad))
 
@@ -1024,11 +1024,24 @@ func _draw_checkout_pulses() -> void:
 		if segment_type == "double_bull":
 			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
 			draw_polyline(points, pulse_color, checkout_border_thickness)
+		elif segment_type == "single_bull":
+			var points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
+			draw_polyline(points, pulse_color, checkout_border_thickness)
 		elif segment_type == "wedge":
 			var wedge_idx: int = segment["wedge_idx"]
 			var start_deg: float = _wedge_start_deg(wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), pulse_color, checkout_border_thickness)
+		elif segment_type == "triple_wedge":
+			var wedge_idx: int = segment["wedge_idx"]
+			var start_deg: float = _wedge_start_deg(wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, pulse_color, checkout_border_thickness)
+		elif segment_type == "single_wedge":
+			var wedge_idx: int = segment["wedge_idx"]
+			var start_deg: float = _wedge_start_deg(wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, pulse_color, checkout_border_thickness)
 
 
 # ── Tutorial highlight API ──────────────────────────────────────────────────

@@ -4,6 +4,7 @@ extends Control
 ## Displays run stats and offers navigation to assembly or main menu.
 
 signal return_to_assembly_pressed
+signal return_to_level_select_pressed
 signal return_to_menu_pressed
 
 ## Title text displayed at the top.
@@ -52,6 +53,7 @@ var _title_label: Label
 var _legs_won_label: Label
 var _darts_used_label: Label
 var _assembly_button: Button
+var _level_select_button: Button
 var _menu_button: Button
 var _background: ColorRect
 
@@ -93,7 +95,7 @@ func _build_ui() -> void:
 	var button_container: VBoxContainer = VBoxContainer.new()
 	button_container.add_theme_constant_override("separation", int(button_spacing))
 	button_container.alignment = BoxContainer.ALIGNMENT_CENTER
-	var total_button_height: float = button_height * 2.0 + button_spacing
+	var total_button_height: float = button_height * 3.0 + button_spacing * 2.0
 	button_container.position = Vector2(
 		(viewport_size.x - button_width) / 2.0,
 		buttons_center_y - total_button_height / 2.0
@@ -104,6 +106,10 @@ func _build_ui() -> void:
 	_assembly_button = _create_menu_button("Return to Assembly", Color(0.3, 0.5, 1.0))
 	_assembly_button.pressed.connect(func() -> void: return_to_assembly_pressed.emit())
 	button_container.add_child(_assembly_button)
+
+	_level_select_button = _create_menu_button("Level Select", Color(0.3, 0.7, 0.4))
+	_level_select_button.pressed.connect(func() -> void: return_to_level_select_pressed.emit())
+	button_container.add_child(_level_select_button)
 
 	_menu_button = _create_menu_button("Main Menu", Color(0.5, 0.5, 0.55))
 	_menu_button.pressed.connect(func() -> void: return_to_menu_pressed.emit())

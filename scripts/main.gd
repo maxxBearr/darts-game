@@ -717,6 +717,7 @@ func _on_next_turn() -> void:
 ## Player presses "Next Leg" — advance to next leg, enter shop, or leave shop.
 func _on_next_leg() -> void:
 	AuidoManager.play_ui_click()
+	hud.next_leg_button.visible = false
 	if _leg_phase == "shop_enter":
 		var response: Dictionary = {
 			"current_leg": x01_game.current_leg,
@@ -747,11 +748,9 @@ func _on_next_leg() -> void:
 		scoring_modifier_manager.effective_wedge_values
 	)
 
-	print("DEBUG: _on_next_leg — leg %d, is_boss_leg = %s" % [x01_game.current_leg, boss_manager.is_boss_leg(x01_game.current_leg)])
 	if boss_manager.is_boss_leg(x01_game.current_leg):
 		var game_state: Dictionary = _build_game_state()
 		var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
-		print("DEBUG: Boss started: %s" % boss_def.display_name)
 		boss_manager.on_turn_start(game_state)
 		_sync_board_and_solver()
 		_update_boss_status()
@@ -779,10 +778,8 @@ func _show_game_over(current_leg: int) -> void:
 func _show_run_won() -> void:
 	_run_over = true
 	_hide_gameplay_hud()
-	print("DEBUG _show_run_won: resource_path = '%s', run_total_darts = %d" % [_current_level.resource_path, _run_total_darts])
 	var is_new_best: bool = not PlayerProgress.is_level_cleared(_current_level.resource_path) or _run_total_darts < PlayerProgress.get_fewest_darts(_current_level.resource_path)
 	PlayerProgress.record_level_clear(_current_level, _run_total_darts)
-	print("DEBUG: cleared_levels after record = %s" % str(PlayerProgress.cleared_levels))
 	game_over_screen.show_victory(_current_level.display_name, _run_total_darts, is_new_best)
 
 
@@ -824,6 +821,7 @@ func _on_reward_selected(index: int) -> void:
 	var reward: RuleModifierReward = _current_rewards[index]
 	reward.apply(_build_run_state())
 	_active_rewards.append(reward)
+	hud.add_legendary(reward)
 	_current_rewards.clear()
 	_boss_leg_just_cleared = false
 
@@ -867,6 +865,7 @@ func _reset_run_state() -> void:
 	dartboard.clear_shop_spots()
 	scoring_modifier_manager.reset_for_run()
 	hud.clear_modifier_panel()
+	hud.clear_legendary_panel()
 	hud.clear_modifier_status()
 	hud.clear_streak_section()
 	_sync_board_state()
@@ -883,6 +882,12 @@ func _on_game_over_to_assembly() -> void:
 	_reset_run_state()
 	_current_level = level
 	_show_assembly()
+
+
+## Player presses "Level Select" on the game over screen.
+func _on_game_over_to_level_select() -> void:
+	_reset_run_state()
+	_show_level_select()
 
 
 ## Player presses "Main Menu" on the game over screen.
@@ -1298,6 +1303,7 @@ func _setup_tutorial_system() -> void:
 	game_over_screen = GameOverScreen.new()
 	game_over_screen.name = "GameOverScreen"
 	game_over_screen.return_to_assembly_pressed.connect(_on_game_over_to_assembly)
+	game_over_screen.return_to_level_select_pressed.connect(_on_game_over_to_level_select)
 	game_over_screen.return_to_menu_pressed.connect(_on_game_over_to_menu)
 	game_over_screen.visible = false
 	hud.add_child(game_over_screen)
@@ -1490,10 +1496,6 @@ func _on_run_confirmed() -> void:
 	UnlockManager.on_run_started()
 	if _current_level != null:
 		boss_manager.configure_for_level(_current_level)
-		print("DEBUG: Level '%s' boss_pool size = %d, boss_count = %d" % [_current_level.display_name, _current_level.boss_pool.size(), _current_level.boss_count])
-		for i: int in range(_current_level.boss_pool.size()):
-			var r: Resource = _current_level.boss_pool[i]
-			print("  DEBUG: boss_pool[%d] = %s (type: %s)" % [i, r, r.get_class() if r != null else "null"])
 	x01_game.start_run()
 
 	# Debug: skip to the boss leg by jumping to the final leg's target
@@ -1600,6 +1602,9 @@ func _on_modifier_selected(index: int) -> void:
 
 ## Player skips the scoring modifier pick.
 func _on_modifier_skipped() -> void:
+	if _in_shop:
+		_continue_shop_after_pick()
+		return
 	_leg_phase = ""
 	if _start_modifier_pending:
 		_start_modifier_pending = false
@@ -1890,10 +1895,17 @@ func _is_checkout_segment(result: Dictionary) -> bool:
 	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(x01_game.remaining_score)
 	var wedge_index: int = result.get("wedge_index", -1)
 	var is_bull: bool = result.get("is_bull", false)
+	var ring_name: String = result.get("ring_name", "")
 	for seg: Dictionary in checkout_segments:
-		if seg["type"] == "double_bull" and is_bull and result.get("ring_name", "") == "Double Bull":
+		if seg["type"] == "double_bull" and is_bull and ring_name == "Double Bull":
 			return true
-		if seg["type"] == "wedge" and seg["wedge_idx"] == wedge_index and result.get("ring_name", "") == "Double":
+		if seg["type"] == "single_bull" and is_bull and ring_name == "Single Bull":
+			return true
+		if seg["type"] == "wedge" and seg["wedge_idx"] == wedge_index and ring_name == "Double":
+			return true
+		if seg["type"] == "triple_wedge" and seg["wedge_idx"] == wedge_index and ring_name == "Triple":
+			return true
+		if seg["type"] == "single_wedge" and seg["wedge_idx"] == wedge_index and (ring_name == "Inner Single" or ring_name == "Outer Single"):
 			return true
 	return false
 

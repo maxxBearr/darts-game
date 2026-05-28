@@ -37,6 +37,17 @@ signal reward_selected(index: int)
 ## Size of each modifier square in the relic bar (pixels).
 @export var modifier_square_size: int = 40
 
+@export_group("Legendary Panel")
+
+## Size of each legendary diamond icon in the panel (pixels).
+@export var legendary_diamond_size: int = 40
+
+## Spacing between legendary icons (pixels).
+@export var legendary_panel_spacing: int = 6
+
+## Gold tint color for legendary diamond icons.
+@export var legendary_tint_color: Color = Color(1.0, 0.85, 0.2, 1.0)
+
 @export_group("Tooltips")
 
 ## Vertical offset above the crosshair for the hover tooltip (pixels).
@@ -150,6 +161,8 @@ var _skip_modifier_button: Button = null
 var _boss_status_label: Label = null
 var _boss_bg_tint: ColorRect = null
 var _boss_bg_layer: CanvasLayer = null
+var _legendary_panel: HBoxContainer = null
+var _legendary_tooltip: Label = null
 
 ## Current upgrades for hover preview (set during accuracy pick phase).
 var _preview_upgrades: Array[Dictionary] = []
@@ -220,6 +233,31 @@ func _ready() -> void:
 		modifier_skipped.emit()
 	)
 	add_child(_skip_modifier_button)
+
+	# Build legendary panel (right of modifier panel, gold diamonds for boss rewards)
+	_legendary_panel = HBoxContainer.new()
+	_legendary_panel.name = "LegendaryPanel"
+	_legendary_panel.add_theme_constant_override("separation", legendary_panel_spacing)
+	_legendary_panel.anchor_top = 1.0
+	_legendary_panel.anchor_bottom = 1.0
+	_legendary_panel.offset_top = modifier_panel.offset_top
+	_legendary_panel.offset_bottom = modifier_panel.offset_bottom
+	_legendary_panel.offset_left = modifier_panel.offset_right + 12.0
+	_legendary_panel.offset_right = _legendary_panel.offset_left + 300.0
+	_legendary_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_legendary_panel.visible = false
+	add_child(_legendary_panel)
+
+	_legendary_tooltip = Label.new()
+	_legendary_tooltip.name = "LegendaryTooltip"
+	_legendary_tooltip.visible = false
+	_legendary_tooltip.add_theme_font_size_override("font_size", 13)
+	_legendary_tooltip.add_theme_color_override("font_color", legendary_tint_color)
+	_legendary_tooltip.position = Vector2(modifier_panel.offset_right + 12.0, modifier_panel.offset_top - 30.0)
+	_legendary_tooltip.anchor_top = 1.0
+	_legendary_tooltip.anchor_bottom = 1.0
+	_legendary_tooltip.size = Vector2(300.0, 30.0)
+	add_child(_legendary_tooltip)
 
 	# Start with all buttons and optional labels hidden
 	hide_all_buttons()
@@ -1189,6 +1227,46 @@ func clear_modifier_panel() -> void:
 	modifier_tooltip.visible = false
 
 
+## Add a legendary reward icon to the legendary panel.
+func add_legendary(reward: RuleModifierReward) -> void:
+	var wrapper: Control = Control.new()
+	wrapper.custom_minimum_size = Vector2(legendary_diamond_size, legendary_diamond_size)
+	wrapper.set_meta("reward", reward)
+	wrapper.mouse_entered.connect(_on_legendary_hover.bind(wrapper))
+	wrapper.mouse_exited.connect(_on_legendary_unhover)
+	wrapper.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var icon: LegendaryIcon = LegendaryIcon.new()
+	icon.reward = reward
+	icon.tint_color = legendary_tint_color
+	icon.custom_minimum_size = Vector2(legendary_diamond_size, legendary_diamond_size)
+	icon.size = Vector2(legendary_diamond_size, legendary_diamond_size)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrapper.add_child(icon)
+
+	_legendary_panel.add_child(wrapper)
+	_legendary_panel.visible = true
+
+
+## Clear all legendary icons. Called on new run.
+func clear_legendary_panel() -> void:
+	for child: Node in _legendary_panel.get_children():
+		child.queue_free()
+	_legendary_panel.visible = false
+	_legendary_tooltip.visible = false
+
+
+func _on_legendary_hover(wrapper: Control) -> void:
+	var reward: RuleModifierReward = wrapper.get_meta("reward") as RuleModifierReward
+	if reward:
+		_legendary_tooltip.text = "%s — %s" % [reward.display_name, reward.description]
+		_legendary_tooltip.visible = true
+
+
+func _on_legendary_unhover() -> void:
+	_legendary_tooltip.visible = false
+
+
 ## Called when the mouse enters a modifier square.
 func _on_modifier_hover(wrapper: Control) -> void:
 	var modifier: Resource = wrapper.get_meta("modifier")
@@ -1399,7 +1477,7 @@ func show_shop_zero_darts() -> void:
 ## items is an Array[Dictionary] with {type: "modifier"|"upgrade", data: ...}.
 func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replacement_info: Array[String] = []) -> void:
 	_modifier_mode = true
-	_skip_modifier_button.visible = false
+	_skip_modifier_button.visible = true
 	score_label.text = "You hit a spot! Pick one (%d dart%s left)" % [darts_remaining, "" if darts_remaining == 1 else "s"]
 
 	# Build preview data — upgrade dicts for accuracy items, empty for modifiers

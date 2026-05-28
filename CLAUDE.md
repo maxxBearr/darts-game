@@ -1,158 +1,204 @@
-# Checkout Helper — Suggestion Refinement
+# Post-1001-Playtest Bug Fix Pass
 
-**Spec date:** 2026-05-27
+**Spec date:** 2026-05-28
 **Status:** Designed, ready for implementation
-**Scope:** Tighten `get_setup_recommendation()` in `scoring_modifier_manager.gd` and the corresponding `update_setup_display()` in `hud.gd` so the suggestion line gives useful advice across the full range of remaining scores. Solver itself (`solve_checkout`) and the per-throw path display are untouched. Builds on the shipped checkout helper (`specs/2026-05-22-checkout-helper.md`).
+**Scope:** Four targeted fixes surfaced during 1001-level playtest. Three are clean code-locality fixes; one (the 1001 boss leg) needs diagnostic logging to root-cause before patching.
 
 ## Summary
 
-The checkout solver itself works well. The setup recommendation — the single-line suggestion shown when no checkout exists this turn — does not, in two distinct ways:
+Bug pass covering four issues found during 1001 playtest. Bundled into one spec because they're all small targeted fixes that touch independent systems and can ship together.
 
-- **Far-from-checkout states** (e.g., turn 1 dart 1 of a 401 leg) currently fall through to the off-board preservation fallback. Off-board is recommended whenever no scoring dart can land the player at a remainder inside `_preferred_remainders`. That cache only covers 2..180, so any state above ~240 triggers the fallback even when scoring is unambiguously the right call.
-- **Mid-zone states** (e.g., 166, where no 3-dart checkout exists but the player should be reducing toward one) ranking can pick a small fat single (S1 → 165) over a high-scoring trip (T20 → 106). Within-tier tiebreaks today are `this_throw_fatness` then `-new_remaining`, both of which bias toward "play safe and keep the remainder high" — the opposite of what setup is supposed to do.
-
-Refactor the recommendation into four explicitly named modes, each with its own trigger condition, ranker, and display string. Modes are evaluated in order; first match wins.
-
----
-
-## 1. Mode Taxonomy
-
-The solver already covers "can finish this turn." When `solve_checkout()` returns paths, that path display continues unchanged. When it returns empty, the suggestion line picks one of four modes:
-
-| # | Mode | Trigger | Output |
+| # | Bug | Type | Confidence |
 |---|---|---|---|
-| 2 | Endgame setup | A scoring dart can land the player at a 1-dart-finishable remainder next turn (Tier 0 today) | Concrete target + resulting remainder |
-| 3 | Score-reduction | Even the best scoring dart cannot reach `_preferred_remainders` | Generic "score more points" line — no target |
-| 4 | Mid-zone setup | Some scoring dart reaches `_preferred_remainders` (but no 1-dart finish next turn) | Concrete target + resulting remainder |
-| 5 | Off-board preservation | Every scoring dart would strictly worsen the state (bust irrecoverably or push to remaining=1) | "Aim off-board — any scoring dart busts" |
-
-The numbering preserves the existing Tier 0 / Tier 1 terminology where it maps cleanly: Mode 2 is current Tier 0. Mode 4 is current Tier 1 with corrected tiebreaks. Modes 3 and 5 are new (or refactored from the existing fallback).
+| 1 | Boss leg appears at +200 instead of +100 on 1001+, AND recession-boss board effects don't apply | Wiring | Symptom clear, root cause needs diagnostic pass |
+| 2 | No place on screen to see legendary (rule-modifier) rewards earned this run | Missing UI | Spec-level decision, clean to ship |
+| 3 | Triple-checkout legendary: the triple that would close the leg doesn't get the gold-pulse outline that doubles get | Renderer gap | Root cause identified |
+| 4 | Rotation boss accuracy zone references stale (pre-rotation) target position | Math bug | Root cause identified |
 
 ---
 
-## 2. Mode 3 — Score-Reduction
+## 1. Bug 1 — 1001 boss leg skip + recession not applying
 
-The missing mode. Fires when the player is far enough from checkout that no setup-style recommendation is honest.
+### 1a. Symptoms
 
-### 2a. Trigger
+Playtest report (1001 level run):
+- After clearing leg 4 (target 401), pressed "Next Leg" → boss leg appeared with target **601** (leg 6) instead of **501** (leg 5). Leg 5 was skipped entirely.
+- The boss was Recession. Its **HUD background tint, title, and description applied correctly**, but the **dartboard wedge values were not recessed** and scoring did not use recessed values. Recession works correctly on the 501 level — only fails on 1001.
 
-Compute, once per modifier-state change, `_max_single_dart_score` — the highest `total_score` produced by any scoring candidate through `process_score(synth, true)` under turn-fresh streak state. Cached on `ScoringModifierManager` alongside `_preferred_remainders` and `_one_dart_finishable`, invalidated by the same `invalidate_preferred_remainders()` call.
+These are likely two separate bugs sharing the same trigger (the boss-leg entry path on longer levels), so the spec treats them together but lands distinct fixes.
 
-Also cache `_max_preferred_remainder` = `_preferred_remainders.max()` (or 0 if empty). Cheap.
+### 1b. Symptom A — leg-skip
 
-Mode 3 trigger:
+Code trace under the standard 1001 flow:
+- `shop_cadence = 3`, `boss_cadence = 5`, `target_increment = 100`, `starting_target = 101`.
+- After leg 4 (target 401): no shop (`4 % 3 != 0`), no boss-just-cleared. Path is `_show_leg_upgrades` → accuracy pick → modifier pick → "Next Leg" button → `_on_next_leg()` → single `advance_leg()` → `is_boss_leg(5)` true → boss starts at 501.
+- Observed result instead: boss at 601 (leg 6). Implies a double `advance_leg()` along this path, or a signal firing twice (`hud.next_leg_pressed.connect(_on_next_leg)` could be connected twice in some state), or some other place that increments `current_leg`/`target_score`.
 
-```
-remaining - _max_single_dart_score > _max_preferred_remainder
-```
+Fix approach is investigative — add `print()` diagnostics to:
+- `_on_next_leg` entry (print `current_leg`, `target_score`, `_leg_phase`).
+- `_show_leg_upgrades` entry (print same).
+- `_end_shop` callback that calls `advance_leg` (print before/after).
+- `x01_game.advance_leg()` itself (print before/after, dump call stack via `print_stack()`).
+- `hud.next_leg_pressed` emission site(s).
 
-When true, no scoring dart this throw can reach a 3-dart-finishable next-turn remainder. The 82-candidate sweep is skipped entirely — the trigger is O(1) once the two cached values exist.
+Reproduce on a 1001 run, capture which path double-fires, then land a single-line fix (likely `disconnect()` before `connect()` somewhere, or guarding the second call with a `_just_advanced` flag). Diagnostics removed once fix lands.
+
+### 1c. Symptom B — recession not applying on dartboard
+
+Code trace: `recession_boss.on_leg_start()` does the right work — mutates `smm.effective_wedge_values`, mirrors to `dartboard.effective_wedge_values`, sets `boss_reduced_wedges`, calls `set_boss_recession_wedges()`, `queue_redraw()`.
+
+The fact that the **boss UI applies** (background tint, title, description set via `_update_boss_status()` which runs *after* `start_boss_leg`) confirms `start_boss_leg` did run. So `on_leg_start` ran. Yet the dartboard shows unrecessed values.
+
+Hypothesis: something between `boss.on_leg_start()` and the player's first throw is replacing `effective_wedge_values` back to defaults. Candidates to verify under the same diagnostic pass:
+- `_sync_board_and_solver()` is called immediately after `start_boss_leg` (line 756). It calls `_sync_board_state()` which sets `dartboard.effective_wedge_values = scoring_modifier_manager.effective_wedge_values`. If `smm.effective_wedge_values` still has the recession applied, this is a no-op. **But** then it calls `scoring_modifier_manager._build_solver_candidates()` and `invalidate_preferred_remainders()` — verify these don't reset `effective_wedge_values`.
+- The hypothesized double-advance (Symptom A) could be the trigger: if a second `advance_leg` flow re-runs and somewhere along the way `_init_default_board_state()` gets called (which *does* reset `effective_wedge_values` to `DEFAULT_WEDGE_ORDER`), the recession is wiped. **This would explain why it correlates with the 1001-only skip bug.** Add `print()` in `_init_default_board_state` and any code that assigns to `effective_wedge_values` directly to catch the offender.
+
+Diagnostics likely show that fixing Symptom A also fixes Symptom B. If not, the second fix is targeted at whatever stale-state-reset path is found.
+
+### 1d. Acceptance
+
+- On a fresh 1001 run, beating leg 4 advances to leg 5 at target 501.
+- Boss leg at leg 5 (501) applies Recession to the dartboard: affected color wedges show reduced values, scoring uses reduced values, recession indicator visible.
+- Diagnostic prints removed in the same commit as the fix.
+- Bug not reproducible on 1001 *or* 1501 (test both).
+- 501 boss leg unaffected (regression check).
+
+---
+
+## 2. Bug 2 — Legendary rewards display
+
+### 2a. Problem
+
+`_active_rewards` (the rule-modifier rewards earned from boss defeats — Triple Outs, Glass Cannon, Extra Dart, Extra Turn, Streak Slot Extension, Pool Widener, Frequent Shopping, Lucky Eye) is tracked in `main.gd` line 826 but never surfaced anywhere in the HUD outside the reward picker itself. Players forget what legendaries they've banked across a long run.
 
 ### 2b. Display
 
-Single-line suggestion, no target named:
+A new "Legendaries" panel in the HUD:
 
-> Score more points to enter checkout range
+- **Placement:** Adjacent to the existing modifier strip, separated by a subtle divider. Recommended location: directly **right of** the modifier strip (or below it if horizontal space is tight — `hud.gd` layout dictates). Gold-tinted background tile to set it apart from the scoring modifier strip.
+- **Icon style:** Gold diamond-shaped tiles, sized to match `modifier_square_size`. Diamond shape (45°-rotated square) is the visual differentiator — communicates "rare/run-defining" without needing per-reward art.
+- **Per-icon content:** Gold-tinted background, reward's icon glyph or first-letter monogram if no icon resource exists. Reward classes don't currently carry icons — V1 ships with monogram-style placeholder (`T` for Triple Outs, `G` for Glass Cannon, etc.) and a TODO for proper iconography. Acceptable tradeoff: per-feedback memory, deferring polish to land function first.
+- **Hover tooltip:** Shows reward `display_name` + `description`. Matches the existing modifier-strip tooltip behavior.
+- **Empty state:** Panel hidden until at least one reward earned. Once earned, panel becomes visible and persists for the rest of the run.
 
-No "leaves you at N" suffix — irrelevant when N is hundreds away from checkout. No target name — picking one is just noise (player knows what to throw when there's no setup constraint), and skipping the target computation is the perf win.
+### 2c. Implementation
 
-Title bar above the line remains `— Setup —` for consistency with the other modes' panel layout.
+- New scene/control `legendary_icon.gd` (or extend `modifier_icon.gd` with a `display_style` enum: `MODIFIER_SQUARE` vs `LEGENDARY_DIAMOND`). Recommend new file — modifier and legendary semantics are distinct enough that mixing them muddies the API.
+- New `HBoxContainer` `LegendaryPanel` added to `hud.tscn` next to `ModifierPanel`.
+- `hud.gd` exports tuning vars (per project convention — static-typed, hover descriptions):
+  - `legendary_diamond_size: int = 40`
+  - `legendary_panel_spacing: int = 6`
+  - `legendary_tint_color: Color = Color(1.0, 0.85, 0.2, 1.0)` (gold)
+- `hud.gd` gets `add_legendary(reward: RuleModifierReward)` method. Called from `main.gd::_on_reward_selected` after `_active_rewards.append(reward)`.
+- On run end (`_reset_run_state`), HUD clears the legendary panel (alongside the existing modifier strip clear).
 
-### 2c. Why no recommended target
+### 2d. Display strings
 
-Per design call: when the situation calls for "just score," any recommendation beyond that is either obvious (T20) or actively confusing if modifiers have shifted top scoring (the player will read the wrong message into a "T18" recommendation under a swapped-value board). Better to stay silent on the specific target.
+`RuleModifierReward` already exposes `display_name` and `description` per the existing reward picker — reuse those directly. No new strings needed.
 
----
+### 2e. Out of scope
 
-## 3. Mode 4 — Mid-Zone Setup
-
-Triggered when Mode 2 has no candidate but at least one scoring dart lands `new_remaining` inside `_preferred_remainders`. Logic and candidate sweep are the existing Tier 1 — what changes is the ranking.
-
-### 3a. Ranking change
-
-Current key: `[tier, next_turn_fatness, this_throw_fatness, -new_remaining]`.
-
-New key: `[next_turn_fatness, new_remaining]`. (Lower wins; `tier` was redundant because mode selection already gates this.)
-
-Two deletions:
-
-- **Drop `this_throw_fatness`.** It was rewarding small singles because they're "fat targets." But the recommended *this-throw target* doesn't need to be fat — it needs to set up a fat *finishing* dart next turn. `next_turn_fatness` already captures that.
-- **Flip `-new_remaining` to `new_remaining`.** Lower remainder = closer to checkout = better setup, all else equal. The original `-new_remaining` direction was the same "higher remainder is more dart slack" misconception the V1 setup logic already corrected away from at the Tier 0/1 boundary.
-
-`next_turn_fatness` stays as the primary tiebreak — that's still about how reliably next turn finishes, which is the real definition of setup quality.
-
-### 3b. Setup quality metric upgrade — explicitly deferred
-
-A richer metric (count of 3-dart paths from `new_remaining`, or whether 2-dart-finishable beats 3-dart-finishable) was considered. Deferred for perf reasons: it would require running the full `solve_checkout` on every candidate's resulting remainder, multiplying solver work by ~80 per recommendation call. The two-deletion change above is expected to fix the observed bug at near-zero cost. Revisit only if playtest still finds bad mid-zone suggestions.
+- Per-reward icon art (placeholder monogram for V1).
+- Click-to-inspect or drag-to-reorder.
+- Showing legendaries on the game-over / victory screen.
 
 ---
 
-## 4. Mode 5 — Off-Board Preservation, Tightened
+## 3. Bug 3 — Triple-checkout gold outline + Glass Cannon
 
-Today, off-board fires whenever Mode 2 and Mode 4 are both empty. That's the source of the 401 bug — it's a fallback, not a condition.
+### 3a. Problem
 
-New trigger, evaluated only after Modes 2/3/4 have all been ruled out:
+When Triple Outs is active, doubles get the gold pulse outline correctly for double-checkouts, but the **triple that would close the leg does not** get the same outline. Same gap exists for Glass Cannon's "any segment closes."
 
+### 3b. Root cause
+
+Two-spot bug in the renderer/state-check layer:
+
+**Spot 1: `dartboard.gd::_draw_checkout_pulses()` (line ~1015)** only handles segment types `"double_bull"` and `"wedge"` (double). The segment types `"triple_wedge"` (emitted by `calculate_checkout_segments` when `allow_triple_checkout`) and `"single_wedge"` (emitted when `glass_cannon_active`) reach the loop but fall through the `match`/`if-elif` and never render.
+
+**Spot 2: `main.gd::_is_checkout_segment()` (line ~1887)** only matches `ring_name == "Double"`. Triple checkouts and Glass Cannon checkouts don't get the score-display gold treatment.
+
+### 3c. Fix
+
+**`_draw_checkout_pulses`:** add cases for `"triple_wedge"` and `"single_wedge"`. Border radii for each:
+- `triple_wedge`: `inner = RING_INNER_SINGLE_OUTER`, `outer = RING_TRIPLE_OUTER`
+- `single_wedge`: `inner = RING_TRIPLE_OUTER`, `outer = _effective_double_inner()` (outer single)
+
+Same `pulse_color` and `checkout_border_thickness` as doubles.
+
+For Glass Cannon, multiple ring types can be valid finishers simultaneously (any ring closes). All eligible segments for the current remainder should pulse. The existing `calculate_checkout_segments` already enumerates them — renderer just needs to draw all returned types.
+
+**`_is_checkout_segment`:** broaden to recognize Triple (when `allow_triple_checkout`) and any ring (when `glass_cannon_active`). Use `x01_game.allow_triple_checkout` and `x01_game.glass_cannon_active` as the gates so behavior follows the actual game state, not a snapshot.
+
+### 3d. Acceptance
+
+- With Triple Outs active and a remainder ≤ 60 finishable on a triple (e.g. 60 → T20, 57 → T19): the corresponding triple ring segment renders the same gold pulse outline as doubles.
+- With Glass Cannon active and any reachable remainder: all eligible segments pulse.
+- Score readout in main.gd uses gold-checkout treatment for triple-closing throws when triple checkout is active.
+- Regression check: with neither modifier, only doubles pulse (current behavior preserved).
+
+---
+
+## 4. Bug 4 — Rotation boss accuracy zone references stale target
+
+### 4a. Problem
+
+When the rotation boss rotates the dartboard at turn start, the throw mechanic's accuracy-zone distance check measures against the wedge's *pre-rotation* position. Hitting the visually-correct target reports a worse-than-expected accuracy.
+
+### 4b. Root cause
+
+`dartboard.gd::get_segment_centroid()` (line 728–757) computes:
+
+```gdscript
+var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG
 ```
-For every scoring candidate, new_remaining is < 2 or scored > remaining (bust)
+
+Missing both `WEDGE_OFFSET_DEG` and `board_rotation_offset`. Compare `_wedge_text_angle_deg()` at line 1264 which correctly returns:
+
+```gdscript
+return wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + board_rotation_offset
 ```
 
-In practice this happens at very low remainings where the only legal scoring options would bust without recovery, or push to remaining=1.
+Caller path: `throw_mechanic.gd::_place_aim_crosshair()` line 489 caches `_target_centroid = dartboard.get_segment_centroid(...)` when the player commits the aim. Distance check `pos.distance_to(_target_centroid)` then runs against this stale position. Under rotation boss, the actual wedge has rotated but the cached centroid hasn't.
 
-If Mode 5 fires, the display string sharpens to reflect that scoring is *actively harmful*, not just suboptimal:
+### 4c. Fix
 
-> Aim off-board — any scoring dart busts
+Single-line patch in `get_segment_centroid`:
 
-(Compared to the current `"Aim off-board -> preserves remaining (N)"`, which reads as a generic strategy. Post-refactor, off-board should feel like a last resort, not a routine recommendation.)
+```gdscript
+var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + board_rotation_offset
+```
 
----
+This is the same correction `_wedge_text_angle_deg` makes. The `direction` vector flows through `sin`/`-cos` of the corrected angle, landing the centroid in the rotated wedge's actual position.
 
-## 5. Display Strings
+Note: this also fixes a latent off-by-WEDGE_OFFSET_DEG bug that affects non-rotation-boss gameplay too. The bug is small in absolute terms (offset is typically 9° for 20-wedge boards), so it may have been imperceptible without rotation amplifying it. Verify the non-boss accuracy zone still feels right after the fix — if `WEDGE_OFFSET_DEG` is intentionally excluded for some reason (e.g. the throw mechanic compensates elsewhere), drop just the offset and keep the rotation term.
 
-All four mode strings exported on `hud.gd` for tuning (per project convention). Current `update_setup_display()` branches on `target.ring_name == "Off Board"`; new branching is on a mode enum passed from `main.gd`:
+### 4d. Acceptance
 
-| Mode | String template |
-|---|---|
-| 2, 4 | `"Aim %s -> leaves you at %d"` (unchanged) |
-| 3 | `"Score more points to enter checkout range"` |
-| 5 | `"Aim off-board — any scoring dart busts"` |
-
-The `Dictionary` returned from `get_setup_recommendation()` grows a `mode` key (enum: `ENDGAME_SETUP`, `SCORE_REDUCTION`, `MID_ZONE_SETUP`, `OFF_BOARD_PRESERVE`). `update_setup_display()` reads `mode` and picks the template. Target/remainder fields are populated only for modes that need them.
+- Rotation boss leg: hitting the visually-targeted segment after rotation registers as "on target" in the accuracy zone (compare to a non-rotation-boss leg).
+- Regression check: non-boss leg accuracy zone feels identical to before the fix (or, if `WEDGE_OFFSET_DEG` was being deliberately omitted, drop it back and keep only the rotation term).
 
 ---
 
-## 6. Performance Notes
+## 5. Implementation Order
 
-Max flagged buffering during late-game turns. The refactor should be perf-positive on average:
+Suggested sequence:
 
-- **Mode 3 short-circuit.** For every turn where `remaining > _max_preferred_remainder + _max_single_dart_score`, the 82-candidate sweep (each with a `speculative_score` call) is skipped entirely. In a 501 leg this covers most of turns 1–2 and frequently turn 3. In a 1001 leg, more.
-- **`_max_single_dart_score` is cached** alongside the existing `_preferred_remainders` / `_one_dart_finishable` caches and invalidated by the same `invalidate_preferred_remainders()` entry point — no new invalidation hooks.
-- **Mode 4 deletes work, doesn't add it.** Two fewer fields in the sort key.
-- **Setup quality metric upgrade is explicitly deferred** to avoid the per-candidate `solve_checkout` cost.
+1. **Bug 4** first — single-line fix, smallest blast radius, easy to verify.
+2. **Bug 3** next — two-spot renderer/check fix, isolated to checkout-highlight code.
+3. **Bug 2** — new UI element, slightly larger but contained to `hud.gd` + new icon script.
+4. **Bug 1** last — needs diagnostic pass; do this with a 1001 playtest in the loop. If the diagnostic shows the leg-skip is in a particularly tricky path, defer the recession-not-applying piece to confirm it's downstream of the same root cause vs. independent.
 
-No new precompute. No new caches beyond the single `int` for `_max_single_dart_score`.
-
----
-
-## Deferred / Out of Scope
-
-- **Setup quality metric upgrade for Mode 4** (counting paths, 2-dart vs 3-dart preference). Held back for perf; revisit only if the simpler tiebreak fix still produces bad mid-zone suggestions in playtest.
-- **Multi-dart setup planning.** V1 still recommends one dart at a time; same scope boundary as the original spec.
-- **Streak-aware preferred remainder list (V2).** Carried forward unchanged from the original spec's deferred list.
-- **Mode 3 displaying a soft target hint.** Considered "Score points — aim T20 (60)" hybrid. Rejected: Max's call is silence on target in Mode 3, both for clarity and perf.
+Diagnostic prints in Bug 1 are removed in the same commit as the fix.
 
 ---
 
-## Implementation Notes
+## Out of Scope / Deferred
 
-- Mode enum on `ScoringModifierManager` (or a small adjacent script): `ENDGAME_SETUP = 0`, `SCORE_REDUCTION = 1`, `MID_ZONE_SETUP = 2`, `OFF_BOARD_PRESERVE = 3`. Static-typed throughout per project convention.
-- `get_setup_recommendation()` rewritten to evaluate modes in priority order (Mode 2 first, Mode 3 trigger check second so the candidate loop can be skipped, Mode 4 third, Mode 5 last). Return dict grows a `mode` key.
-- `_max_single_dart_score: int` and `_max_preferred_remainder: int` cached on `ScoringModifierManager`. Computed during the same pass as `_compute_one_dart_finishable()` to share the candidate sweep. Both invalidated by `invalidate_preferred_remainders()`.
-- `_max_preferred_remainder` derived as the last element of `_preferred_remainders` (already sorted ascending by the 2..180 loop in `compute_preferred_remainders`).
-- `update_setup_display()` in `hud.gd` reads `recommendation["mode"]` and picks the string template. Existing `Off Board` ring-name branch goes away — mode is now the dispatch field.
-- All four template strings exported with hover descriptions per project convention. Mode 3 string default: `"Score more points to enter checkout range"`. Mode 5 string default: `"Aim off-board — any scoring dart busts"`.
-- `main.gd` `_update_checkout_helper()` is unchanged — it still calls `get_setup_recommendation()` and passes the dict straight to the HUD.
-- Spec follow-up after ship: update `DesignNotes.md` § "Setup recommendation" to reflect the four-mode model (currently documents the two-tier model from the original spec).
+- **Per-reward iconography for the legendary panel.** V1 ships monogram placeholders; proper icons are art-pass work for a later spec.
+- **Game-over / victory screen showing earned legendaries.** Run-end summary improvements deferred.
+- **Wider checkout-segment polish** beyond closing the triple/single render gaps. Animations, color theming, etc. unchanged.
+- **Rotation-boss target re-acquisition on rotation change** beyond the centroid fix. If playtest reveals the stale centroid is also referenced elsewhere (e.g., projectile tracking), follow up; current scope is the accuracy zone distance check.
 
 ---
 
