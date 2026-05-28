@@ -87,6 +87,12 @@ signal reward_selected(index: int)
 ## Hint text shown when modifiers can be toggled.
 @export var checkout_toggle_hint: String = "Try toggling a modifier to recalculate"
 
+## Setup text for score-reduction mode (far from checkout range).
+@export var score_reduction_text: String = "Score more points to enter checkout range"
+
+## Setup text for off-board preservation mode (every scoring dart busts).
+@export var off_board_preserve_text: String = "Aim off-board — any scoring dart busts"
+
 ## Position of the checkout helper panel on screen.
 @export var checkout_position: Vector2 = Vector2(1000.0, 200.0)
 
@@ -1588,15 +1594,18 @@ func update_setup_display(recommendation: Dictionary, has_toggleable_modifiers: 
 	_checkout_panel.add_child(title)
 	_checkout_path_labels.append(title)
 
-	var target: Dictionary = recommendation.get("target", {})
-	var remainder: int = recommendation.get("resulting_remainder", 0)
-	var target_name: String = _get_target_display_name(target)
+	var mode: int = recommendation.get("mode", ScoringEnums.SetupMode.OFF_BOARD_PRESERVE)
 
 	var line: Label = Label.new()
-	if target.get("ring_name", "") == "Off Board":
-		line.text = "Aim off-board -> preserves remaining (%d)" % remainder
-	else:
-		line.text = "Aim %s -> leaves you at %d" % [target_name, remainder]
+	match mode:
+		ScoringEnums.SetupMode.ENDGAME_SETUP, ScoringEnums.SetupMode.MID_ZONE_SETUP:
+			var target: Dictionary = recommendation.get("target", {})
+			var remainder: int = recommendation.get("resulting_remainder", 0)
+			line.text = "Aim %s -> leaves you at %d" % [_get_target_display_name(target), remainder]
+		ScoringEnums.SetupMode.SCORE_REDUCTION:
+			line.text = score_reduction_text
+		ScoringEnums.SetupMode.OFF_BOARD_PRESERVE:
+			line.text = off_board_preserve_text
 	line.add_theme_font_size_override("font_size", checkout_font_size)
 	line.add_theme_color_override("font_color", checkout_setup_color)
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

@@ -323,6 +323,13 @@ var _one_dart_finishable: Dictionary = {}
 ## Whether the 1-dart finishable cache needs recomputing.
 var _one_dart_finishable_dirty: bool = true
 
+## Highest total_score any single scoring dart produces under current modifiers.
+## Cached alongside preferred remainders; invalidated by the same call.
+var _max_single_dart_score: int = 0
+
+## Highest value in _preferred_remainders (last element, since it's sorted ascending).
+var _max_preferred_remainder: int = 0
+
 
 ## Build the 83 candidate targets from current effective board state.
 func _build_solver_candidates() -> void:
@@ -564,6 +571,7 @@ func compute_preferred_remainders() -> void:
 
 	restore_all_streak_state(saved)
 	_preferred_remainders_dirty = false
+	_max_preferred_remainder = _preferred_remainders[-1] if _preferred_remainders.size() > 0 else 0
 
 
 ## Existence-only checkout solver. Returns true as soon as any valid path is
@@ -661,6 +669,21 @@ func _compute_one_dart_finishable() -> void:
 		if double_bull_fatness < current:
 			_one_dart_finishable[bull_score] = double_bull_fatness
 
+	# Compute _max_single_dart_score by sweeping all scoring candidates.
+	# Streak state is already turn-fresh from the reset above.
+	if _solver_candidates.is_empty():
+		_build_solver_candidates()
+	_max_single_dart_score = 0
+	for target: Dictionary in _solver_candidates:
+		if target["face_value"] * target["multiplier"] <= 0:
+			continue
+		var snap: Array[Dictionary] = snapshot_all_streak_state()
+		var synth: Dictionary = synthesize_result(target)
+		var result: Dictionary = process_score(synth, true)
+		if result["total_score"] > _max_single_dart_score:
+			_max_single_dart_score = result["total_score"]
+		restore_all_streak_state(snap)
+
 	restore_all_streak_state(saved)
 	_one_dart_finishable_dirty = false
 
@@ -688,18 +711,12 @@ func invalidate_preferred_remainders() -> void:
 
 
 ## Recommend a single setup target when no checkout exists this turn.
-## Returns {target, result, resulting_remainder} or an off-board fallback.
-##
-## Ranking is two-tier, lexicographic (lower tuple = better):
-##   Tier 0 — resulting remainder has a 1-dart finish next turn (ideal setup).
-##   Tier 1 — resulting remainder is 3-dart-finishable (acceptable setup).
-##   (Otherwise, candidate is skipped; if no candidate qualifies, falls back
-##    to off-board preservation.)
-##
-## Within a tier, the tiebreak order is:
-##   1. Fattest next-turn finishing target (lower fatness = bigger / safer).
-##   2. Fattest this-throw target (so we recommend safe darts this turn too).
-##   3. Higher new_remaining as a final stable tiebreak.
+## Returns {target, result, resulting_remainder, mode} where mode is a
+## ScoringEnums.SetupMode value. Modes evaluated in priority order:
+##   ENDGAME_SETUP — scoring dart lands at a 1-dart-finishable remainder.
+##   SCORE_REDUCTION — too far from checkout range; just score points.
+##   MID_ZONE_SETUP — scoring dart lands in preferred remainders.
+##   OFF_BOARD_PRESERVE — every scoring dart busts or leaves remainder=1.
 func get_setup_recommendation(remaining: int) -> Dictionary:
 	if _solver_candidates.is_empty():
 		_build_solver_candidates()
@@ -707,20 +724,15 @@ func get_setup_recommendation(remaining: int) -> Dictionary:
 	var one_dart: Dictionary = get_one_dart_finishable()
 	var preferred: Array[int] = get_preferred_remainders()
 
-	var best_target: Dictionary = {}
-	# Lexicographic key: [tier, next_turn_fatness, this_throw_fatness, -new_remaining].
-	# Lower values are better; comparing arrays in GDScript does the right thing.
-	var best_key: Array = []
+	# Mode 2: Endgame setup — scan for candidates landing at 1-dart finishable.
+	var endgame_best: Dictionary = {}
+	var endgame_key: Array = []
 
 	var saved: Array[Dictionary] = snapshot_all_streak_state()
 
 	for target: Dictionary in _solver_candidates:
 		var base_score: int = target["face_value"] * target["multiplier"]
-		# Skip the off-board candidate here — it's handled by the fallback below.
-		# Skip anything that would bust outright on base score.
-		if base_score <= 0:
-			continue
-		if base_score > remaining:
+		if base_score <= 0 or base_score > remaining:
 			continue
 
 		var snapshot: Array[Dictionary] = snapshot_all_streak_state()
@@ -730,45 +742,76 @@ func get_setup_recommendation(remaining: int) -> Dictionary:
 		restore_all_streak_state(snapshot)
 
 		var new_remaining: int = remaining - scored
-		# Skip illegal/non-checkout-eligible resulting states
 		if new_remaining < 2 or scored > remaining:
 			continue
 
-		# Determine which tier this setup falls into
-		var tier: int
-		var next_turn_fatness: int
 		if one_dart.has(new_remaining):
-			# Ideal: lands at a 1-dart finish next turn
-			tier = 0
-			next_turn_fatness = one_dart[new_remaining]
-		elif new_remaining in preferred:
-			# Fallback: 3-dart-checkoutable next turn
-			tier = 1
-			next_turn_fatness = 999  # unknown / multi-dart finish
-		else:
-			# Not even 3-dart-reachable — skip
-			continue
-
-		var this_fatness: int = _target_fatness(target)
-		# Lexicographic comparison key (lower = better)
-		var key: Array = [tier, next_turn_fatness, this_fatness, -new_remaining]
-
-		if best_key.is_empty() or key < best_key:
-			best_target = {"target": target, "result": result, "resulting_remainder": new_remaining}
-			best_key = key
+			var key: Array = [one_dart[new_remaining], new_remaining]
+			if endgame_key.is_empty() or key < endgame_key:
+				endgame_best = {
+					"target": target, "result": result,
+					"resulting_remainder": new_remaining,
+					"mode": ScoringEnums.SetupMode.ENDGAME_SETUP,
+				}
+				endgame_key = key
 
 	restore_all_streak_state(saved)
 
-	# Fallback: if no candidate qualified, recommend off-board preservation
-	if best_target.is_empty():
-		best_target = {
-			"target": {"ring_name": "Off Board", "face_value": 0, "multiplier": 0,
-				"wedge_index": -1, "segment_color": -1, "is_bull": false},
-			"result": {"total_score": 0},
+	if not endgame_best.is_empty():
+		return endgame_best
+
+	# Mode 3: Score-reduction — no scoring dart can reach preferred remainders.
+	if remaining - _max_single_dart_score > _max_preferred_remainder:
+		return {
+			"target": {}, "result": {},
 			"resulting_remainder": remaining,
+			"mode": ScoringEnums.SetupMode.SCORE_REDUCTION,
 		}
 
-	return best_target
+	# Mode 4: Mid-zone setup — scoring dart lands in preferred remainders.
+	var midzone_best: Dictionary = {}
+	var midzone_key: Array = []
+
+	saved = snapshot_all_streak_state()
+
+	for target: Dictionary in _solver_candidates:
+		var base_score: int = target["face_value"] * target["multiplier"]
+		if base_score <= 0 or base_score > remaining:
+			continue
+
+		var snapshot: Array[Dictionary] = snapshot_all_streak_state()
+		var synth: Dictionary = synthesize_result(target)
+		var result: Dictionary = speculative_score(synth)
+		var scored: int = result["total_score"]
+		restore_all_streak_state(snapshot)
+
+		var new_remaining: int = remaining - scored
+		if new_remaining < 2 or scored > remaining:
+			continue
+
+		if new_remaining in preferred:
+			var key: Array = [999, new_remaining]
+			if midzone_key.is_empty() or key < midzone_key:
+				midzone_best = {
+					"target": target, "result": result,
+					"resulting_remainder": new_remaining,
+					"mode": ScoringEnums.SetupMode.MID_ZONE_SETUP,
+				}
+				midzone_key = key
+
+	restore_all_streak_state(saved)
+
+	if not midzone_best.is_empty():
+		return midzone_best
+
+	# Mode 5: Off-board preservation — every scoring dart busts.
+	return {
+		"target": {"ring_name": "Off Board", "face_value": 0, "multiplier": 0,
+			"wedge_index": -1, "segment_color": -1, "is_bull": false},
+		"result": {"total_score": 0},
+		"resulting_remainder": remaining,
+		"mode": ScoringEnums.SetupMode.OFF_BOARD_PRESERVE,
+	}
 
 
 ## Calculate which segments would win the leg at the given remaining score.

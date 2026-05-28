@@ -91,6 +91,15 @@ enum Rarity {
 	RARE,
 }
 
+## Which mode the setup recommendation is operating in.
+## Evaluated in priority order by get_setup_recommendation().
+enum SetupMode {
+	ENDGAME_SETUP,     ## Scoring dart lands at a 1-dart-finishable remainder
+	SCORE_REDUCTION,   ## Too far from checkout range — just score points
+	MID_ZONE_SETUP,    ## Scoring dart lands in preferred remainders (3-dart-finishable)
+	OFF_BOARD_PRESERVE, ## Every scoring dart busts or leaves remainder=1
+}
+
 ## Display data for each rarity tier: name string and card tint color.
 const RARITY_DATA: Dictionary = {
 	Rarity.COMMON: {"name": "Common", "color": Color(0.6, 0.6, 0.6)},

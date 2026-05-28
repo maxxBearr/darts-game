@@ -234,7 +234,7 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 - `_solve_recursive(remaining, darts_left, cache)` — depth-N tree search across the 83 candidate targets. Internal cache keyed by `(remaining, darts_left, streak_state_hash)` dedupes sub-problems within a single call.
 - `_solve_first(remaining, darts_left, cache) -> bool` — early-termination existence variant. Used by `compute_preferred_remainders` which only cares whether a checkout exists, not what it looks like.
 - `_solver_candidates` cached at modifier-state changes — 83 candidate targets (40 singles, 20 doubles, 20 triples, 2 bulls, 1 deliberate-non-scoring).
-- `get_setup_recommendation(remaining)` — returns a single-dart setup target when `solve_checkout` finds no path. Two-tier lexicographic ranking: Tier 0 = lands at a 1-dart-finishable remainder next turn (best); Tier 1 = lands at a 3-dart-checkoutable remainder (fallback). Tiebreak by (next-turn finishing target fatness, this-throw fatness, higher new_remaining). Off-board fallback when nothing reasonable is reachable.
+- `get_setup_recommendation(remaining)` — returns a setup recommendation dict (with `mode`, `target`, `result`, `resulting_remainder`) when `solve_checkout` finds no path. Four-mode priority: endgame setup (1-dart finish next turn), score-reduction (too far from checkout range, O(1) short-circuit), mid-zone setup (3-dart-finishable remainder), off-board preservation (every scoring dart busts). Ranked by `[next_turn_fatness, new_remaining]` within concrete-target modes.
 - `_one_dart_finishable: Dictionary` — cached map `{remainder → fatness_of_best_finishing_double}`. Computed cheaply by running 22 doubles through the preview pipeline. Source of truth for the Tier 0 check above.
 - `_preferred_remainders: Array[int]` — cached set of remainders that have at least one 3-dart checkout under the current modifier state. Computed via 179 iterations of `_solve_first` sharing one cache across all iterations (this shared cache is the key perf optimization — naive approach was 5s pinwheel).
 - `invalidate_preferred_remainders()` — marks both caches dirty; called on every modifier-state change.
@@ -493,17 +493,14 @@ At low modifier counts the player can mentally compute checkout paths from the s
 
 ### Setup recommendation
 
-When `solve_checkout` returns zero paths, the helper switches to setup mode. Setup ranking is **two-tier lexicographic**:
+When `solve_checkout` returns zero paths, the helper switches to setup mode. Four modes, evaluated in priority order (first match wins). Each mode carried as a `ScoringEnums.SetupMode` value in the recommendation dict:
 
-- **Tier 0 (best):** resulting remainder is in `_one_dart_finishable` — next turn checks out in a single dart.
-- **Tier 1 (fallback):** resulting remainder is in `_preferred_remainders` — next turn has at least one 3-dart checkout.
-- **Otherwise:** skip the candidate.
+1. **Endgame setup** (`ENDGAME_SETUP`): a scoring dart lands at a 1-dart-finishable remainder next turn. Ranked by `[next_turn_fatness, new_remaining]` (lower = better). Concrete target displayed.
+2. **Score-reduction** (`SCORE_REDUCTION`): no scoring dart can reach `_preferred_remainders` — player is too far from checkout range. Trigger is O(1): `remaining - _max_single_dart_score > _max_preferred_remainder`. Skips the candidate sweep entirely. Display: "Score more points to enter checkout range" (no target named).
+3. **Mid-zone setup** (`MID_ZONE_SETUP`): a scoring dart lands in `_preferred_remainders` (3-dart-finishable) but not at a 1-dart finish. Ranked by `[next_turn_fatness, new_remaining]` — lower remainder = closer to checkout = better. Concrete target displayed.
+4. **Off-board preservation** (`OFF_BOARD_PRESERVE`): every scoring dart busts or leaves remainder=1. Display: "Aim off-board — any scoring dart busts".
 
-Within tiers, tiebreaks are (a) fattest next-turn finishing target, (b) fattest this-throw target, (c) higher new_remaining as final stable tiebreak.
-
-If no candidate qualifies anywhere, the helper recommends an off-board throw to preserve the current remaining. Display string: `"Aim off-board → preserves remaining (N)"`.
-
-**Important:** the setup logic explicitly does NOT prefer higher remainders generally — higher remainder = harder next-turn checkout, not easier. The original spec wording got this backwards; the shipped implementation flipped it.
+**Important:** the setup logic explicitly does NOT prefer higher remainders generally — higher remainder = harder next-turn checkout, not easier. `_max_single_dart_score` and `_max_preferred_remainder` are cached alongside `_preferred_remainders` / `_one_dart_finishable` and invalidated by the same `invalidate_preferred_remainders()` call.
 
 ### Display
 
@@ -687,7 +684,7 @@ Slides cover: board orientation, singles, doubles, triples, bullseye, x01 scorin
 - **Three calculating interactions on every throw.** Board RNG read + skill/confidence + stat-driven hit probability. The shop's geometric placement rules deliberately invoke all three; future reward-delivery systems should preserve this trinity rather than collapse it.
 - **The board's checkout-highlight function is the single source of truth for "can win."** The HUD score-gold indicator and the board's gold checkout highlights both read from the same function. They must never disagree.
 - **The checkout helper is solver-driven, not lookup-based.** Modifiers (especially streak modifiers that mutate state per dart) break the static x01 checkout chart. The helper runs the actual scoring pipeline in simulation per candidate dart, with speculative streak-state mutation + restore between candidates. Caches sub-problems within each solve.
-- **Setup recommendations rank by 1-dart-finishable next-turn first, not by "highest remaining."** Higher new_remaining is the wrong direction (harder next-turn checkout). Tier 0: lands at a 1-dart finish. Tier 1: lands at any 3-dart-checkoutable remainder. Within tiers, prefer fattest next-turn finishing target.
+- **Setup recommendations use a four-mode priority system, not "highest remaining."** Higher new_remaining is the wrong direction (harder next-turn checkout). Mode 1 (endgame): lands at a 1-dart finish. Mode 2 (score-reduction): too far from checkout — generic "score more" line. Mode 3 (mid-zone): lands at any 3-dart-checkoutable remainder. Mode 4 (off-board): every scoring dart busts. Within concrete-target modes, rank by `[next_turn_fatness, new_remaining]`.
 - **Soft hints over active suggestions.** "Try toggling a modifier" instead of "disable Color Streak to enable T20-T20-Bull." Active suggestions feel like the helper is playing for the player; passive nudges teach the verb without commandeering the decision. Applies to all future helper-style features.
 - **Locked/unlocked is a 65/35 generation roll with no compensating buff for locked.** Rarity is the power axis, not lock status. Locked is a *constraint* (can't toggle off) at the same statline as unlocked. The interesting decision lives at the rarity boundary (locked-rare vs unlocked-uncommon), not within a single rarity.
 - **Modifier commits are leg-scale, not run-scale.** Locked items can be swapped at the next shop or post-leg pick. Long enough for commits to feel real; short enough to not feel punishing.
