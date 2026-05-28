@@ -234,7 +234,7 @@ func _ready() -> void:
 	)
 	add_child(_skip_modifier_button)
 
-	# Build legendary panel (right of modifier panel, gold diamonds for boss rewards)
+	# Build legendary panel (left of modifier panel, gold diamonds for boss rewards)
 	_legendary_panel = HBoxContainer.new()
 	_legendary_panel.name = "LegendaryPanel"
 	_legendary_panel.add_theme_constant_override("separation", legendary_panel_spacing)
@@ -242,9 +242,10 @@ func _ready() -> void:
 	_legendary_panel.anchor_bottom = 1.0
 	_legendary_panel.offset_top = modifier_panel.offset_top
 	_legendary_panel.offset_bottom = modifier_panel.offset_bottom
-	_legendary_panel.offset_left = modifier_panel.offset_right + 12.0
-	_legendary_panel.offset_right = _legendary_panel.offset_left + 300.0
+	_legendary_panel.offset_right = modifier_panel.offset_left - 12.0
+	_legendary_panel.offset_left = _legendary_panel.offset_right - 300.0
 	_legendary_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_legendary_panel.alignment = BoxContainer.ALIGNMENT_END
 	_legendary_panel.visible = false
 	add_child(_legendary_panel)
 
@@ -253,7 +254,7 @@ func _ready() -> void:
 	_legendary_tooltip.visible = false
 	_legendary_tooltip.add_theme_font_size_override("font_size", 13)
 	_legendary_tooltip.add_theme_color_override("font_color", legendary_tint_color)
-	_legendary_tooltip.position = Vector2(modifier_panel.offset_right + 12.0, modifier_panel.offset_top - 30.0)
+	_legendary_tooltip.position = Vector2(modifier_panel.offset_left - 312.0, modifier_panel.offset_top - 30.0)
 	_legendary_tooltip.anchor_top = 1.0
 	_legendary_tooltip.anchor_bottom = 1.0
 	_legendary_tooltip.size = Vector2(300.0, 30.0)

@@ -34,6 +34,7 @@ stream = ExtResource("6_ilfjs")
 
 [node name="leg_win_sound" type="AudioStreamPlayer" parent="." unique_id=1535283951]
 stream = ExtResource("7_khg3p")
+volume_db = 1.0
 
 [node name="leg_lost_sound" type="AudioStreamPlayer" parent="." unique_id=986192137]
 stream = ExtResource("9_w0x6a")

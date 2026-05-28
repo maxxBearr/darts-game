@@ -227,6 +227,9 @@ var shop_pick_count: int = 2
 ## How often shops occur (every N legs).
 @export var shop_cadence: int = 3
 
+## When true, shop only offers modifiers (no accuracy upgrades).
+var all_in_active: bool = false
+
 ## Duration of the board slide transition into/out of shop in seconds.
 @export var shop_transition_duration: float = 0.5
 
@@ -1077,8 +1080,8 @@ func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 		weight_overrides = dart_build.equipped_flight.shop_bias.get_weight_overrides()
 
 	for _i: int in range(2):
-		# 50/50 chance of accuracy upgrade vs modifier
-		if randi_range(0, 1) == 0:
+		# 50/50 chance of accuracy upgrade vs modifier (unless All In is active)
+		if not all_in_active and randi_range(0, 1) == 0:
 			picks.append(_generate_shop_accuracy_pick(rarity))
 		else:
 			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity, weight_overrides)
