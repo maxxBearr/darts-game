@@ -2203,6 +2203,55 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, rec
 	return tween
 
 
+func _group_multiplier_mods(multiplier_mods: Array[Dictionary]) -> Array[Dictionary]:
+	var groups: Array[Dictionary] = []
+	var current_group: Dictionary = {}
+	for mod: Dictionary in multiplier_mods:
+		var mod_name: String = mod.get("source_name", "")
+		if current_group.is_empty() or current_group["source_name"] != mod_name:
+			current_group = {
+				"source_name": mod_name,
+				"source_modifier": mod.get("source_modifier", null),
+				"source_rarity_color": mod.get("source_rarity_color", Color(0.8, 0.8, 0.8)),
+				"mods": [] as Array[Dictionary],
+				"total_contribution": 0,
+			}
+			groups.append(current_group)
+		current_group["mods"].append(mod)
+		current_group["total_contribution"] += 1
+	return groups
+
+
+func _create_source_label(group: Dictionary, start_position: Vector2) -> HBoxContainer:
+	var container: HBoxContainer = HBoxContainer.new()
+	container.add_theme_constant_override("separation", 4)
+	container.z_index = 102
+	container.position = start_position
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var source_mod: Resource = group.get("source_modifier", null)
+	if source_mod != null and source_mod is ScoringModifier:
+		var icon: ModifierIcon = ModifierIcon.new()
+		icon.modifier = source_mod
+		icon.custom_minimum_size = Vector2(20, 20)
+		icon.size = Vector2(20, 20)
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		container.add_child(icon)
+
+	var text_label: Label = Label.new()
+	var base_name: String = group["source_name"].split(" +")[0]
+	var contribution: int = group["total_contribution"]
+	text_label.text = "%s: +%dx!" % [base_name, contribution]
+	text_label.add_theme_font_size_override("font_size", 16)
+	text_label.add_theme_constant_override("outline_size", 3)
+	text_label.add_theme_color_override("font_color", group["source_rarity_color"])
+	text_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+	text_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	container.add_child(text_label)
+
+	return container
+
+
 func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary], recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
 	var has_recession: bool = not recession_data.is_empty()
 	var face_value: int = result["face_value"]
@@ -2215,7 +2264,6 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 	main_label.pivot_offset = main_label.size / 2.0
 	add_child(main_label)
 
-	# Suppress hover tooltip while the animation plays
 	hud.hide_hover_tooltip()
 	_trigger_anim_active = true
 
@@ -2242,20 +2290,64 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		add_child(trigger_label)
 		trigger_labels.append(trigger_label)
 
-	for i: int in range(num_triggers):
-		running_total += display_face
-		var final_total: int = running_total
-		var scale_bump: float = 1.0 + 0.1 * float(i + 1)
-		var trigger_lbl: Label = trigger_labels[i]
+	var groups: Array[Dictionary] = _group_multiplier_mods(multiplier_mods)
+	var global_trigger_idx: int = 0
+	var prev_source_label: HBoxContainer = null
+	var source_rest_pos: Vector2 = hit_position + Vector2(-10.0, -65.0)
 
-		tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
-		tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-		tween.tween_callback(_on_trigger_impact.bind(trigger_lbl, main_label, final_total, scale_bump, i))
-		var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
-		tween.tween_property(main_label, "position", main_label.position + shake_offset, 0.04)
-		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
-		if i < num_triggers - 1:
-			tween.tween_interval(0.1)
+	for group_idx: int in range(groups.size()):
+		var group: Dictionary = groups[group_idx]
+		var is_first_group: bool = (group_idx == 0)
+		var source_start_pos: Vector2 = source_rest_pos + Vector2(0.0, -40.0)
+		var new_source_label: HBoxContainer = _create_source_label(group, source_start_pos)
+		new_source_label.modulate.a = 0.0
+		new_source_label.set_meta("rest_position", source_rest_pos)
+
+		var old_label_ref: HBoxContainer = prev_source_label
+
+		tween.tween_callback(func() -> void:
+			add_child(new_source_label)
+		)
+
+		tween.set_parallel(true)
+		tween.tween_property(new_source_label, "modulate:a", 1.0, 0.08)
+		tween.tween_property(new_source_label, "position", source_rest_pos, 0.15).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+		tween.set_parallel(false)
+
+		tween.tween_callback(func() -> void:
+			new_source_label.pivot_offset = new_source_label.size / 2.0
+			AuidoManager.play_source_label_slam(not is_first_group)
+			if old_label_ref != null and is_instance_valid(old_label_ref):
+				var exit_tw: Tween = create_tween()
+				exit_tw.set_parallel(true)
+				exit_tw.tween_property(old_label_ref, "position:y", old_label_ref.position.y + 25.0, 0.1).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+				exit_tw.tween_property(old_label_ref, "modulate:a", 0.0, 0.1)
+				exit_tw.set_parallel(false)
+				exit_tw.tween_callback(old_label_ref.queue_free)
+		)
+
+		tween.tween_interval(0.12)
+
+		var group_mods: Array = group["mods"]
+		for j: int in range(group_mods.size()):
+			running_total += display_face
+			var final_total: int = running_total
+			var scale_bump: float = 1.0 + 0.1 * float(global_trigger_idx + 1)
+			var trigger_lbl: Label = trigger_labels[global_trigger_idx]
+			var source_ref: HBoxContainer = new_source_label
+			var local_j: int = j
+
+			tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
+			tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+			tween.tween_callback(_on_trigger_impact_with_source.bind(trigger_lbl, main_label, source_ref, final_total, scale_bump, global_trigger_idx, local_j))
+			var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
+			tween.tween_property(main_label, "position", main_label.position + shake_offset, 0.04)
+			tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
+			if global_trigger_idx < num_triggers - 1:
+				tween.tween_interval(0.1)
+			global_trigger_idx += 1
+
+		prev_source_label = new_source_label
 
 	if is_leg_won:
 		tween.tween_callback(func() -> void:
@@ -2292,8 +2384,16 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		tween.tween_property(main_label, "position", main_label.position + r_shake, 0.04)
 		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
 
+	var final_source: HBoxContainer = prev_source_label
 	tween.tween_interval(0.15)
-	tween.tween_callback(func() -> void: _trigger_anim_active = false)
+	tween.tween_callback(func() -> void:
+		_trigger_anim_active = false
+		AuidoManager.reset_slam_pitch()
+		if final_source != null and is_instance_valid(final_source):
+			var source_fade: Tween = create_tween()
+			source_fade.tween_property(final_source, "modulate:a", 0.0, 0.4).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+			source_fade.tween_callback(final_source.queue_free)
+	)
 	tween.set_parallel(true)
 	tween.tween_property(main_label, "position", main_label.position + Vector2(25.0, -55.0), 0.8).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 	tween.tween_property(main_label, "modulate:a", 0.0, 0.8).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
@@ -2307,6 +2407,26 @@ func _on_trigger_impact(trigger_lbl: Label, main_label: Label, total: int, scale
 	main_label.text = str(total)
 	main_label.scale = Vector2(scale, scale)
 	AuidoManager.play_bonus_hit(trigger_index)
+
+
+func _on_trigger_impact_with_source(trigger_lbl: Label, main_label: Label, source_label: HBoxContainer, total: int, scale: float, global_trigger_index: int, group_local_index: int) -> void:
+	trigger_lbl.queue_free()
+	main_label.text = str(total)
+	main_label.scale = Vector2(scale, scale)
+	AuidoManager.play_bonus_hit(global_trigger_index)
+	if is_instance_valid(source_label):
+		var source_scale: float = 1.0 + 0.03 * float(group_local_index + 1)
+		source_label.scale = Vector2(source_scale, source_scale)
+		var rest_pos: Vector2 = source_label.get_meta("rest_position", source_label.position)
+		var shake: Vector2 = Vector2(randf_range(-2.0, 2.0), randf_range(-1.5, 1.5))
+		var rot_jolt: float = deg_to_rad(randf_range(-10.0, 10.0))
+		source_label.rotation = rot_jolt
+		var shake_tween: Tween = create_tween()
+		shake_tween.tween_property(source_label, "position", rest_pos + shake, 0.05)
+		shake_tween.tween_property(source_label, "position", rest_pos, 0.05)
+		shake_tween.tween_callback(func() -> void:
+			source_label.rotation = 0.0
+		)
 
 
 func _create_score_label(score: int, hit_position: Vector2, result: Dictionary, font_size: int = 26) -> Label:

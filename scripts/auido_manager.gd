@@ -6,6 +6,7 @@ extends Node
 @onready var ui_click: AudioStreamPlayer = $UIclick
 @onready var leg_win_sound: AudioStreamPlayer = $leg_win_sound
 @onready var leg_lost_sound: AudioStreamPlayer = $leg_lost_sound
+@onready var source_label_slam: AudioStreamPlayer = $SourceLabelSlam
 @onready var menu_music: AudioStreamPlayer = $MenuMusic
 @onready var game_music: AudioStreamPlayer = $GameMusic
 
@@ -64,6 +65,20 @@ func play_leg_win(pitch: float = 1.0) -> void:
 func play_bonus_hit(trigger_index: int) -> void:
 	bonus_score.pitch_scale = BONUS_BASE_PITCH + BONUS_PITCH_STEP * trigger_index
 	bonus_score.play()
+
+
+var _slam_pitch_accumulator: float = 0.0
+
+
+func play_source_label_slam(is_replacement: bool = false) -> void:
+	var base: float = 1.1 if is_replacement else 1.0
+	source_label_slam.pitch_scale = base + _slam_pitch_accumulator
+	source_label_slam.play()
+	_slam_pitch_accumulator += 0.01
+
+
+func reset_slam_pitch() -> void:
+	_slam_pitch_accumulator = 0.0
 
 
 func transition_to_game_music() -> void:
