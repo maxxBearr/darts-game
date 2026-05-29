@@ -227,6 +227,9 @@ var shop_pick_count: int = 2
 ## How often shops occur (every N legs).
 @export var shop_cadence: int = 3
 
+## When true, a free shop always appears after beating a boss (in addition to the reward pick).
+@export var shop_after_boss: bool = true
+
 ## When true, shop only offers modifiers (no accuracy upgrades).
 var all_in_active: bool = false
 
@@ -645,10 +648,12 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		hud.show_shop_entry(response["current_leg"], response["target_score"], response["current_turn"], saved)
 		return
 
+	_show_accuracy_pick()
+
+
+func _show_accuracy_pick() -> void:
 	_leg_phase = "accuracy_pick"
 	_current_upgrades = _generate_upgrades()
-
-	# Cache current stats so the HUD can preview upgrades on hover
 	var current_stats: Dictionary = {
 		"horizontal_range": throw_mechanic.horizontal_range,
 		"vertical_range": throw_mechanic.vertical_range,
@@ -666,11 +671,10 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		"horizontal_speed": _base_horizontal_speed,
 	}
 	hud.cache_stats(current_stats, base_stats)
-
 	hud.show_leg_complete_with_upgrades(
-		response["current_leg"],
-		response["target_score"],
-		response["current_turn"],
+		x01_game.current_leg,
+		x01_game.target_score,
+		x01_game.current_turn,
 		_current_upgrades
 	)
 
@@ -828,10 +832,14 @@ func _on_reward_selected(index: int) -> void:
 	_current_rewards.clear()
 	_boss_leg_just_cleared = false
 
-	# After reward pick, enter free shop
-	_leg_phase = "shop_enter"
-	var saved: int = _saved_darts_accumulator
-	hud.show_shop_entry(x01_game.current_leg, x01_game.target_score, x01_game.current_turn, saved)
+	if shop_after_boss:
+		_leg_phase = "shop_enter"
+		var saved: int = _saved_darts_accumulator
+		hud.show_shop_entry(x01_game.current_leg, x01_game.target_score, x01_game.current_turn, saved)
+	else:
+		_leg_phase = ""
+		hud.score_label.text = ""
+		hud.next_leg_button.visible = true
 
 
 ## Reset all run state (shared by all post-game-over paths).
