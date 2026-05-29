@@ -11,6 +11,10 @@ func _init() -> void:
 	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
 
 
+func get_config_fingerprint() -> String:
+	return super.get_config_fingerprint()
+
+
 func apply_to_board(wedge_values: Array[int], wedge_colors: Array[Dictionary], config: Dictionary) -> void:
 	var idx1: int = config["wedge_index_1"]
 	var idx2: int = config["wedge_index_2"]

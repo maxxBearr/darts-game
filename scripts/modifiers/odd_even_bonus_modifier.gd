@@ -16,6 +16,10 @@ func _init() -> void:
 	config_type = ScoringEnums.ConfigType.NONE
 
 
+func get_config_fingerprint() -> String:
+	return "%s|%s" % [super.get_config_fingerprint(), "O" if target_odd else "E"]
+
+
 func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.ODD_TRIANGLE if target_odd else ScoringEnums.IconShape.EVEN_SQUARE
 

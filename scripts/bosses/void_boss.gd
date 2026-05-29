@@ -31,6 +31,7 @@ func on_turn_start(game_state: Dictionary) -> void:
 
 	for idx: int in _void_wedge_indices:
 		smm.effective_wedge_values[idx] = 0
+	smm._bump_state_version()
 
 	dartboard.effective_wedge_values = smm.effective_wedge_values
 	dartboard.set_boss_void_wedges(_void_wedge_indices)
@@ -49,6 +50,8 @@ func _restore_wedge_values(smm: Node) -> void:
 	for idx: int in _void_wedge_indices:
 		if idx < _original_wedge_values.size():
 			smm.effective_wedge_values[idx] = _original_wedge_values[idx]
+	if _void_wedge_indices.size() > 0:
+		smm._bump_state_version()
 
 
 func get_status_text() -> String:

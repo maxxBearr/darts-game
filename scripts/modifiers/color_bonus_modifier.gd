@@ -30,6 +30,10 @@ func apply(result: Dictionary, _context: Dictionary) -> Dictionary:
 	return result
 
 
+func get_config_fingerprint() -> String:
+	return "%s|%d" % [super.get_config_fingerprint(), target_color]
+
+
 func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.COLOR_CIRCLE
 

@@ -24,6 +24,10 @@ func _init() -> void:
 
 
 ## Called with the player's wedge choice. Mutates the effective values array.
+func get_config_fingerprint() -> String:
+	return "%s|%d" % [super.get_config_fingerprint(), bonus_value]
+
+
 func apply_to_board(wedge_values: Array[int], _wedge_colors: Array[Dictionary], config: Dictionary) -> void:
 	var target_index: int = config["wedge_index"]
 	original_value = wedge_values[target_index]

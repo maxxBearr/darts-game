@@ -20,6 +20,14 @@ func _init() -> void:
 	streak_category = ScoringEnums.StreakCategory.WEDGE
 
 
+func get_streak_state_hash() -> int:
+	return (_streak_count * 31 + (_streak_wedge_index + 1)) & 0x7FFFFFFF
+
+
+func get_config_fingerprint() -> String:
+	return "%s|%d" % [super.get_config_fingerprint(), streak_scope]
+
+
 func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.WEDGE_SECTOR
 

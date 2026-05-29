@@ -1340,7 +1340,9 @@ func _select_upgrade(index: int) -> void:
 
 ## Show 3 modifier cards for the player to pick from.
 func show_modifier_choices(modifiers: Array) -> void:
-	var empty_info: Array[String] = ["", "", ""]
+	var empty_info: Array[String] = []
+	for _i: int in range(modifiers.size()):
+		empty_info.append("")
 	show_modifier_choices_with_replacement(modifiers, empty_info)
 
 
@@ -1357,18 +1359,21 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
 		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
 			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
-		var modifier: Resource = modifiers[i]
-		var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
-		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
-			var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
-			button_text += "\n%s" % lock_tag
-		if replacement_info[i] != "":
-			button_text += "\n!! %s" % replacement_info[i]
-		buttons[i].text = button_text
-		var color: Color = modifier.rarity_color
-		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
-		buttons[i].tooltip_text = modifier.description
-		buttons[i].visible = true
+		if i < modifiers.size():
+			var modifier: Resource = modifiers[i]
+			var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
+				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
+				button_text += "\n%s" % lock_tag
+			if i < replacement_info.size() and replacement_info[i] != "":
+				button_text += "\n!! %s" % replacement_info[i]
+			buttons[i].text = button_text
+			var color: Color = modifier.rarity_color
+			buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
+			buttons[i].tooltip_text = modifier.description
+			buttons[i].visible = true
+		else:
+			buttons[i].visible = false
 	_skip_modifier_button.visible = true
 	upgrade_container.visible = true
 	next_leg_button.visible = false

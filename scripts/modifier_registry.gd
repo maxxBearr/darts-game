@@ -80,7 +80,8 @@ static func generate_of_type(type_index: int) -> ScoringModifier:
 
 
 ## Generate N distinct random modifiers (no duplicate types unless N > type count).
-static func generate_distinct(count: int) -> Array[ScoringModifier]:
+## excluded_fingerprints: fingerprints to reject (owned inventory + intra-batch).
+static func generate_distinct(count: int, excluded_fingerprints: Array[String] = []) -> Array[ScoringModifier]:
 	var results: Array[ScoringModifier] = []
 
 	if count >= MODIFIER_TYPES.size():
@@ -94,7 +95,7 @@ static func generate_distinct(count: int) -> Array[ScoringModifier]:
 	for i: int in range(MODIFIER_TYPES.size()):
 		available_indices.append(i)
 
-	for _n: int in range(count):
+	while results.size() < count and not available_indices.is_empty():
 		var total_weight: int = 0
 		var weights: Array[int] = []
 		for idx: int in available_indices:
@@ -112,8 +113,20 @@ static func generate_distinct(count: int) -> Array[ScoringModifier]:
 				break
 
 		var chosen_global_idx: int = available_indices[chosen_local]
-		results.append(generate_of_type(chosen_global_idx))
+		var mod: ScoringModifier = generate_of_type(chosen_global_idx)
+		if excluded_fingerprints.size() > 0:
+			var attempts: int = 0
+			while mod.get_config_fingerprint() in excluded_fingerprints and attempts < 8:
+				mod = generate_of_type(chosen_global_idx)
+				attempts += 1
+			if mod.get_config_fingerprint() in excluded_fingerprints:
+				available_indices.remove_at(chosen_local)
+				continue
+		results.append(mod)
 		available_indices.remove_at(chosen_local)
+
+	while results.size() < count:
+		results.append(generate_random())
 
 	return results
 
@@ -121,14 +134,15 @@ static func generate_distinct(count: int) -> Array[ScoringModifier]:
 ## Generate N distinct modifiers all at a forced rarity tier.
 ## Used by the shop system where the hit spot's rarity determines the tier.
 ## weight_overrides: optional {Script: float_multiplier} to bias pool weights.
-static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity, weight_overrides: Dictionary = {}) -> Array[ScoringModifier]:
+## excluded_fingerprints: fingerprints to reject (owned inventory + intra-batch).
+static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity, weight_overrides: Dictionary = {}, excluded_fingerprints: Array[String] = []) -> Array[ScoringModifier]:
 	var results: Array[ScoringModifier] = []
 
 	var available_indices: Array[int] = []
 	for i: int in range(MODIFIER_TYPES.size()):
 		available_indices.append(i)
 
-	for _n: int in range(mini(count, available_indices.size())):
+	while results.size() < count and not available_indices.is_empty():
 		var total_weight: float = 0.0
 		var weights: Array[float] = []
 		for idx: int in available_indices:
@@ -149,8 +163,21 @@ static func generate_distinct_at_rarity(count: int, rarity: ScoringEnums.Rarity,
 
 		var chosen_global_idx: int = available_indices[chosen_local]
 		var chosen_type = MODIFIER_TYPES[chosen_global_idx]
-		results.append(chosen_type.generate(rarity))
+		var mod: ScoringModifier = chosen_type.generate(rarity)
+		if excluded_fingerprints.size() > 0:
+			var attempts: int = 0
+			while mod.get_config_fingerprint() in excluded_fingerprints and attempts < 8:
+				mod = chosen_type.generate(rarity)
+				attempts += 1
+			if mod.get_config_fingerprint() in excluded_fingerprints:
+				available_indices.remove_at(chosen_local)
+				continue
+		results.append(mod)
 		available_indices.remove_at(chosen_local)
+
+	while results.size() < count:
+		var fallback_type = MODIFIER_TYPES[randi_range(0, MODIFIER_TYPES.size() - 1)]
+		results.append(fallback_type.generate(rarity))
 
 	return results
 

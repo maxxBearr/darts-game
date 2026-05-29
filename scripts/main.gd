@@ -1071,6 +1071,14 @@ func _on_shop_throw_completed(hit_position: Vector2) -> void:
 			_start_next_dart_timer()
 
 
+func _get_owned_fingerprints() -> Array[String]:
+	var result: Array[String] = []
+	for mod: Resource in scoring_modifier_manager.active_modifiers:
+		if mod is ScoringModifier:
+			result.append((mod as ScoringModifier).get_config_fingerprint())
+	return result
+
+
 ## Generate 2 mixed shop picks (accuracy upgrades or modifiers) at a given rarity.
 func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 	var picks: Array[Dictionary] = []
@@ -1079,24 +1087,38 @@ func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 	if dart_build.equipped_flight != null and dart_build.equipped_flight.shop_bias != null:
 		weight_overrides = dart_build.equipped_flight.shop_bias.get_weight_overrides()
 
+	var offered_mod_fingerprints: Array[String] = _get_owned_fingerprints()
+	var offered_accuracy_keys: Array[String] = []
+
 	for _i: int in range(2):
 		# 50/50 chance of accuracy upgrade vs modifier (unless All In is active)
 		if not all_in_active and randi_range(0, 1) == 0:
-			picks.append(_generate_shop_accuracy_pick(rarity))
+			var pick: Dictionary = _generate_shop_accuracy_pick(rarity, offered_accuracy_keys)
+			offered_accuracy_keys.append(pick["data"].get("property", "") + "|" + str(rarity))
+			picks.append(pick)
 		else:
-			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity, weight_overrides)
+			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity, weight_overrides, offered_mod_fingerprints)
 			if mods.size() > 0:
+				offered_mod_fingerprints.append(mods[0].get_config_fingerprint())
 				picks.append({"type": "modifier", "data": mods[0]})
 			else:
-				picks.append(_generate_shop_accuracy_pick(rarity))
+				var pick: Dictionary = _generate_shop_accuracy_pick(rarity, offered_accuracy_keys)
+				offered_accuracy_keys.append(pick["data"].get("property", "") + "|" + str(rarity))
+				picks.append(pick)
 
 	return picks
 
 
 ## Generate a single accuracy upgrade pick at a given rarity tier.
-func _generate_shop_accuracy_pick(rarity: ScoringEnums.Rarity) -> Dictionary:
+func _generate_shop_accuracy_pick(rarity: ScoringEnums.Rarity, forbidden_keys: Array[String] = []) -> Dictionary:
 	var type_idx: int = randi_range(0, UPGRADE_TYPES.size() - 1)
 	var upgrade_type: Dictionary = UPGRADE_TYPES[type_idx]
+	if forbidden_keys.size() > 0:
+		var attempts: int = 0
+		while (upgrade_type["property"] + "|" + str(rarity)) in forbidden_keys and attempts < 8:
+			type_idx = randi_range(0, UPGRADE_TYPES.size() - 1)
+			upgrade_type = UPGRADE_TYPES[type_idx]
+			attempts += 1
 
 	var rarity_table: Array[Dictionary]
 	if upgrade_type["tradeoff"]:
@@ -1526,7 +1548,7 @@ func _on_run_confirmed() -> void:
 		_start_modifier_pending = true
 		_leg_phase = "modifier_pick"
 		_current_modifiers = []
-		var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3)
+		var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3, _get_owned_fingerprints())
 		for mod: ScoringModifier in generated:
 			_current_modifiers.append(mod)
 
@@ -1551,7 +1573,7 @@ func _on_upgrade_selected(index: int) -> void:
 	# Move to Phase 2: modifier pick
 	_leg_phase = "modifier_pick"
 	_current_modifiers = []
-	var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3)
+	var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3, _get_owned_fingerprints())
 	for mod: ScoringModifier in generated:
 		_current_modifiers.append(mod)
 
@@ -1845,6 +1867,8 @@ func _update_checkout_helper() -> void:
 		hud.hide_checkout_helper()
 		return
 
+	var _perf_start: int = Time.get_ticks_usec() if scoring_modifier_manager.debug_perf_log else 0
+
 	var remaining: int = x01_game.remaining_score
 	var darts_left: int = x01_game.darts_per_turn - x01_game.darts_this_turn
 
@@ -1863,9 +1887,15 @@ func _update_checkout_helper() -> void:
 		var setup: Dictionary = scoring_modifier_manager.get_setup_recommendation(remaining)
 		hud.update_setup_display(setup, has_toggleable)
 
+	if scoring_modifier_manager.debug_perf_log:
+		var ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0
+		print("[PERF] _update_checkout_helper r=%d darts_left=%d  %.1fms" % [remaining, darts_left, ms])
+
 
 ## Called when a modifier is toggled on/off — recompute checkout helper and streak display.
 func _on_modifier_toggled() -> void:
+	scoring_modifier_manager._bump_state_version()
+	scoring_modifier_manager.invalidate_preferred_remainders()
 	_update_checkout_highlights()
 	_update_checkout_helper()
 	hud.update_streak_section(
@@ -1924,8 +1954,11 @@ func _sync_board_state() -> void:
 ## Sync board state and rebuild the checkout solver after boss mutations.
 func _sync_board_and_solver() -> void:
 	_sync_board_state()
+	if scoring_modifier_manager._state_version == scoring_modifier_manager._last_sync_version:
+		return
 	scoring_modifier_manager._build_solver_candidates()
 	scoring_modifier_manager.invalidate_preferred_remainders()
+	scoring_modifier_manager._last_sync_version = scoring_modifier_manager._state_version
 
 
 ## Remove all dart markers from the board.

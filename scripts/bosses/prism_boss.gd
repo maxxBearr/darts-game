@@ -37,6 +37,7 @@ func on_turn_start(game_state: Dictionary) -> void:
 
 	for i: int in range(20):
 		smm.effective_wedge_colors[i] = _original_colors[indices[i]].duplicate()
+	smm._bump_state_version()
 
 	dartboard.effective_wedge_colors = smm.effective_wedge_colors
 	dartboard.queue_redraw()
@@ -58,6 +59,7 @@ func on_leg_end(game_state: Dictionary) -> void:
 	for i: int in range(20):
 		if i < _original_colors.size():
 			smm.effective_wedge_colors[i] = _original_colors[i].duplicate()
+	smm._bump_state_version()
 
 	dartboard.effective_wedge_colors = smm.effective_wedge_colors
 	dartboard.queue_redraw()

@@ -31,10 +31,18 @@ var active_modifiers: Array[Resource] = []
 var max_streak_slots: int = 3
 
 ## When true, triples count as valid checkout finishes for the solver.
-var allow_triple_checkout: bool = false
+var allow_triple_checkout: bool = false:
+	set(value):
+		if allow_triple_checkout != value:
+			allow_triple_checkout = value
+			_bump_state_version()
 
 ## When true, any ring counts as a valid checkout finish for the solver.
-var glass_cannon_active: bool = false
+var glass_cannon_active: bool = false:
+	set(value):
+		if glass_cannon_active != value:
+			glass_cannon_active = value
+			_bump_state_version()
 
 ## Hit history for the current turn (cleared every turn via reset_for_turn).
 var hit_history_turn: Array[Dictionary] = []
@@ -50,6 +58,15 @@ var hit_history_run: Array[Dictionary] = []
 ## These are added via add_modifier() during _ready().
 @export var debug_modifiers: Array[Resource] = []
 
+@export var debug_perf_log: bool = false
+
+var _state_version: int = 0
+var _last_sync_version: int = -1
+
+
+func _bump_state_version() -> void:
+	_state_version += 1
+
 
 func _ready() -> void:
 	# Initialize board state to defaults
@@ -59,6 +76,20 @@ func _ready() -> void:
 	for modifier: Resource in debug_modifiers:
 		if modifier != null:
 			add_modifier(modifier, {})
+
+
+func _perf_log(msg: String) -> void:
+	if not debug_perf_log:
+		return
+	print("[PERF] %s" % msg)
+
+
+func _streak_state_hash() -> int:
+	var h: int = 0
+	for modifier: Resource in active_modifiers:
+		if modifier is ScoringModifier:
+			h = (h * 31 + modifier.get_streak_state_hash()) & 0x7FFFFFFF
+	return h
 
 
 ## Initialize effective wedge values and colors to standard dartboard defaults.
@@ -135,6 +166,7 @@ func remove_modifier(modifier: Resource) -> void:
 	var idx: int = active_modifiers.find(modifier)
 	if idx >= 0:
 		active_modifiers.remove_at(idx)
+		_bump_state_version()
 
 
 ## Register a new modifier. For ON_ACQUIRE modifiers, immediately applies
@@ -154,10 +186,12 @@ func add_modifier(modifier: Resource, config: Dictionary) -> Resource:
 			replaced = conflict
 
 	active_modifiers.append(modifier)
+	_bump_state_version()
 
 	# If this is an ON_ACQUIRE modifier, apply its board-state changes now
 	if modifier.timing == ScoringEnums.ModifierTiming.ON_ACQUIRE:
 		modifier.apply_to_board(effective_wedge_values, effective_wedge_colors, config)
+		_bump_state_version()
 
 	UnlockManager.on_item_acquired({
 		"rarity": modifier.rarity_tier,
@@ -236,6 +270,7 @@ func reset_for_run() -> void:
 	hit_history_run.clear()
 	active_modifiers.clear()
 	_init_default_board_state()
+	_bump_state_version()
 
 
 ## Reset streak state on modifiers matching the given scope.
@@ -399,13 +434,20 @@ func solve_checkout(remaining: int, darts_left: int) -> Array[Array]:
 	if _solver_candidates.is_empty():
 		_build_solver_candidates()
 
+	var _perf_start: int = Time.get_ticks_usec() if debug_perf_log else 0
+	var _perf_counters: Array[int] = [0, 0, 0, 0]
+
 	var cache: Dictionary = {}
-	var raw_paths: Array[Array] = _solve_recursive(remaining, darts_left, cache)
+	var raw_paths: Array[Array] = _solve_recursive(remaining, darts_left, cache, _perf_counters)
 
 	# Rank and limit
 	raw_paths.sort_custom(_compare_paths)
 	if raw_paths.size() > max_displayed_paths:
 		raw_paths.resize(max_displayed_paths)
+
+	if debug_perf_log:
+		var ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0
+		_perf_log("solve_checkout r=%d d=%d  %.1fms  recursive_calls=%d  spec_calls=%d  cache_hits=%d  cache_misses=%d  paths=%d" % [remaining, darts_left, ms, _perf_counters[0], _perf_counters[1], _perf_counters[2], _perf_counters[3], raw_paths.size()])
 
 	return raw_paths
 
@@ -421,15 +463,21 @@ func _is_valid_finish(ring_name: String) -> bool:
 	return false
 
 
-func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary) -> Array[Array]:
+func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary, _pc: Array[int] = [0, 0, 0, 0]) -> Array[Array]:
+	_pc[0] += 1
 	if darts_left <= 0 or remaining <= 0:
 		return []
 
-	# Build a cache key from remaining, darts_left, and streak state
-	var streak_snap: Array[Dictionary] = snapshot_all_streak_state()
-	var cache_key: String = "%d_%d_%s" % [remaining, darts_left, str(streak_snap).hash()]
+	if _max_single_dart_score > 0 and remaining > _max_single_dart_score * darts_left:
+		var cache_key_neg: String = "%d_%d_%d" % [remaining, darts_left, _streak_state_hash()]
+		cache[cache_key_neg] = []
+		return []
+
+	var cache_key: String = "%d_%d_%d" % [remaining, darts_left, _streak_state_hash()]
 	if cache.has(cache_key):
+		_pc[2] += 1
 		return cache[cache_key]
+	_pc[3] += 1
 
 	var paths: Array[Array] = []
 
@@ -443,6 +491,7 @@ func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary) -> Arr
 		var snapshot: Array[Dictionary] = snapshot_all_streak_state()
 		var synth: Dictionary = synthesize_result(target)
 		var result: Dictionary = speculative_score(synth)
+		_pc[1] += 1
 		var scored: int = result["total_score"]
 
 		var ring_name: String = target["ring_name"]
@@ -456,7 +505,7 @@ func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary) -> Arr
 			var new_remaining: int = remaining - scored
 			# Prune: can't finish from 1 (unless Glass Cannon is active — any ring works)
 			if new_remaining != 1 or glass_cannon_active:
-				var sub_paths: Array[Array] = _solve_recursive(new_remaining, darts_left - 1, cache)
+				var sub_paths: Array[Array] = _solve_recursive(new_remaining, darts_left - 1, cache, _pc)
 				for sub: Array in sub_paths:
 					var full_path: Array = [step]
 					full_path.append_array(sub)
@@ -554,6 +603,11 @@ func compute_preferred_remainders() -> void:
 	if _solver_candidates.is_empty():
 		_build_solver_candidates()
 
+	if _one_dart_finishable_dirty:
+		_compute_one_dart_finishable()
+
+	var _perf_start: int = Time.get_ticks_usec() if debug_perf_log else 0
+
 	_preferred_remainders.clear()
 	# Save current streak state so the computation doesn't pollute it
 	var saved: Array[Dictionary] = snapshot_all_streak_state()
@@ -573,6 +627,10 @@ func compute_preferred_remainders() -> void:
 	_preferred_remainders_dirty = false
 	_max_preferred_remainder = _preferred_remainders[-1] if _preferred_remainders.size() > 0 else 0
 
+	if debug_perf_log:
+		var ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0
+		_perf_log("compute_preferred_remainders  %.1fms  results=%d" % [ms, _preferred_remainders.size()])
+
 
 ## Existence-only checkout solver. Returns true as soon as any valid path is
 ## found, without enumerating the full set. Used by compute_preferred_remainders
@@ -582,9 +640,10 @@ func _solve_first(remaining: int, darts_left: int, cache: Dictionary) -> bool:
 	if darts_left <= 0 or remaining <= 0:
 		return false
 
-	# Build cache key including streak state so different states don't collide
-	var streak_snap: Array[Dictionary] = snapshot_all_streak_state()
-	var cache_key: String = "%d_%d_%s" % [remaining, darts_left, str(streak_snap).hash()]
+	if _max_single_dart_score > 0 and remaining > _max_single_dart_score * darts_left:
+		return false
+
+	var cache_key: String = "%d_%d_%d" % [remaining, darts_left, _streak_state_hash()]
 	if cache.has(cache_key):
 		return cache[cache_key]
 
@@ -624,6 +683,7 @@ func _solve_first(remaining: int, darts_left: int, cache: Dictionary) -> bool:
 ## through the preview pipeline (no recursion). Maps remainder → fatness of
 ## the best finishing target so setup ranking can prefer fatter finishes.
 func _compute_one_dart_finishable() -> void:
+	var _perf_start: int = Time.get_ticks_usec() if debug_perf_log else 0
 	_one_dart_finishable.clear()
 
 	# Save and reset to turn-fresh streak state for V1 consistency
@@ -687,6 +747,10 @@ func _compute_one_dart_finishable() -> void:
 	restore_all_streak_state(saved)
 	_one_dart_finishable_dirty = false
 
+	if debug_perf_log:
+		var ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0
+		_perf_log("_compute_one_dart_finishable  %.1fms  entries=%d" % [ms, _one_dart_finishable.size()])
+
 
 ## Get the 1-dart finishable map, computing it if dirty.
 ## Map structure: { remainder_value: fatness_of_best_finishing_target }.
@@ -708,6 +772,9 @@ func get_preferred_remainders() -> Array[int]:
 func invalidate_preferred_remainders() -> void:
 	_preferred_remainders_dirty = true
 	_one_dart_finishable_dirty = true
+	if debug_perf_log:
+		_perf_log("invalidate_preferred_remainders")
+		print_stack()
 
 
 ## Recommend a single setup target when no checkout exists this turn.

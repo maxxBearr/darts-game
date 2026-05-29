@@ -124,6 +124,21 @@ func roll_toggleable() -> void:
 	toggleable = randi_range(1, 100) <= UNLOCK_CHANCE
 
 
+## Cheap hash of this modifier's current streak state for solver cache keys.
+## Override in subclasses that carry streak state.
+func get_streak_state_hash() -> int:
+	return 0
+
+
+## Config fingerprint for dedup. Subclasses append type-specific dimensions.
+func get_config_fingerprint() -> String:
+	return "%s|%d|%s" % [
+		get_script().resource_path,
+		rarity_tier,
+		"L" if not toggleable else "T",
+	]
+
+
 ## Relative weight for how likely this modifier type is to appear in the pool.
 static func get_pool_weight() -> int:
 	return 10

@@ -111,7 +111,7 @@ func get_accuracy_skew() -> float:
 	var red_amount: float = abs_balance - orange_threshold
 	var max_red: float = 3.0 - orange_threshold
 	var skew_fraction: float = clampf(red_amount / max_red, 0.0, 1.0)
-	var skew: float = skew_fraction * max_red_skew_pixels
+	var skew: float = lerp(orange_red_transition_skew, max_red_skew_pixels, skew_fraction)
 	return skew * signf(balance)
 
 

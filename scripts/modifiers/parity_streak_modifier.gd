@@ -23,6 +23,14 @@ func _init() -> void:
 	streak_category = ScoringEnums.StreakCategory.PARITY
 
 
+func get_streak_state_hash() -> int:
+	return _streak_count
+
+
+func get_config_fingerprint() -> String:
+	return "%s|%s" % [super.get_config_fingerprint(), "O" if target_is_odd else "E"]
+
+
 func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.ODD_TRIANGLE if target_is_odd else ScoringEnums.IconShape.EVEN_SQUARE
 

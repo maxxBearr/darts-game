@@ -36,6 +36,7 @@ func on_leg_start(game_state: Dictionary) -> void:
 				var original_val: int = smm.effective_wedge_values[idx]
 				var reduced: int = int(original_val * (1.0 - reduction_percent))
 				smm.effective_wedge_values[idx] = maxi(reduced, 0)
+	smm._bump_state_version()
 
 	dartboard.effective_wedge_values = smm.effective_wedge_values
 	dartboard.boss_reduced_wedges = _affected_wedge_indices.duplicate()
@@ -50,6 +51,7 @@ func on_leg_end(game_state: Dictionary) -> void:
 	for idx: int in _affected_wedge_indices:
 		if idx < _original_wedge_values.size():
 			smm.effective_wedge_values[idx] = _original_wedge_values[idx]
+	smm._bump_state_version()
 
 	dartboard.effective_wedge_values = smm.effective_wedge_values
 	dartboard.boss_reduced_wedges.clear()
