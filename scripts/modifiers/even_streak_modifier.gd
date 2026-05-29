@@ -41,5 +41,4 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> EvenStreakModifier:
 	mod.modifier_name = "Even Streak"
 	mod.description = "+%dx per consecutive even hit (per %s)" % [mod.bonus_per_hit, scope_name]
 
-	mod.roll_toggleable()
 	return mod

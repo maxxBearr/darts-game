@@ -137,5 +137,4 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> StreakBonusModifier:
 	mod.modifier_name = "Wedge Streak"
 	mod.description = "+%dx per consecutive same-wedge hit (per %s)" % [mod.bonus_per_hit, scope_name]
 
-	mod.roll_toggleable()
 	return mod

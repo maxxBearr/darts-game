@@ -40,6 +40,12 @@ var _flight_preview: ColorRect
 var _barrel_tex: TextureRect
 var _shaft_tex: TextureRect
 var _flight_tex: TextureRect
+var _barrel_holder: Control
+var _shaft_holder: Control
+var _flight_holder: Control
+var _barrel_slot_label: Label
+var _shaft_slot_label: Label
+var _flight_slot_label: Label
 var _stat_bars: Dictionary = {}
 var _stat_value_labels: Dictionary = {}
 var _balance_bar: Control
@@ -73,6 +79,15 @@ var _unseen_new_ids: Dictionary = {}
 @export var dart_preview_position: Vector2 = Vector2(440.0, 70.0)
 @export var dart_preview_size: Vector2 = Vector2(400.0, 100.0)
 @export var component_preview_height: float = 80.0
+
+## Extra scale multiplier for barrel sprites (< 1.0 shrinks barrels relative to other parts).
+@export_range(0.1, 1.0, 0.05) var barrel_scale_multiplier: float = 0.7
+
+## Extra scale multiplier for shaft sprites (< 1.0 shrinks shafts relative to other parts).
+@export_range(0.1, 1.0, 0.05) var shaft_scale_multiplier: float = 0.7
+
+## Extra scale multiplier for flight sprites (< 1.0 shrinks flights relative to other parts).
+@export_range(0.1, 1.0, 0.05) var flight_scale_multiplier: float = 0.7
 
 ## Size of the point sprite in the dart preview.
 @export var point_preview_size: Vector2 = Vector2(40.0, 20.0)
@@ -271,79 +286,79 @@ func _build_dart_preview() -> void:
 	point_holder.add_child(point_tex)
 
 	# Barrel slot
-	var barrel_holder: Control = Control.new()
-	barrel_holder.custom_minimum_size = Vector2(140.0, component_preview_height)
-	preview_container.add_child(barrel_holder)
+	_barrel_holder = Control.new()
+	_barrel_holder.custom_minimum_size = Vector2(140.0, component_preview_height)
+	preview_container.add_child(_barrel_holder)
 
 	_barrel_preview = ColorRect.new()
 	_barrel_preview.color = SLOT_COLORS["barrel"]
 	_barrel_preview.size = Vector2(140.0, component_preview_height)
-	barrel_holder.add_child(_barrel_preview)
+	_barrel_holder.add_child(_barrel_preview)
 
 	_barrel_tex = TextureRect.new()
-	_barrel_tex.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
-	_barrel_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_barrel_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_barrel_tex.stretch_mode = TextureRect.STRETCH_SCALE
 	_barrel_tex.size = Vector2(140.0, component_preview_height)
-	barrel_holder.add_child(_barrel_tex)
+	_barrel_holder.add_child(_barrel_tex)
 
-	var barrel_slot_label: Label = Label.new()
-	barrel_slot_label.text = "Barrel"
-	barrel_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	barrel_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	barrel_slot_label.size = Vector2(140.0, component_preview_height)
-	barrel_slot_label.add_theme_font_size_override("font_size", 12)
-	barrel_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
-	barrel_holder.add_child(barrel_slot_label)
+	_barrel_slot_label = Label.new()
+	_barrel_slot_label.text = "Barrel"
+	_barrel_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_barrel_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_barrel_slot_label.size = Vector2(140.0, component_preview_height)
+	_barrel_slot_label.add_theme_font_size_override("font_size", 12)
+	_barrel_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
+	_barrel_holder.add_child(_barrel_slot_label)
 
 	# Shaft slot
-	var shaft_holder: Control = Control.new()
-	shaft_holder.custom_minimum_size = Vector2(100.0, component_preview_height)
-	preview_container.add_child(shaft_holder)
+	_shaft_holder = Control.new()
+	_shaft_holder.custom_minimum_size = Vector2(100.0, component_preview_height)
+	preview_container.add_child(_shaft_holder)
 
 	_shaft_preview = ColorRect.new()
 	_shaft_preview.color = SLOT_COLORS["shaft"]
 	_shaft_preview.size = Vector2(100.0, component_preview_height)
-	shaft_holder.add_child(_shaft_preview)
+	_shaft_holder.add_child(_shaft_preview)
 
 	_shaft_tex = TextureRect.new()
-	_shaft_tex.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
-	_shaft_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_shaft_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_shaft_tex.stretch_mode = TextureRect.STRETCH_SCALE
 	_shaft_tex.size = Vector2(100.0, component_preview_height)
-	shaft_holder.add_child(_shaft_tex)
+	_shaft_holder.add_child(_shaft_tex)
 
-	var shaft_slot_label: Label = Label.new()
-	shaft_slot_label.text = "Shaft"
-	shaft_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	shaft_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	shaft_slot_label.size = Vector2(100.0, component_preview_height)
-	shaft_slot_label.add_theme_font_size_override("font_size", 12)
-	shaft_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
-	shaft_holder.add_child(shaft_slot_label)
+	_shaft_slot_label = Label.new()
+	_shaft_slot_label.text = "Shaft"
+	_shaft_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_shaft_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_shaft_slot_label.size = Vector2(100.0, component_preview_height)
+	_shaft_slot_label.add_theme_font_size_override("font_size", 12)
+	_shaft_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
+	_shaft_holder.add_child(_shaft_slot_label)
 
 	# Flight slot
-	var flight_holder: Control = Control.new()
-	flight_holder.custom_minimum_size = Vector2(120.0, component_preview_height)
-	preview_container.add_child(flight_holder)
+	_flight_holder = Control.new()
+	_flight_holder.custom_minimum_size = Vector2(120.0, component_preview_height)
+	preview_container.add_child(_flight_holder)
 
 	_flight_preview = ColorRect.new()
 	_flight_preview.color = SLOT_COLORS["flight"]
 	_flight_preview.size = Vector2(120.0, component_preview_height)
-	flight_holder.add_child(_flight_preview)
+	_flight_holder.add_child(_flight_preview)
 
 	_flight_tex = TextureRect.new()
-	_flight_tex.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
-	_flight_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_flight_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_flight_tex.stretch_mode = TextureRect.STRETCH_SCALE
 	_flight_tex.size = Vector2(120.0, component_preview_height)
-	flight_holder.add_child(_flight_tex)
+	_flight_holder.add_child(_flight_tex)
 
-	var flight_slot_label: Label = Label.new()
-	flight_slot_label.text = "Flight"
-	flight_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	flight_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	flight_slot_label.size = Vector2(120.0, component_preview_height)
-	flight_slot_label.add_theme_font_size_override("font_size", 12)
-	flight_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
-	flight_holder.add_child(flight_slot_label)
+	_flight_slot_label = Label.new()
+	_flight_slot_label.text = "Flight"
+	_flight_slot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_flight_slot_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_flight_slot_label.size = Vector2(120.0, component_preview_height)
+	_flight_slot_label.add_theme_font_size_override("font_size", 12)
+	_flight_slot_label.modulate = Color(1.0, 1.0, 1.0, 0.5)
+	_flight_holder.add_child(_flight_slot_label)
 
 
 func _build_slot_selector(slot_name: String, pos: Vector2) -> void:
@@ -729,6 +744,7 @@ func _refresh_all() -> void:
 	_refresh_slot("barrel")
 	_refresh_slot("shaft")
 	_refresh_slot("flight")
+	_refit_dart_preview()
 	_refresh_stat_bars()
 	_refresh_balance()
 	_refresh_begin_button()
@@ -796,6 +812,8 @@ func _refresh_slot(slot_name: String) -> void:
 	var preview: ColorRect = null
 	var tex_rect: TextureRect = null
 	var perk_label: Label = null
+	var holder: Control = null
+	var slot_label: Label = null
 
 	match slot_name:
 		"barrel":
@@ -805,6 +823,8 @@ func _refresh_slot(slot_name: String) -> void:
 			preview = _barrel_preview
 			tex_rect = _barrel_tex
 			perk_label = _barrel_perk
+			holder = _barrel_holder
+			slot_label = _barrel_slot_label
 		"shaft":
 			part = _shafts[_shaft_idx] if _shaft_idx < _shafts.size() else null
 			name_label = _shaft_name
@@ -812,6 +832,8 @@ func _refresh_slot(slot_name: String) -> void:
 			preview = _shaft_preview
 			tex_rect = _shaft_tex
 			perk_label = _shaft_perk
+			holder = _shaft_holder
+			slot_label = _shaft_slot_label
 		"flight":
 			part = _flights[_flight_idx] if _flight_idx < _flights.size() else null
 			name_label = _flight_name
@@ -819,6 +841,8 @@ func _refresh_slot(slot_name: String) -> void:
 			preview = _flight_preview
 			tex_rect = _flight_tex
 			perk_label = _flight_perk
+			holder = _flight_holder
+			slot_label = _flight_slot_label
 
 	if part == null:
 		if name_label:
@@ -872,6 +896,45 @@ func _refresh_slot(slot_name: String) -> void:
 			tex_rect.visible = false
 			if preview:
 				preview.visible = true
+
+
+func _refit_dart_preview() -> void:
+	var slots: Array[Array] = [
+		[_barrel_holder, _barrel_tex, _barrel_preview, _barrel_slot_label, 140.0, 80.0, barrel_scale_multiplier],
+		[_shaft_holder, _shaft_tex, _shaft_preview, _shaft_slot_label, 100.0, 40.0, shaft_scale_multiplier],
+		[_flight_holder, _flight_tex, _flight_preview, _flight_slot_label, 120.0, 80.0, flight_scale_multiplier],
+	]
+
+	# Find the tallest texture to derive a single uniform scale factor.
+	var max_tex_height: float = 0.0
+	for slot: Array in slots:
+		var tex_rect: TextureRect = slot[1] as TextureRect
+		if tex_rect.texture:
+			max_tex_height = maxf(max_tex_height, tex_rect.texture.get_size().y)
+	var scale: float = component_preview_height / max_tex_height if max_tex_height > 0.0 else 1.0
+
+	for slot: Array in slots:
+		var holder: Control = slot[0] as Control
+		var tex_rect: TextureRect = slot[1] as TextureRect
+		var preview: ColorRect = slot[2] as ColorRect
+		var slot_label: Label = slot[3] as Label
+		var fallback_w: float = slot[4] as float
+		var fallback_h: float = slot[5] as float
+		var extra: float = slot[6] as float
+		var w: float = fallback_w
+		var h: float = fallback_h
+		if tex_rect.texture:
+			var ts: Vector2 = tex_rect.texture.get_size()
+			w = ts.x * scale * extra
+			h = ts.y * scale * extra
+		holder.custom_minimum_size = Vector2(w, component_preview_height)
+		tex_rect.custom_minimum_size = Vector2(w, h)
+		tex_rect.size = Vector2(w, h)
+		tex_rect.position = Vector2(0.0, (component_preview_height - h) / 2.0)
+		if preview:
+			preview.size = Vector2(w, component_preview_height)
+		if slot_label:
+			slot_label.size = Vector2(w, component_preview_height)
 
 
 func _refresh_stat_bars() -> void:

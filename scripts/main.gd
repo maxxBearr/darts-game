@@ -237,6 +237,20 @@ var all_in_active: bool = false
 ## Duration of the board slide transition into/out of shop in seconds.
 @export var shop_transition_duration: float = 0.5
 
+@export_group("Score Animation")
+
+## Font size for the number that floats up after a dart scores (e.g. "20", "0").
+@export var score_font_size: int = 26
+
+## Font size for the center number during a streak/multiplier combo animation.
+@export var score_trigger_font_size: int = 30
+
+## Font size for individual trigger "+N" labels that fly into the center number.
+@export var score_trigger_pip_font_size: int = 20
+
+## Font size for the modifier name caption below the combo (e.g. "Red Streak: +3x!").
+@export var score_source_font_size: int = 16
+
 
 func _ready() -> void:
 	_default_shop_cadence = shop_cadence
@@ -923,6 +937,7 @@ func _start_shop(response: Dictionary) -> void:
 	_in_shop = true
 	_shop_darts_remaining = _saved_darts_accumulator
 	_leg_phase = "shop"
+	AuidoManager.on_shop_entered()
 	UnlockManager.on_shop_opened()
 	_clear_darts()
 	dartboard.clear_checkout_segments()
@@ -1222,6 +1237,7 @@ func _end_shop(response: Dictionary) -> void:
 	_saved_darts_accumulator = 0
 	_shop_lit_spots.clear()
 	_leg_phase = ""
+	AuidoManager.on_shop_exited()
 	_clear_darts()
 	hud.exit_shop_mode()
 	UnlockManager.on_shop_closed()
@@ -2216,7 +2232,7 @@ func _spawn_zero_floating_score(hit_position: Vector2) -> Tween:
 	label.text = "0"
 	label.position = hit_position + Vector2(-10.0, -10.0)
 	label.z_index = 100
-	label.add_theme_font_size_override("font_size", 26)
+	label.add_theme_font_size_override("font_size", score_font_size)
 	label.add_theme_constant_override("outline_size", 3)
 	label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 0.8))
 	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.6))
@@ -2332,7 +2348,7 @@ func _create_source_label(group: Dictionary, start_position: Vector2) -> HBoxCon
 	var base_name: String = group["source_name"].split(" +")[0]
 	var contribution: int = group["total_contribution"]
 	text_label.text = "%s: +%dx!" % [base_name, contribution]
-	text_label.add_theme_font_size_override("font_size", 16)
+	text_label.add_theme_font_size_override("font_size", score_source_font_size)
 	text_label.add_theme_constant_override("outline_size", 3)
 	text_label.add_theme_color_override("font_color", group["source_rarity_color"])
 	text_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
@@ -2350,7 +2366,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		display_face = recession_data["original_face_value"]
 
 	var base_score: int = display_face * int(multiplier_mods[0]["old_value"])
-	var main_label: Label = _create_score_label(base_score, hit_position, result, 30)
+	var main_label: Label = _create_score_label(base_score, hit_position, result, score_trigger_font_size)
 	main_label.pivot_offset = main_label.size / 2.0
 	add_child(main_label)
 
@@ -2371,7 +2387,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		trigger_label.text = "+%d" % display_face
 		trigger_label.position = hit_position + offset + Vector2(-10.0, -10.0)
 		trigger_label.z_index = 101
-		trigger_label.add_theme_font_size_override("font_size", 20)
+		trigger_label.add_theme_font_size_override("font_size", score_trigger_pip_font_size)
 		trigger_label.add_theme_constant_override("outline_size", 3)
 		var rarity_color: Color = multiplier_mods[i].get("source_rarity_color", Color(0.8, 0.8, 0.8))
 		trigger_label.add_theme_color_override("font_color", rarity_color)
@@ -2525,7 +2541,9 @@ func _on_trigger_impact_with_source(trigger_lbl: Label, main_label: Label, sourc
 		)
 
 
-func _create_score_label(score: int, hit_position: Vector2, result: Dictionary, font_size: int = 26) -> Label:
+func _create_score_label(score: int, hit_position: Vector2, result: Dictionary, font_size: int = -1) -> Label:
+	if font_size < 0:
+		font_size = score_font_size
 	var label: Label = Label.new()
 	label.text = str(score)
 	label.position = hit_position + Vector2(-10.0, -10.0)

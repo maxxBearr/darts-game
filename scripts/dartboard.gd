@@ -116,6 +116,12 @@ const WEDGE_OFFSET_DEG: float = -9.0
 ## Duration of the segment flash in seconds.
 @export var flash_duration: float = 0.2
 
+## Color of the border drawn around the flashing segment.
+@export var flash_border_color: Color = Color(1.0, 1.0, 1.0, 0.9)
+
+## Thickness of the flash border in pixels.
+@export var flash_border_thickness: float = 2.0
+
 # Flash state — tracks which segment to highlight and the current flash alpha
 var _flash_alpha: float = 0.0
 var _flash_ring_name: String = ""
@@ -476,6 +482,8 @@ func _draw() -> void:
 	if _flash_alpha > 0.0:
 		var flash_col: Color = Color(flash_color, _flash_alpha)
 		_draw_flash_segment(flash_col)
+		var border_col: Color = Color(flash_border_color, _flash_alpha)
+		_draw_flash_border(border_col)
 
 
 ## Trigger a flash on the segment at the given global hit position.
@@ -557,6 +565,33 @@ func _draw_flash_segment(color: Color) -> void:
 			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
 			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), color)
+
+
+## Draw a border outline around the currently flashing segment.
+func _draw_flash_border(color: Color) -> void:
+	match _flash_ring_name:
+		"double_bull":
+			var pts: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(pts, color, flash_border_thickness)
+		"single_bull":
+			var pts: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
+			draw_polyline(pts, color, flash_border_thickness)
+		"inner_single":
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, color, flash_border_thickness)
+		"triple":
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, color, flash_border_thickness)
+		"outer_single":
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, color, flash_border_thickness)
+		"double":
+			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), color, flash_border_thickness)
 
 
 ## Draw a single arc segment (wedge slice of a ring).

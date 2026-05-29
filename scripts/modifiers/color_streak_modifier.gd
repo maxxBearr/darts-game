@@ -145,5 +145,4 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> ColorStreakModifier:
 	mod.modifier_name = "%s Streak" % color_name
 	mod.description = "+%dx per consecutive %s hit (per %s)" % [mod.bonus_per_hit, color_name.to_lower(), scope_name]
 
-	mod.roll_toggleable()
 	return mod

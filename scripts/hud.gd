@@ -53,11 +53,31 @@ signal reward_selected(index: int)
 ## Vertical offset above the crosshair for the hover tooltip (pixels).
 @export var hover_tooltip_offset_y: float = 50.0
 
+## Font size for the hover/target tooltip label.
+@export var hover_tooltip_font_size: int = 24
+
+## Outline thickness around the hover tooltip text (pixels).
+@export var hover_tooltip_outline_size: int = 2
+
+## Outline color for the hover tooltip text.
+@export var hover_tooltip_outline_color: Color = Color(0, 0, 0, 1)
+
 ## How many pixels a modifier square lifts during perk-up hover state.
 @export var perkup_lift_pixels: float = 8.0
 
 ## Duration of the perk-up lift/drop animation in seconds.
 @export var perkup_anim_duration: float = 0.15
+
+@export_group("Action Button Pulse")
+
+## Minimum opacity during the pulse cycle.
+@export_range(0.0, 1.0, 0.05) var button_pulse_min_alpha: float = 0.4
+
+## Maximum opacity during the pulse cycle (values above 1.0 make the button overbright).
+@export_range(1.0, 2.0, 0.05) var button_pulse_max_alpha: float = 1.4
+
+## Duration of one full pulse cycle (bright -> dim -> bright) in seconds.
+@export var button_pulse_duration: float = 1.0
 
 @export_group("Upgrade Cards")
 
@@ -183,6 +203,8 @@ const PREVIEW_PENALTY_COLOR: Color = Color(1.0, 0.5, 0.2)
 ## Total shop darts for the current shop (for "thrown/total" label).
 var _shop_total_darts: int = 0
 
+var _button_pulse_tween: Tween = null
+
 ## Checkout helper panel and state.
 var _checkout_panel: VBoxContainer
 var _checkout_toggle_button: Button
@@ -193,11 +215,24 @@ var _checkout_has_paths: bool = false
 
 
 func _ready() -> void:
+	if hover_tooltip.label_settings:
+		hover_tooltip.label_settings.font_size = hover_tooltip_font_size
+		hover_tooltip.label_settings.outline_size = hover_tooltip_outline_size
+		hover_tooltip.label_settings.outline_color = hover_tooltip_outline_color
+	else:
+		hover_tooltip.add_theme_font_size_override("font_size", hover_tooltip_font_size)
+		hover_tooltip.add_theme_constant_override("outline_size", hover_tooltip_outline_size)
+		hover_tooltip.add_theme_color_override("font_outline_color", hover_tooltip_outline_color)
+
 	# Connect action buttons
 	next_dart_button.pressed.connect(func() -> void: next_dart_pressed.emit())
 	next_turn_button.pressed.connect(func() -> void: next_turn_pressed.emit())
 	next_leg_button.pressed.connect(func() -> void: next_leg_pressed.emit())
 	new_run_button.pressed.connect(func() -> void: new_run_pressed.emit())
+
+	# Pulse action buttons when they become visible
+	for btn: Button in [next_dart_button, next_turn_button, next_leg_button, new_run_button]:
+		btn.visibility_changed.connect(_on_action_button_visibility_changed.bind(btn))
 
 	# Connect upgrade buttons — each emits upgrade_selected with its index
 	upgrade_button_1.pressed.connect(func() -> void: _select_upgrade(0))
@@ -589,6 +624,29 @@ func hide_all_buttons() -> void:
 	next_turn_button.visible = false
 	next_leg_button.visible = false
 	new_run_button.visible = false
+
+
+func _on_action_button_visibility_changed(btn: Button) -> void:
+	if btn.visible:
+		_start_button_pulse(btn)
+	else:
+		_stop_button_pulse(btn)
+
+
+func _start_button_pulse(btn: Button) -> void:
+	_stop_button_pulse(btn)
+	var half: float = button_pulse_duration / 2.0
+	btn.modulate.a = button_pulse_max_alpha
+	_button_pulse_tween = create_tween().set_loops()
+	_button_pulse_tween.tween_property(btn, "modulate:a", button_pulse_min_alpha, half).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	_button_pulse_tween.tween_property(btn, "modulate:a", button_pulse_max_alpha, half).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+
+
+func _stop_button_pulse(btn: Button) -> void:
+	if _button_pulse_tween != null and _button_pulse_tween.is_valid():
+		_button_pulse_tween.kill()
+	_button_pulse_tween = null
+	btn.modulate.a = 1.0
 
 
 ## Hide the bust label.
@@ -1129,8 +1187,7 @@ func update_streak_section(streak_modifiers: Array, effective_wedge_values: Arra
 		var line: HBoxContainer = HBoxContainer.new()
 		line.add_theme_constant_override("separation", 4)
 		line.mouse_filter = Control.MOUSE_FILTER_STOP
-		var lock_info: String = "Click to toggle" if streak_mod.toggleable else "Always on"
-		line.tooltip_text = "%s\n%s\n%s" % [streak_mod.modifier_name, streak_mod.description, lock_info]
+		line.tooltip_text = "%s\n%s" % [streak_mod.modifier_name, streak_mod.description]
 
 		# Small icon
 		var icon: ModifierIcon = ModifierIcon.new()
@@ -1168,9 +1225,7 @@ func update_streak_section(streak_modifiers: Array, effective_wedge_values: Arra
 		line.add_child(count_label)
 
 		# Set opacity based on state
-		if streak_mod.toggleable and not streak_mod.enabled:
-			line.modulate = Color(1.0, 1.0, 1.0, streak_disabled_opacity)
-		elif streak_mod.get_streak_count() == 0:
+		if streak_mod.get_streak_count() == 0:
 			line.modulate = Color(1.0, 1.0, 1.0, streak_idle_opacity)
 		else:
 			line.modulate = Color(1.0, 1.0, 1.0, 1.0)
@@ -1367,7 +1422,7 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 		if i < modifiers.size():
 			var modifier: Resource = modifiers[i]
 			var button_text: String = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
-			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
+			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.streak_category == ScoringEnums.StreakCategory.NONE:
 				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
 				button_text += "\n%s" % lock_tag
 			if i < replacement_info.size() and replacement_info[i] != "":
@@ -1508,7 +1563,7 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 		if item["type"] == "modifier":
 			var modifier: Resource = item["data"]
 			button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
-			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART:
+			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.streak_category == ScoringEnums.StreakCategory.NONE:
 				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
 				button_text += "\n%s" % lock_tag
 			button_color = modifier.rarity_color

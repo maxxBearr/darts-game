@@ -73,7 +73,8 @@ var _slam_pitch_accumulator: float = 0.0
 func play_source_label_slam(is_replacement: bool = false) -> void:
 	var base: float = 1.1 if is_replacement else 1.0
 	source_label_slam.pitch_scale = base + _slam_pitch_accumulator
-	source_label_slam.play()
+	source_label_slam.play(0.05)
+	get_tree().create_timer(0.55).timeout.connect(func(): source_label_slam.stop())
 	_slam_pitch_accumulator += 0.01
 
 
@@ -122,8 +123,8 @@ func on_turn_ended(turn_number: int) -> void:
 		delta = -0.043
 	elif turn_number == 3:
 		delta = -0.05
-	else:
-		delta = -0.11
+	elif turn_number ==4:
+		delta = -0.07
 	_tween_game_pitch(game_music.pitch_scale + delta)
 
 
