@@ -24,6 +24,15 @@ extends Control
 ## Vertical spacing between mini-darts in texture mode.
 @export var mini_dart_spacing: float = 8.0
 
+## Extra scale multiplier for barrel sprites.
+@export_range(0.1, 1.0, 0.05) var barrel_scale_multiplier: float = 0.7
+
+## Extra scale multiplier for shaft sprites.
+@export_range(0.1, 1.0, 0.05) var shaft_scale_multiplier: float = 0.7
+
+## Extra scale multiplier for flight sprites.
+@export_range(0.1, 1.0, 0.05) var flight_scale_multiplier: float = 0.7
+
 var _darts_remaining: int = 3
 var _max_darts: int = 3
 var _using_textures: bool = false
@@ -84,23 +93,23 @@ func _build_mini_darts() -> void:
 		dart_h = mini_dart_height * 0.8
 		dart_sp = mini_dart_spacing * 0.6
 
+	var base_scale: float = _compute_base_scale(dart_h)
+
+	var row_width: float = _compute_row_width(base_scale, dart_h)
+
 	for i: int in range(count):
 		var dart_row: HBoxContainer = HBoxContainer.new()
 		dart_row.position = Vector2(0.0, float(i) * (dart_h + dart_sp))
+		dart_row.custom_minimum_size = Vector2(row_width, dart_h)
+		dart_row.size = Vector2(row_width, dart_h)
 		dart_row.add_theme_constant_override("separation", -2)
 		add_child(dart_row)
 		_dart_containers.append(dart_row)
 
-		if count > 3:
-			_add_point_part(dart_row, dart_h)
-			_add_mini_part_sized(dart_row, _barrel_component, dart_h)
-			_add_mini_part_sized(dart_row, _shaft_component, dart_h)
-			_add_mini_part_sized(dart_row, _flight_component, dart_h)
-		else:
-			_add_point_part(dart_row, mini_dart_height)
-			_add_mini_part(dart_row, _barrel_component, "Barrel")
-			_add_mini_part(dart_row, _shaft_component, "Shaft")
-			_add_mini_part(dart_row, _flight_component, "Flight")
+		_add_point_part(dart_row, dart_h)
+		_add_scaled_part(dart_row, _barrel_component, base_scale * barrel_scale_multiplier, dart_h)
+		_add_scaled_part(dart_row, _shaft_component, base_scale * shaft_scale_multiplier, dart_h)
+		_add_scaled_part(dart_row, _flight_component, base_scale * flight_scale_multiplier, dart_h)
 
 	_update_dart_modulate()
 
@@ -115,24 +124,56 @@ func _add_point_part(container: HBoxContainer, height: float) -> void:
 	container.add_child(tex_rect)
 
 
-func _add_mini_part(container: HBoxContainer, component: DartComponent, slot_name: String) -> void:
-	var tex_rect: TextureRect = TextureRect.new()
-	tex_rect.custom_minimum_size = Vector2(mini_dart_height * 1.5, mini_dart_height)
-	tex_rect.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
-	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	tex_rect.mouse_filter = Control.MOUSE_FILTER_STOP
+func _compute_row_width(base_scale: float, row_height: float) -> float:
+	var w: float = row_height * 0.8  # point
+	var parts: Array[Array] = [
+		[_barrel_component, barrel_scale_multiplier],
+		[_shaft_component, shaft_scale_multiplier],
+		[_flight_component, flight_scale_multiplier],
+	]
+	for part: Array in parts:
+		var comp: DartComponent = part[0] as DartComponent
+		var mult: float = part[1] as float
+		if comp and comp.texture:
+			w += comp.texture.get_size().x * base_scale * mult
+		else:
+			w += row_height * 1.5
+	return w
 
+
+func _compute_base_scale(target_height: float) -> float:
+	var max_h: float = 0.0
+	for comp: DartComponent in [_barrel_component, _shaft_component, _flight_component]:
+		if comp and comp.texture:
+			max_h = maxf(max_h, comp.texture.get_size().y)
+	if max_h > 0.0:
+		return target_height / max_h
+	return 1.0
+
+
+func _add_scaled_part(container: HBoxContainer, component: DartComponent, scale: float, row_height: float) -> void:
 	if component and component.texture:
+		var ts: Vector2 = component.texture.get_size()
+		var w: float = ts.x * scale
+		var h: float = ts.y * scale
+		var tex_rect: TextureRect = TextureRect.new()
 		tex_rect.texture = component.texture
+		tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex_rect.stretch_mode = TextureRect.STRETCH_SCALE
+		tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tex_rect.custom_minimum_size = Vector2(w, h)
+		tex_rect.size = Vector2(w, h)
+		var wrapper: Control = Control.new()
+		wrapper.custom_minimum_size = Vector2(w, row_height)
+		wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tex_rect.position = Vector2(0.0, (row_height - h) / 2.0)
+		wrapper.add_child(tex_rect)
+		container.add_child(wrapper)
 	else:
-		tex_rect.self_modulate = Color(0.5, 0.5, 0.5, 0.5)
-
-	if component:
-		tex_rect.set_meta("dart_component", component)
-		tex_rect.set_meta("slot_name", slot_name)
-		tex_rect.tooltip_text = "%s (%s)\n%s" % [component.component_name, slot_name, "\n".join(component.get_tooltip_lines())]
-
-	container.add_child(tex_rect)
+		var placeholder: Control = Control.new()
+		placeholder.custom_minimum_size = Vector2(row_height * 1.5, row_height)
+		placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		container.add_child(placeholder)
 
 
 func _update_dart_modulate() -> void:
@@ -172,33 +213,26 @@ func set_shop_darts(total: int, remaining: int) -> void:
 	var overflow: float = maxf(total_height - normal_height, 0.0)
 	position = _original_position - Vector2(0.0, overflow)
 
+	var base_scale: float = _compute_base_scale(dart_h)
+	var row_width: float = _compute_row_width(base_scale, dart_h)
+
 	for i: int in range(count):
 		var dart_row: HBoxContainer = HBoxContainer.new()
 		dart_row.position = Vector2(0.0, float(i) * (dart_h + dart_sp))
+		dart_row.custom_minimum_size = Vector2(row_width, dart_h)
+		dart_row.size = Vector2(row_width, dart_h)
 		dart_row.add_theme_constant_override("separation", -2)
 		add_child(dart_row)
 		_dart_containers.append(dart_row)
 
 		_add_point_part(dart_row, dart_h)
-		_add_mini_part_sized(dart_row, _barrel_component, dart_h)
-		_add_mini_part_sized(dart_row, _shaft_component, dart_h)
-		_add_mini_part_sized(dart_row, _flight_component, dart_h)
+		_add_scaled_part(dart_row, _barrel_component, base_scale * barrel_scale_multiplier, dart_h)
+		_add_scaled_part(dart_row, _shaft_component, base_scale * shaft_scale_multiplier, dart_h)
+		_add_scaled_part(dart_row, _flight_component, base_scale * flight_scale_multiplier, dart_h)
 
 	_darts_remaining = remaining
 	_using_textures = true
 	_update_dart_modulate()
-
-
-func _add_mini_part_sized(container: HBoxContainer, component: DartComponent, height: float) -> void:
-	var tex_rect: TextureRect = TextureRect.new()
-	tex_rect.custom_minimum_size = Vector2(height * 1.5, height)
-	tex_rect.expand_mode = TextureRect.EXPAND_FIT_HEIGHT_PROPORTIONAL
-	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	if component and component.texture:
-		tex_rect.texture = component.texture
-	else:
-		tex_rect.self_modulate = Color(0.5, 0.5, 0.5, 0.5)
-	container.add_child(tex_rect)
 
 
 func set_max_darts(count: int) -> void:
