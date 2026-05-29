@@ -13,7 +13,7 @@ extends Node
 const BONUS_BASE_PITCH: float = 0.9
 const BONUS_PITCH_STEP: float = 0.15
 const MUSIC_FADE_DURATION: float = 1.5
-const PITCH_TWEEN_DURATION: float = 0.3
+const PITCH_TWEEN_DURATION: float = 0.4
 const MUSIC_SILENT_DB: float = -40.0
 
 var _music_tween: Tween = null
@@ -116,10 +116,12 @@ func transition_to_menu_music() -> void:
 
 func on_turn_ended(turn_number: int) -> void:
 	var delta: float
-	if turn_number <= 2:
+	if turn_number ==1:
 		delta = -0.035
+	if turn_number ==2:
+		delta = -0.043
 	elif turn_number == 3:
-		delta = -0.048
+		delta = -0.05
 	else:
 		delta = -0.11
 	_tween_game_pitch(game_music.pitch_scale + delta)

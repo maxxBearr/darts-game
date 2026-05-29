@@ -2416,6 +2416,10 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 			var source_ref: HBoxContainer = new_source_label
 			var local_j: int = j
 
+			if num_triggers > 3 and global_trigger_idx > 2:
+				var speed: float = 1.0 + 0.2 * float(global_trigger_idx - 2)
+				tween.tween_callback(tween.set_speed_scale.bind(speed))
+
 			tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
 			tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 			tween.tween_callback(_on_trigger_impact_with_source.bind(trigger_lbl, main_label, source_ref, final_total, scale_bump, global_trigger_idx, local_j))
@@ -2427,6 +2431,8 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 			global_trigger_idx += 1
 
 		prev_source_label = new_source_label
+
+	tween.tween_callback(tween.set_speed_scale.bind(1.0))
 
 	if is_leg_won:
 		tween.tween_callback(func() -> void:
