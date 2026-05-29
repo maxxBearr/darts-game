@@ -21,7 +21,9 @@
       "Bash(findstr *)",
       "Bash(grep -E \"\\\\.gd$\")",
       "Bash(xargs grep -l \"crosshair\\\\|aim\")",
-      "Bash(xargs grep -l \"shop\\\\|upgrade\\\\|skip\")"
+      "Bash(xargs grep -l \"shop\\\\|upgrade\\\\|skip\")",
+      "Bash(Select-Object -First 20)",
+      "Bash(Format-Table FullName)"
     ]
   }
 }

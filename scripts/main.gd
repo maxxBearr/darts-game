@@ -226,6 +226,7 @@ var shop_pick_count: int = 2
 
 ## How often shops occur (every N legs).
 @export var shop_cadence: int = 3
+var _default_shop_cadence: int
 
 ## When true, a free shop always appears after beating a boss (in addition to the reward pick).
 @export var shop_after_boss: bool = true
@@ -238,6 +239,8 @@ var all_in_active: bool = false
 
 
 func _ready() -> void:
+	_default_shop_cadence = shop_cadence
+
 	# Connect throw mechanic signals
 	throw_mechanic.throw_completed.connect(_on_throw_completed)
 	throw_mechanic.state_changed.connect(_on_throw_state_changed)
@@ -864,7 +867,7 @@ func _reset_run_state() -> void:
 	scoring_modifier_manager.max_streak_slots = 3
 	scoring_modifier_manager.allow_triple_checkout = false
 	scoring_modifier_manager.glass_cannon_active = false
-	shop_cadence = 3
+	shop_cadence = _default_shop_cadence
 	shop_pick_count = 2
 	ModifierRegistry.current_rarity_shift = 0.0
 	boss_manager.configure_for_level(null)
