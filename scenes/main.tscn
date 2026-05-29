@@ -392,7 +392,6 @@ script = ExtResource("5_x01")
 
 [node name="ScoringModifierManager" type="Node" parent="." unique_id=900075023]
 script = ExtResource("7_scoring_modifier_manager")
-debug_perf_log = true
 
 [node name="DartComponentRegistry" type="Node" parent="." unique_id=109236783]
 script = ExtResource("8_registry")

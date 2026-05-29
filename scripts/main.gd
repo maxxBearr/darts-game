@@ -1157,6 +1157,7 @@ func _on_shop_pick_selected(index: int) -> void:
 	if item["type"] == "upgrade":
 		_apply_upgrade(item["data"])
 		_update_stats_display()
+		_recache_stats()
 		_continue_shop_after_pick()
 		return
 
@@ -1848,6 +1849,26 @@ func _update_stats_display() -> void:
 	hud.update_stats(current_stats, base_stats)
 
 
+func _recache_stats() -> void:
+	var current_stats: Dictionary = {
+		"horizontal_range": throw_mechanic.horizontal_range,
+		"vertical_range": throw_mechanic.vertical_range,
+		"vertical_accuracy": throw_mechanic.vertical_accuracy,
+		"horizontal_accuracy": throw_mechanic.horizontal_accuracy,
+		"vertical_speed": throw_mechanic.vertical_speed,
+		"horizontal_speed": throw_mechanic.horizontal_speed,
+	}
+	var base_stats: Dictionary = {
+		"horizontal_range": _base_horizontal_range,
+		"vertical_range": _base_vertical_range,
+		"vertical_accuracy": _base_vertical_accuracy,
+		"horizontal_accuracy": _base_horizontal_accuracy,
+		"vertical_speed": _base_vertical_speed,
+		"horizontal_speed": _base_horizontal_speed,
+	}
+	hud.cache_stats(current_stats, base_stats)
+
+
 ## Recalculate and update which double segments would win the current leg.
 ## Also updates the remaining score color — gold when a single-dart checkout exists.
 ## Skipped during shop mode (no scoring in the shop).
@@ -1904,19 +1925,20 @@ func _on_modifier_toggled() -> void:
 	)
 
 
-## Check if hitting the hovered segment would cause a bust.
-## Same logic as x01_game: below zero, leaves 1, or hits zero without a double.
 func _would_bust(result: Dictionary) -> bool:
 	var points: int = result["total_score"]
 	var new_remaining: int = x01_game.remaining_score - points
 	if new_remaining < 0:
 		return true
-	if new_remaining == 1:
+	if new_remaining == 1 and not x01_game.glass_cannon_active:
 		return true
-	var ring_name: String = result.get("ring_name", "")
-	var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
-	if new_remaining == 0 and not is_double:
-		return true
+	if new_remaining == 0:
+		var ring_name: String = result.get("ring_name", "")
+		var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
+		var is_triple: bool = ring_name == "Triple"
+		var is_valid: bool = is_double or (x01_game.allow_triple_checkout and is_triple) or x01_game.glass_cannon_active
+		if not is_valid:
+			return true
 	return false
 
 
@@ -2164,7 +2186,7 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
 	var score: int = result["total_score"]
 	if score == 0:
-		return null
+		return _spawn_zero_floating_score(hit_position)
 
 	var modifications: Array = result.get("modifications", [])
 	var multiplier_mods: Array[Dictionary] = []
@@ -2176,6 +2198,27 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_
 		return _spawn_simple_floating_score(hit_position, result, recession_data, is_leg_won)
 	else:
 		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data, is_leg_won)
+
+
+func _spawn_zero_floating_score(hit_position: Vector2) -> Tween:
+	var label: Label = Label.new()
+	label.text = "0"
+	label.position = hit_position + Vector2(-10.0, -10.0)
+	label.z_index = 100
+	label.add_theme_font_size_override("font_size", 26)
+	label.add_theme_constant_override("outline_size", 3)
+	label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 0.8))
+	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.6))
+	label.pivot_offset = label.size / 2.0
+	add_child(label)
+
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(label, "position", label.position + Vector2(25.0, -55.0), 1.0).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_property(label, "modulate:a", 0.0, 1.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.set_parallel(false)
+	tween.tween_callback(label.queue_free)
+	return tween
 
 
 func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:

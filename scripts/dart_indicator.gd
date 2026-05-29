@@ -25,6 +25,7 @@ extends Control
 @export var mini_dart_spacing: float = 8.0
 
 var _darts_remaining: int = 3
+var _max_darts: int = 3
 var _using_textures: bool = false
 var _dart_containers: Array[HBoxContainer] = []
 var _barrel_component: DartComponent
@@ -73,17 +74,33 @@ func set_dart_components(barrel: DartComponent, shaft: DartComponent, flight: Da
 
 
 func _build_mini_darts() -> void:
-	for i: int in range(3):
+	var count: int = maxi(_max_darts, 1)
+	var dart_h: float = mini_dart_height
+	var dart_sp: float = mini_dart_spacing
+	if count > 6:
+		dart_h = mini_dart_height * 0.6
+		dart_sp = mini_dart_spacing * 0.4
+	elif count > 3:
+		dart_h = mini_dart_height * 0.8
+		dart_sp = mini_dart_spacing * 0.6
+
+	for i: int in range(count):
 		var dart_row: HBoxContainer = HBoxContainer.new()
-		dart_row.position = Vector2(0.0, float(i) * (mini_dart_height + mini_dart_spacing))
+		dart_row.position = Vector2(0.0, float(i) * (dart_h + dart_sp))
 		dart_row.add_theme_constant_override("separation", -2)
 		add_child(dart_row)
 		_dart_containers.append(dart_row)
 
-		_add_point_part(dart_row, mini_dart_height)
-		_add_mini_part(dart_row, _barrel_component, "Barrel")
-		_add_mini_part(dart_row, _shaft_component, "Shaft")
-		_add_mini_part(dart_row, _flight_component, "Flight")
+		if count > 3:
+			_add_point_part(dart_row, dart_h)
+			_add_mini_part_sized(dart_row, _barrel_component, dart_h)
+			_add_mini_part_sized(dart_row, _shaft_component, dart_h)
+			_add_mini_part_sized(dart_row, _flight_component, dart_h)
+		else:
+			_add_point_part(dart_row, mini_dart_height)
+			_add_mini_part(dart_row, _barrel_component, "Barrel")
+			_add_mini_part(dart_row, _shaft_component, "Shaft")
+			_add_mini_part(dart_row, _flight_component, "Flight")
 
 	_update_dart_modulate()
 
@@ -184,7 +201,18 @@ func _add_mini_part_sized(container: HBoxContainer, component: DartComponent, he
 	container.add_child(tex_rect)
 
 
-## Restore the normal 3-dart display after shop mode.
+func set_max_darts(count: int) -> void:
+	_max_darts = maxi(count, 1)
+	for container: HBoxContainer in _dart_containers:
+		container.queue_free()
+	_dart_containers.clear()
+	if _using_textures:
+		_build_mini_darts()
+	else:
+		queue_redraw()
+
+
+## Restore the normal dart display after shop mode.
 func restore_normal_darts() -> void:
 	for container: HBoxContainer in _dart_containers:
 		container.queue_free()
@@ -198,8 +226,7 @@ func restore_normal_darts() -> void:
 func _draw() -> void:
 	if _using_textures:
 		return
-	# Fallback: draw 3 vertical lines
-	for i: int in range(3):
+	for i: int in range(_max_darts):
 		var color: Color = active_color if i < _darts_remaining else spent_color
 		var x: float = float(i) * spacing
 		var start: Vector2 = Vector2(x, 0.0)

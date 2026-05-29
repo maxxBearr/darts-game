@@ -254,10 +254,13 @@ func _ready() -> void:
 	_legendary_tooltip.visible = false
 	_legendary_tooltip.add_theme_font_size_override("font_size", 13)
 	_legendary_tooltip.add_theme_color_override("font_color", legendary_tint_color)
-	_legendary_tooltip.position = Vector2(modifier_panel.offset_left - 312.0, modifier_panel.offset_top - 30.0)
 	_legendary_tooltip.anchor_top = 1.0
 	_legendary_tooltip.anchor_bottom = 1.0
-	_legendary_tooltip.size = Vector2(300.0, 30.0)
+	_legendary_tooltip.offset_left = _legendary_panel.offset_left
+	_legendary_tooltip.offset_right = _legendary_panel.offset_right
+	_legendary_tooltip.offset_top = _legendary_panel.offset_top - 22.0
+	_legendary_tooltip.offset_bottom = _legendary_panel.offset_top
+	_legendary_tooltip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(_legendary_tooltip)
 
 	# Start with all buttons and optional labels hidden
@@ -318,6 +321,8 @@ func update_turn(turn: int, max_turns: int) -> void:
 ## Update the dart counter display and visual indicator.
 func update_darts(darts_remaining: int, is_last_turn: bool = false, darts_per_turn: int = 3) -> void:
 	dart_label.text = "Dart %d/%d" % [darts_per_turn - darts_remaining, darts_per_turn]
+	if dart_indicator._max_darts != darts_per_turn:
+		dart_indicator.set_max_darts(darts_per_turn)
 	dart_indicator.set_darts_remaining(darts_remaining)
 	if darts_remaining == 1 and is_last_turn:
 		dart_label.text = "FINAL DART!"
