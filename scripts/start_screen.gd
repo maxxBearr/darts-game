@@ -60,7 +60,7 @@ func _ready() -> void:
 
 
 func _build_ui() -> void:
-	var viewport_size: Vector2 = Vector2(1280.0, 720.0)
+	var viewport_size: Vector2 = get_viewport_rect().size
 
 	# Full-screen background
 	_background = ColorRect.new()
@@ -159,7 +159,7 @@ func _hide_tutorial_chooser() -> void:
 
 
 func _build_chooser() -> void:
-	var viewport_size: Vector2 = Vector2(1280.0, 720.0)
+	var viewport_size: Vector2 = get_viewport_rect().size
 
 	_chooser_panel = Panel.new()
 	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
