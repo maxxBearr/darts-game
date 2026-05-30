@@ -450,6 +450,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				ThrowState.HORIZONTAL_RELEASE:
 					get_viewport().set_input_as_handled()
 					_enter_resolving()
+		elif mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
+			if _state == ThrowState.VERTICAL_RELEASE:
+				_cancel_to_aiming()
+				get_viewport().set_input_as_handled()
 
 	# Handle Enter/Space key presses for all states
 	if event is InputEventKey:
@@ -472,6 +476,13 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## Lock the aim crosshair in place and transition to VERTICAL_RELEASE.
 func _place_aim_crosshair() -> void:
+	# Reject clicks outside the surround — prevents accidental throws from UI areas
+	if dartboard != null:
+		var offset: Vector2 = _aim_center - dartboard.global_position
+		var surround_radius: float = dartboard.board_radius * dartboard.surround_outer_multiplier
+		if offset.length() > surround_radius:
+			return
+
 	_placed_center = _aim_center
 	_aim_half_width = _get_aim_half_width()
 	_aim_half_height = _get_aim_half_height()

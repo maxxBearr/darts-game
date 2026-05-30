@@ -2045,7 +2045,7 @@ func _on_throw_state_changed(new_state: int) -> void:
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
 			_disable_hover()
 			hud.clear_modifier_perkup()
-			hud.show_instruction("Click or Space to lock vertical  |  Esc to undo target")
+			hud.show_instruction("Click or Space to lock vertical  |  Right-click or Esc to undo")
 			# Declare target and show highlight
 			var target: Dictionary = throw_mechanic._declared_target
 			if not target.is_empty():
