@@ -64,7 +64,7 @@ func _ready() -> void:
 
 
 func _build_ui() -> void:
-	var viewport_size: Vector2 = Vector2(1280.0, 720.0)
+	var viewport_size: Vector2 = get_viewport_rect().size
 
 	_background = ColorRect.new()
 	_background.color = background_color
@@ -143,7 +143,7 @@ func _create_stat_label() -> Label:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", stat_font_size)
 	label.add_theme_color_override("font_color", stat_color)
-	label.size = Vector2(1280.0, 40.0)
+	label.size = Vector2(get_viewport_rect().size.x, 40.0)
 	return label
 
 

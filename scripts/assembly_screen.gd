@@ -57,6 +57,7 @@ var _throw_color_panel: VBoxContainer
 var _throw_color_toggle: Button
 var _throw_color_pickers: Dictionary = {}
 var _zone_preview: Control
+var _content_wrapper: Control
 var _v_bounce_t: float = 0.0
 var _h_bounce_t: float = 0.0
 
@@ -195,11 +196,18 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	PlayerProgress.component_unlocked.connect(_on_component_unlocked)
 
-	# Background overlay
+	# Background overlay (full screen, added directly to self)
 	var bg: ColorRect = ColorRect.new()
 	bg.color = Color(0.08, 0.08, 0.12, 0.95)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
+
+	# Centered wrapper — holds all content at 1280x720, centered in the viewport
+	var viewport_size: Vector2 = get_viewport_rect().size
+	_content_wrapper = Control.new()
+	_content_wrapper.size = Vector2(1280.0, 720.0)
+	_content_wrapper.position = Vector2((viewport_size.x - 1280.0) / 2.0, (viewport_size.y - 720.0) / 2.0)
+	add_child(_content_wrapper)
 
 	# Title
 	_title_label = Label.new()
@@ -208,7 +216,7 @@ func _ready() -> void:
 	_title_label.position = title_position
 	_title_label.size = Vector2(1280.0, 40.0)
 	_title_label.add_theme_font_size_override("font_size", title_font_size)
-	add_child(_title_label)
+	_content_wrapper.add_child(_title_label)
 
 	# Dart preview area (center-top)
 	_build_dart_preview()
@@ -237,7 +245,7 @@ func _ready() -> void:
 	_begin_button.size = begin_button_size
 	_begin_button.add_theme_font_size_override("font_size", begin_button_font_size)
 	_begin_button.pressed.connect(_on_begin_run)
-	add_child(_begin_button)
+	_content_wrapper.add_child(_begin_button)
 
 	# Tutorial and Rules replay buttons (below Begin Run)
 	var help_row: HBoxContainer = HBoxContainer.new()
@@ -245,7 +253,7 @@ func _ready() -> void:
 	help_row.size = Vector2(begin_button_size.x + 40.0, 32.0)
 	help_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	help_row.add_theme_constant_override("separation", 12)
-	add_child(help_row)
+	_content_wrapper.add_child(help_row)
 
 	var tutorial_btn: Button = Button.new()
 	tutorial_btn.text = "Play Tutorial"
@@ -270,7 +278,7 @@ func _build_dart_preview() -> void:
 	preview_container.size = dart_preview_size
 	preview_container.add_theme_constant_override("separation", -3)
 	preview_container.alignment = BoxContainer.ALIGNMENT_CENTER
-	add_child(preview_container)
+	_content_wrapper.add_child(preview_container)
 
 	# Point (tip of the dart, to the left of the barrel)
 	var point_holder: Control = Control.new()
@@ -366,7 +374,7 @@ func _build_slot_selector(slot_name: String, pos: Vector2) -> void:
 	container.position = pos
 	container.size = slot_selector_size
 	container.add_theme_constant_override("separation", 4)
-	add_child(container)
+	_content_wrapper.add_child(container)
 
 	# "New Parts!" label (hidden by default, shown when new unlocks exist)
 	var new_label: Label = Label.new()
@@ -453,7 +461,7 @@ func _build_stat_bars() -> void:
 	stats_container.size = stats_size
 	stats_container.add_theme_constant_override("separation", 4)
 	stats_container.theme = _create_tooltip_theme()
-	add_child(stats_container)
+	_content_wrapper.add_child(stats_container)
 
 	var stats_title: Label = Label.new()
 	stats_title.text = "— Final Stats —"
@@ -501,7 +509,7 @@ func _build_balance_bar() -> void:
 	balance_container.position = balance_position
 	balance_container.size = balance_size
 	balance_container.add_theme_constant_override("separation", 4)
-	add_child(balance_container)
+	_content_wrapper.add_child(balance_container)
 
 	var balance_title: Label = Label.new()
 	balance_title.text = "— Balance —"
@@ -606,7 +614,7 @@ func _build_throw_color_ui() -> void:
 	container.position = color_ui_position
 	container.size = color_ui_size
 	container.add_theme_constant_override("separation", 6)
-	add_child(container)
+	_content_wrapper.add_child(container)
 
 	_throw_color_toggle = Button.new()
 	_throw_color_toggle.text = "Customize Throw Colors"
@@ -1056,13 +1064,13 @@ func _build_zone_preview() -> void:
 	preview_title.size = Vector2(zone_preview_size.x, 20.0)
 	preview_title.add_theme_font_size_override("font_size", 14)
 	preview_title.modulate = Color(0.8, 0.8, 0.6)
-	add_child(preview_title)
+	_content_wrapper.add_child(preview_title)
 
 	_zone_preview = Control.new()
 	_zone_preview.position = zone_preview_position + Vector2(0.0, 22.0)
 	_zone_preview.size = Vector2(zone_preview_size.x - 20.0, zone_preview_size.y - 22.0)
 	_zone_preview.draw.connect(_draw_zone_preview)
-	add_child(_zone_preview)
+	_content_wrapper.add_child(_zone_preview)
 
 
 func _draw_zone_preview() -> void:

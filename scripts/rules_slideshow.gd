@@ -268,7 +268,7 @@ func _build_slides() -> void:
 
 
 func _build_ui() -> void:
-	var viewport_size: Vector2 = Vector2(1280.0, 720.0)
+	var viewport_size: Vector2 = get_viewport_rect().size
 
 	# Scrim
 	_scrim = ColorRect.new()
