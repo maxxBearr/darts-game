@@ -34,6 +34,7 @@ enum ConfigType {
 	NONE,            ## Activates immediately, no player input needed
 	PICK_WEDGE,      ## Player picks one wedge on the board to target
 	PICK_TWO_WEDGES, ## Player picks two wedges (for swaps, etc.)
+	PICK_SEGMENT,    ## Player picks one specific ring on one wedge (wedge + ring_name)
 }
 
 ## How strict streak matching is for consecutive hit modifiers.

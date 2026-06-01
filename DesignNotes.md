@@ -1,12 +1,20 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-27 after the Tutorial Revamp pass shipped.*
+*Canonical design doc. Last refreshed 2026-05-31 after the Color Brushes + Per-Ring Color pass shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
 ## Status snapshot
+
+**Shipped 2026-05-31 (Color Brushes + Per-Ring Board Color):**
+
+- **Per-ring board color + paintable board** (`specs/2026-05-30-color-brushes-per-ring-color.md`). The board color model expanded from two colors per wedge (`single`/`multi`) to **four, one per ring** (`inner_single` / `triple` / `outer_single` / `double`) — the engine can now represent e.g. a white triple 20 on an otherwise black/red wedge. Built to rehabilitate the structurally-weak Red/Green color streaks: those colors only live on the multi rings of a standard board, so they're brutal to chain until late game. The fix turns color into a sculptable build resource. New **`BrushModifier`** ("Brush: Red", "Brush: Green", etc.) **replaces `ColorFlipModifier`** — a consumable BOARD_MUTATION that paints one chosen ring one pre-rolled color (color rolled at generation; player only picks the segment). New **`ConfigType.PICK_SEGMENT`** picker (wedge + `ring_name`, mirrors the PICK_WEDGE flow but highlights a single ring). **Affinity-gated pooling** (Stone-Joker model): a `Brush: <Color>` only appears in the shop if the player owns a `ColorStreak`/`ColorBonus` modifier targeting that color — `main.gd::_sync_brush_affinity()` sets `ModifierRegistry.available_brush_colors`, and an empty set suppresses brushes via a `0.0` weight override. Brush is common-tier only; the affinity gate does all the interesting gating (the rarity-palette idea was dropped). **Prism boss reworked** from a per-turn color *shuffle* to a **leg-scoped pair *inverter*** (red↔green, black↔white at leg start, held all leg, restored at leg end) — a sharper, self-restoring counter to a painted board (inversion is its own inverse, so it preserves brush paint). Recession boss unchanged behaviorally; it now keys its color match off `inner_single` as the wedge's representative single color.
+
+**Shipped 2026-05-29 (late-game perf):**
+
+- **Solver cache correctness + recursive prune** (`specs/2026-05-28-cache-key-hotfix-recursive-prune.md`, preceded by `specs/2026-05-28-late-game-perf-fix.md`). Replaced a broken monotonic `_streak_version` counter with a real per-modifier streak-state hash (`get_streak_state_hash()` → `_streak_state_hash()`) so solver cache keys actually hit, and extended the `_max_single_dart_score × darts_left` upper-bound prune into `_solve_recursive`. Killed the multi-minute `+1 dart` leg-transition freezes at high remainders.
 
 **Shipped 2026-05-27 (Tutorial Revamp):**
 
@@ -217,7 +225,7 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 **Modifier pipeline:**
 
 - Owns `effective_wedge_values: Array[int]` — mutable copy of wedge order, modified by ON_ACQUIRE modifiers.
-- Owns `effective_wedge_colors: Array[Dictionary]` — segment colors per wedge (single/multi keys).
+- Owns `effective_wedge_colors: Array[Dictionary]` — segment colors per wedge, **four keys per entry, one per ring** (`inner_single` / `triple` / `outer_single` / `double`), since the 2026-05-31 per-ring color pass. Brushes paint a single ring key; `_lookup_segment_color` / `get_effective_color` take a `ring_name`.
 - Owns `active_modifiers: Array[Resource]` — all acquired modifiers in acquisition order.
 - Owns hit history at three granularities: `hit_history_turn`, `hit_history_leg`, `hit_history_run`.
 - `process_score(raw_result, is_preview)` — runs the scoring pipeline. Applies effective wedge values, then loops through active PER_DART modifiers calling `apply()`. If `is_preview` is true (for hover tooltips), skips history recording AND skips streak state mutation.
@@ -260,7 +268,7 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 - Color modifiers: filled with the target SegmentColor. Outline = rarity. One outline.
 - Parity modifiers: neutral dark fill. Inner outline = category color (red for even, green for odd). Outer outline = rarity. Two outlines.
 - Wedge Streak: neutral dark fill. Outline = rarity. One outline.
-- BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) keep the default `IconShape.NONE` and never render — they have no panel presence.
+- BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Brush) keep the default `IconShape.NONE` and never render — they have no panel presence.
 - Exports for inspector tuning: `rarity_outline_width`, `category_outline_width`, `outline_gap`, `draw_inset`, `neutral_fill_color`, plus per-color overrides for the four SegmentColor fills.
 - **Deferred:** if visual identity needs to push past this geometric base, the next pass is hand-drawn art per modifier (not exported font glyphs).
 
@@ -280,7 +288,7 @@ All modifiers declare a `kind` (RELIC or BOARD_MUTATION). RELIC modifiers persis
 
 - **`wedge_value_modifier.gd`** (`WedgeValueModifier`) — ON_ACQUIRE, PICK_WEDGE config. Adds `bonus_value` to a selected wedge's effective face value. The board renders the new number.
 - **`wedge_swap_modifier.gd`** (`WedgeSwapModifier`) — ON_ACQUIRE, PICK_TWO_WEDGES config. Swaps two wedges' positions on the board.
-- **`color_flip_modifier.gd`** (`ColorFlipModifier`) — ON_ACQUIRE. Flips segment colors.
+- **`brush_modifier.gd`** (`BrushModifier`, "Brush: <Color>") — ON_ACQUIRE, PICK_SEGMENT config. Paints one chosen ring (`wedge_colors[wedge_index][ring_name] = target_color`) one pre-rolled color. Replaced `ColorFlipModifier` (whole-wedge pair flip) on 2026-05-31. Affinity-gated into the pool (see below) — only surfaces for colors the player already has a `ColorStreak`/`ColorBonus` for. Common-tier only.
 
 ### ThrowModifier system (separate from ScoringModifier)
 
@@ -290,7 +298,7 @@ All modifiers declare a `kind` (RELIC or BOARD_MUTATION). RELIC modifiers persis
 
 ### ShopBias system (added 2026-05-24)
 
-`ShopBias` is a sibling Resource to `ThrowModifier`, attached to `DartComponent` via the optional `shop_bias` field. Where ThrowModifiers fire at throw time, ShopBiases fire at shop generation time. Subclasses override `get_weight_overrides() -> Dictionary` to return a `{ScriptType: float_multiplier}` map that `ModifierRegistry.generate_distinct_at_rarity` multiplies into pool weights inside its weighted-roll loop. `ColorShopBias` (used by the Color Connoisseur flight) maps the three color-flavored modifier scripts to an exported `color_weight_multiplier: float = 2.0`. The pattern is intentionally minimal — a future spot-spawning bias could extend the same base with a new override method, and the same sibling-Resource shape can host future hook types (e.g., the deferred `ScoringHook` for on-score reactive effects).
+`ShopBias` is a sibling Resource to `ThrowModifier`, attached to `DartComponent` via the optional `shop_bias` field. Where ThrowModifiers fire at throw time, ShopBiases fire at shop generation time. Subclasses override `get_weight_overrides() -> Dictionary` to return a `{ScriptType: float_multiplier}` map that `ModifierRegistry.generate_distinct_at_rarity` multiplies into pool weights inside its weighted-roll loop. `ColorShopBias` (used by the Color Connoisseur flight) maps the color-flavored modifier scripts (`ColorBonus`, `ColorStreak`, and `Brush` since 2026-05-31) to an exported `color_weight_multiplier: float = 2.0`. The pattern is intentionally minimal — a future spot-spawning bias could extend the same base with a new override method, and the same sibling-Resource shape can host future hook types (e.g., the deferred `ScoringHook` for on-score reactive effects).
 
 ### Ability Hook Extension Points (canonical pattern, formalized 2026-05-24)
 
@@ -689,7 +697,7 @@ Slides cover: board orientation, singles, doubles, triples, bullseye, x01 scorin
 - **Soft hints over active suggestions.** "Try toggling a modifier" instead of "disable Color Streak to enable T20-T20-Bull." Active suggestions feel like the helper is playing for the player; passive nudges teach the verb without commandeering the decision. Applies to all future helper-style features.
 - **Locked/unlocked is a 65/35 generation roll with no compensating buff for locked.** Rarity is the power axis, not lock status. Locked is a *constraint* (can't toggle off) at the same statline as unlocked. The interesting decision lives at the rarity boundary (locked-rare vs unlocked-uncommon), not within a single rarity.
 - **Modifier commits are leg-scale, not run-scale.** Locked items can be swapped at the next shop or post-leg pick. Long enough for commits to feel real; short enough to not feel punishing.
-- **Modifiers come in two kinds: RELIC and BOARD_MUTATION.** RELIC modifiers persist in the modifier panel, contribute to scoring per dart, and have icons. BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Color Flip) fire once at acquisition, mutate the dartboard, and then disappear from the inventory entirely — the board itself is their visible record. Two different player-mental-model questions: "what's actively scoring for me?" (panel) vs. "what does the board look like?" (the board). The distinction prevents inventory noise from one-time effects.
+- **Modifiers come in two kinds: RELIC and BOARD_MUTATION.** RELIC modifiers persist in the modifier panel, contribute to scoring per dart, and have icons. BOARD_MUTATION modifiers (Wedge Value, Wedge Swap, Brush) fire once at acquisition, mutate the dartboard, and then disappear from the inventory entirely — the board itself is their visible record. Two different player-mental-model questions: "what's actively scoring for me?" (panel) vs. "what does the board look like?" (the board). The distinction prevents inventory noise from one-time effects.
 - **Modifier visual language is shape + color + outline.** Shape encodes category (circle = color, square = even, triangle = odd, sector = wedge). Fill carries the within-category specifics (target color) where applicable; otherwise neutral fill. Outlines layer rarity-color outside category-color (parity modifiers) or rarity-color alone (color and wedge modifiers). Bonus vs Streak within a category is **not** distinguished by icon — they live in different UI surfaces (relic bar vs streak section), and location does the disambiguation. If visual identity needs more weight than geometry can carry, the next step is hand-drawn art per modifier, not exported font glyphs.
 - **Color streaks are per-color modifiers, not a single generic streak.** Four flavors (Red / Green / Black / White Streak) share the COLOR slot. Uniform 1/4 roll within the color-streak pool — black/white score less per hit but are easier to streak; red/green score more but require doubles/triples/bullseye. Rarity scope (turn/leg/run), lock/unlock status, and build synergy already provide enough variation axes that flat color weighting is the right v1.
 - **Manual `StringName` IDs over Godot UIDs for dart components.** Considered four options: Godot UIDs (`uid://...`), file paths, auto-slug from `component_name`, and manual `StringName`. Went manual because save files stay human-readable (`["barrel_torpedo"]` vs an opaque hash), the ID survives file moves and display-name renames, and refactors can manually migrate IDs if absolutely necessary. The discipline cost (remembering to set the ID on every new component) is neutralized by `DartComponentRegistry._validate_components()` printing loud `push_error()` lines for empty or duplicate IDs on `_ready()`. Same pattern available to `ScoringModifier` and `ThrowModifier` later — don't extract a shared base class until at least two of them need it.

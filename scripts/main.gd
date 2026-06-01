@@ -24,11 +24,18 @@ extends Node2D
 ## so you face a boss on the first leg. Useful for testing boss encounters.
 @export var debug_boss_immediately: bool = false
 
+@export_group("Path Illumination")
+
+## Whether checkout path illumination is enabled (blue board highlights).
+@export var illumination_enabled: bool = true
+
 @onready var dartboard: Node2D = $Dartboard
 @onready var throw_mechanic: Node2D = $ThrowMechanic
 @onready var dart_container: Node2D = $DartContainer
 @onready var hud: CanvasLayer = $HUD
 @onready var x01_game: Node = $X01Game
+
+var _score_layer: CanvasLayer
 @onready var scoring_modifier_manager: Node = $ScoringModifierManager
 @onready var dart_component_registry: DartComponentRegistry = $DartComponentRegistry
 @onready var dart_build: DartBuild = $DartBuild
@@ -147,8 +154,14 @@ var _base_accuracy_skew_v: float = 0.0
 # The 3 generated upgrade choices for the current leg-complete screen
 var _current_upgrades: Array[Dictionary] = []
 
-## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker", "boss_reward_pick"
+## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker", "segment_picker", "boss_reward_pick"
 var _leg_phase: String = ""
+
+## Cached checkout paths for illumination (from last solver run).
+var _checkout_paths: Array[Array] = []
+
+## Index of the selected path for illumination (-1 = none).
+var _selected_path_index: int = -1
 
 ## The 3 generated modifier choices for the modifier pick phase.
 var _current_modifiers: Array[ScoringModifier] = []
@@ -255,6 +268,10 @@ var all_in_active: bool = false
 func _ready() -> void:
 	_default_shop_cadence = shop_cadence
 
+	_score_layer = CanvasLayer.new()
+	_score_layer.layer = 2
+	add_child(_score_layer)
+
 	# Connect throw mechanic signals
 	throw_mechanic.throw_completed.connect(_on_throw_completed)
 	throw_mechanic.state_changed.connect(_on_throw_state_changed)
@@ -268,6 +285,7 @@ func _ready() -> void:
 	hud.modifier_skipped.connect(_on_modifier_skipped)
 	hud.reward_selected.connect(_on_reward_selected)
 	hud.modifier_toggled.connect(_on_modifier_toggled)
+	hud.checkout_path_clicked.connect(_on_checkout_path_clicked)
 
 	# Connect assembly screen
 	assembly_screen.dart_build = dart_build
@@ -324,6 +342,13 @@ func _process(_delta: float) -> void:
 		var mouse_pos: Vector2 = get_global_mouse_position()
 		var wedge_idx: int = dartboard.update_picker_hover(mouse_pos)
 		_update_picker_prompt(wedge_idx)
+		return
+
+	# Segment picker mode hover — update single-ring highlight under cursor
+	if _leg_phase == "segment_picker" and dartboard.segment_picker_mode:
+		var mouse_pos: Vector2 = get_global_mouse_position()
+		var seg: Dictionary = dartboard.update_segment_picker_hover(mouse_pos)
+		_update_segment_picker_prompt(seg)
 		return
 
 	if not _hover_active:
@@ -488,10 +513,29 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# Floating score number (gold if winning dart)
 	var recession_data: Dictionary = boss_manager.get_recession_data(hit_wedge)
-	var score_tween: Tween = _spawn_floating_score(hit_position, result, recession_data, response["is_leg_won"])
+
+	# Build remaining-countdown info for trigger animations
+	var remaining_info: Dictionary = {}
+	if not response["is_leg_won"]:
+		if response["is_bust"]:
+			remaining_info = {
+				"remaining_before": response["pre_revert_remaining"] + result["total_score"],
+				"remaining_final": response["remaining_score"],
+				"face_value": result["face_value"],
+				"glass_cannon": x01_game.glass_cannon_active,
+				"is_bust": true,
+			}
+		else:
+			remaining_info = {
+				"remaining_before": response["remaining_score"] + result["total_score"],
+				"remaining_final": response["remaining_score"],
+				"face_value": result["face_value"],
+				"glass_cannon": x01_game.glass_cannon_active,
+			}
+	var score_tween: Tween = _spawn_floating_score(hit_position, result, recession_data, response["is_leg_won"], remaining_info)
 
 	# Flash the hit segment for visual feedback
-	dartboard.flash_segment(hit_position)
+	dartboard.flash_segment(hit_position, response["is_leg_won"], response["is_bust"])
 
 	# Update streak section
 	hud.update_streak_section(
@@ -518,16 +562,28 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		_turn_darts_scored += 1
 	hud.update_turn_score(_turn_score)
 
-	# Update remaining score display
-	hud.update_remaining(response["remaining_score"], x01_game.glass_cannon_active)
+	# Update remaining score display — for trigger animations on normal hits,
+	# defer the update so it counts down in sync with each trigger impact.
+	var _has_trigger_anim: bool = false
+	for _mod: Dictionary in result.get("modifications", []):
+		if _mod["field"] == "multiplier":
+			_has_trigger_anim = true
+			break
+	var _defer_remaining: bool = _has_trigger_anim and not response["is_leg_won"]
+	if not _defer_remaining:
+		hud.update_remaining(response["remaining_score"], x01_game.glass_cannon_active)
 
 	# Branch on what happened
 	if response["is_bust"]:
+		if not _has_trigger_anim:
+			AuidoManager.play_bust_sound()
 		if x01_game.glass_cannon_active:
 			hud.show_bust("GLASS CANNON — RUN OVER")
 		else:
 			hud.show_bust(response["bust_reason"])
+		hud.set_remaining_bust(true)
 		hud.hide_checkout_helper()
+		dartboard.clear_illumination()
 		if response["is_game_over"]:
 			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
@@ -548,6 +604,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		hud.set_remaining_checkout_available(true)
 		dartboard.clear_checkout_segments()
 		hud.hide_checkout_helper()
+		dartboard.clear_illumination()
 		_awaiting_next_leg = true
 		_notify_leg_won(result, response)
 		if score_tween != null and score_tween.is_valid():
@@ -557,6 +614,7 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	elif response["is_turn_over"]:
 		# Used all 3 darts without bust or win — hide helper until next turn
 		hud.hide_checkout_helper()
+		dartboard.clear_illumination()
 		if response["is_game_over"]:
 			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
@@ -719,6 +777,7 @@ func _on_next_turn() -> void:
 	_turn_score = 0
 	_turn_darts_scored = 0
 	hud.update_turn_score(0)
+	hud.set_remaining_bust(false)
 	scoring_modifier_manager.reset_for_turn()
 	_clear_darts()
 	AuidoManager.on_turn_ended(x01_game.current_turn)
@@ -886,6 +945,9 @@ func _reset_run_state() -> void:
 	ModifierRegistry.current_rarity_shift = 0.0
 	boss_manager.configure_for_level(null)
 	dartboard.clear_boss_overlays()
+	dartboard.clear_illumination()
+	_checkout_paths.clear()
+	_selected_path_index = -1
 	hud.update_turn_score(0)
 	hud.hide_picker()
 	hud.hide_target_tooltip()
@@ -1068,7 +1130,7 @@ func _on_shop_throw_completed(hit_position: Vector2) -> void:
 	if spot_idx >= 0:
 		# Hit a lit spot — deactivate it and generate 2 mixed picks
 		var spot: Dictionary = _shop_lit_spots[spot_idx]
-		dartboard.deactivate_shop_spot(spot_idx)
+		dartboard.deactivate_shop_spot(spot_idx, hit_position)
 		var rarity: ScoringEnums.Rarity = spot["rarity"] as ScoringEnums.Rarity
 		_shop_pick_items = _generate_shop_picks(rarity)
 		_leg_phase = "shop_pick"
@@ -1105,13 +1167,28 @@ func _get_owned_fingerprints() -> Array[String]:
 	return result
 
 
+## Compute which brush colors are available based on owned color modifiers.
+## Sets ModifierRegistry.available_brush_colors so BrushModifier.generate() can use it.
+func _sync_brush_affinity() -> void:
+	var colors: Array[ScoringEnums.SegmentColor] = []
+	for m: Resource in scoring_modifier_manager.active_modifiers:
+		if (m is ColorStreakModifier or m is ColorBonusModifier) and not m.target_color in colors:
+			colors.append(m.target_color)
+	ModifierRegistry.available_brush_colors = colors
+
+
 ## Generate 2 mixed shop picks (accuracy upgrades or modifiers) at a given rarity.
 func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 	var picks: Array[Dictionary] = []
 
+	_sync_brush_affinity()
 	var weight_overrides: Dictionary = {}
 	if dart_build.equipped_flight != null and dart_build.equipped_flight.shop_bias != null:
 		weight_overrides = dart_build.equipped_flight.shop_bias.get_weight_overrides()
+	# Gate brushes out of the pool when no color modifiers are owned
+	if ModifierRegistry.available_brush_colors.is_empty():
+		const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
+		weight_overrides[_Brush] = 0.0
 
 	var offered_mod_fingerprints: Array[String] = _get_owned_fingerprints()
 	var offered_accuracy_keys: Array[String] = []
@@ -1197,10 +1274,7 @@ func _on_shop_pick_selected(index: int) -> void:
 		_leg_phase = "wedge_picker"
 		_picker_selected_wedge = -1
 		dartboard.set_picker_mode(true)
-		if modifier is ColorFlipModifier:
-			hud.show_picker_header("Flip a wedge's colors")
-		else:
-			hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
 		hud.show_picker_prompt("Hover over a wedge and click to select")
 		return
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
@@ -1210,6 +1284,13 @@ func _on_shop_pick_selected(index: int) -> void:
 		dartboard.set_picker_mode(true)
 		hud.show_picker_header("Swap two wedges")
 		hud.show_picker_prompt("Click to select the first wedge")
+		return
+	elif modifier.config_type == ScoringEnums.ConfigType.PICK_SEGMENT:
+		_pending_modifier = modifier
+		_leg_phase = "segment_picker"
+		dartboard.set_segment_picker_mode(true)
+		_show_segment_picker_header(modifier)
+		hud.show_picker_prompt("Hover over a segment and click to select")
 		return
 
 	_continue_shop_after_pick()
@@ -1405,6 +1486,7 @@ func _hide_gameplay_hud() -> void:
 	hud.hide_all_buttons()
 	hud.upgrade_container.visible = false
 	hud.hide_checkout_helper()
+	dartboard.clear_illumination()
 
 
 ## Restore gameplay HUD elements after tutorial/start screen.
@@ -1576,6 +1658,7 @@ func _on_run_confirmed() -> void:
 		_start_modifier_pending = true
 		_leg_phase = "modifier_pick"
 		_current_modifiers = []
+		_sync_brush_affinity()
 		var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3, _get_owned_fingerprints())
 		for mod: ScoringModifier in generated:
 			_current_modifiers.append(mod)
@@ -1601,6 +1684,7 @@ func _on_upgrade_selected(index: int) -> void:
 	# Move to Phase 2: modifier pick
 	_leg_phase = "modifier_pick"
 	_current_modifiers = []
+	_sync_brush_affinity()
 	var generated: Array[ScoringModifier] = ModifierRegistry.generate_distinct(3, _get_owned_fingerprints())
 	for mod: ScoringModifier in generated:
 		_current_modifiers.append(mod)
@@ -1639,10 +1723,7 @@ func _on_modifier_selected(index: int) -> void:
 		_leg_phase = "wedge_picker"
 		_picker_selected_wedge = -1
 		dartboard.set_picker_mode(true)
-		if modifier is ColorFlipModifier:
-			hud.show_picker_header("Flip a wedge's colors")
-		else:
-			hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
 		hud.show_picker_prompt("Hover over a wedge and click to select")
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
 		_pending_modifier = modifier
@@ -1651,6 +1732,12 @@ func _on_modifier_selected(index: int) -> void:
 		dartboard.set_picker_mode(true)
 		hud.show_picker_header("Swap two wedges")
 		hud.show_picker_prompt("Click to select the first wedge")
+	elif modifier.config_type == ScoringEnums.ConfigType.PICK_SEGMENT:
+		_pending_modifier = modifier
+		_leg_phase = "segment_picker"
+		dartboard.set_segment_picker_mode(true)
+		_show_segment_picker_header(modifier)
+		hud.show_picker_prompt("Hover over a segment and click to select")
 
 
 ## Player skips the scoring modifier pick.
@@ -1904,8 +1991,18 @@ func _update_checkout_highlights() -> void:
 		return
 	var remaining: int = x01_game.remaining_score
 	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(remaining)
-	dartboard.set_checkout_segments(checkout_segments)
-	hud.set_remaining_checkout_available(checkout_segments.size() > 0)
+	# Defense-in-depth: drop any segment that would actually bust when thrown
+	var verified: Array[Dictionary] = []
+	for seg: Dictionary in checkout_segments:
+		var synth: Dictionary = _synthesize_checkout_segment(seg)
+		if synth.is_empty():
+			verified.append(seg)
+			continue
+		var modified: Dictionary = scoring_modifier_manager.process_score(synth, true)
+		if not _would_bust(modified):
+			verified.append(seg)
+	dartboard.set_checkout_segments(verified)
+	hud.set_remaining_checkout_available(verified.size() > 0)
 
 
 ## Update the checkout helper panel with solver results.
@@ -1913,6 +2010,7 @@ func _update_checkout_highlights() -> void:
 func _update_checkout_helper() -> void:
 	if _in_shop:
 		hud.hide_checkout_helper()
+		dartboard.clear_illumination()
 		return
 
 	var _perf_start: int = Time.get_ticks_usec() if scoring_modifier_manager.debug_perf_log else 0
@@ -1929,15 +2027,57 @@ func _update_checkout_helper() -> void:
 
 	var paths: Array[Array] = scoring_modifier_manager.solve_checkout(remaining, darts_left)
 
+	# Cache paths and reset selection
+	_checkout_paths = paths
+	_selected_path_index = 0 if paths.size() > 0 else -1
+
+	# Compute divergence map for necessity-gated ring labels
+	var divergent_wedges: Dictionary = {}
+	for path: Array in paths:
+		for step: Dictionary in path:
+			var target: Dictionary = step["target"]
+			var ring: String = target.get("ring_name", "")
+			if ring == "Inner Single" or ring == "Outer Single":
+				var wi: int = target.get("wedge_index", -1)
+				if wi >= 0 and not divergent_wedges.has(wi):
+					divergent_wedges[wi] = scoring_modifier_manager.singles_diverge(wi)
+
 	if paths.size() > 0:
-		hud.update_checkout_display(paths, has_toggleable)
+		hud.update_checkout_display(paths, has_toggleable, divergent_wedges, _selected_path_index)
+		_update_illumination()
 	else:
+		hud.update_checkout_display(paths, has_toggleable, divergent_wedges, -1)
+		dartboard.clear_illumination()
 		var setup: Dictionary = scoring_modifier_manager.get_setup_recommendation(remaining)
-		hud.update_setup_display(setup, has_toggleable)
+		hud.update_setup_display(setup, has_toggleable, divergent_wedges)
 
 	if scoring_modifier_manager.debug_perf_log:
 		var ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0
 		print("[PERF] _update_checkout_helper r=%d darts_left=%d  %.1fms" % [remaining, darts_left, ms])
+
+
+## Recompute and push illumination segments for the selected path's first step.
+func _update_illumination() -> void:
+	if not illumination_enabled or _selected_path_index < 0 or _selected_path_index >= _checkout_paths.size():
+		dartboard.clear_illumination()
+		return
+	var path: Array = _checkout_paths[_selected_path_index]
+	if path.is_empty():
+		dartboard.clear_illumination()
+		return
+	var target_score: int = path[0]["result"]["total_score"]
+	var is_finish: bool = path.size() == 1
+	var equivalents: Array[Dictionary] = scoring_modifier_manager.find_equivalent_segments(target_score, is_finish)
+	dartboard.set_illumination_segments(equivalents, is_finish)
+
+
+## Called when a checkout path line is clicked in the HUD.
+func _on_checkout_path_clicked(index: int) -> void:
+	if index < 0 or index >= _checkout_paths.size():
+		return
+	_selected_path_index = index
+	hud.set_selected_path(index)
+	_update_illumination()
 
 
 ## Called when a modifier is toggled on/off — recompute checkout helper and streak display.
@@ -1950,6 +2090,47 @@ func _on_modifier_toggled() -> void:
 		scoring_modifier_manager.get_active_streak_modifiers(),
 		scoring_modifier_manager.effective_wedge_values
 	)
+
+
+## Build a synthetic score result from a checkout segment marker for verification.
+## Returns empty dict for bull types (always safe, no ring ambiguity).
+func _synthesize_checkout_segment(seg: Dictionary) -> Dictionary:
+	var seg_type: String = seg["type"]
+	if seg_type == "double_bull" or seg_type == "single_bull":
+		return {}
+	var wedge_idx: int = seg["wedge_idx"]
+	var face_value: int = scoring_modifier_manager.effective_wedge_values[wedge_idx]
+	var colors: Dictionary = scoring_modifier_manager.effective_wedge_colors[wedge_idx]
+	var ring_name: String
+	var multiplier: int
+	var ring_key: String
+	match seg_type:
+		"wedge":
+			ring_name = "Double"
+			multiplier = 2
+			ring_key = "double"
+		"triple_wedge":
+			ring_name = "Triple"
+			multiplier = 3
+			ring_key = "triple"
+		"single_wedge":
+			ring_key = seg.get("ring_key", "outer_single")
+			if ring_key == "inner_single":
+				ring_name = "Inner Single"
+			else:
+				ring_name = "Outer Single"
+			multiplier = 1
+		_:
+			return {}
+	return {
+		"face_value": face_value,
+		"multiplier": multiplier,
+		"total_score": face_value * multiplier,
+		"ring_name": ring_name,
+		"wedge_index": wedge_idx,
+		"segment_color": colors.get(ring_key, -1),
+		"is_bull": false,
+	}
 
 
 func _would_bust(result: Dictionary) -> bool:
@@ -1987,8 +2168,11 @@ func _is_checkout_segment(result: Dictionary) -> bool:
 			return true
 		if seg["type"] == "triple_wedge" and seg["wedge_idx"] == wedge_index and ring_name == "Triple":
 			return true
-		if seg["type"] == "single_wedge" and seg["wedge_idx"] == wedge_index and (ring_name == "Inner Single" or ring_name == "Outer Single"):
-			return true
+		if seg["type"] == "single_wedge" and seg["wedge_idx"] == wedge_index:
+			var seg_ring: String = seg.get("ring_key", "outer_single")
+			var hover_ring_key: String = "inner_single" if ring_name == "Inner Single" else "outer_single"
+			if seg_ring == hover_ring_key:
+				return true
 	return false
 
 
@@ -2081,6 +2265,38 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
+	# Scroll wheel / arrow keys to cycle selected checkout path
+	if _leg_phase == "" and not _in_shop and not _in_tutorial and illumination_enabled and _checkout_paths.size() > 1:
+		var path_delta: int = 0
+		if event is InputEventMouseButton and event.pressed:
+			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				path_delta = -1
+			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				path_delta = 1
+		elif event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_UP or event.keycode == KEY_LEFT:
+				path_delta = -1
+			elif event.keycode == KEY_DOWN or event.keycode == KEY_RIGHT:
+				path_delta = 1
+		if path_delta != 0:
+			_selected_path_index = (_selected_path_index + path_delta + _checkout_paths.size()) % _checkout_paths.size()
+			hud.set_selected_path(_selected_path_index)
+			_update_illumination()
+			get_viewport().set_input_as_handled()
+			return
+
+	if _leg_phase == "segment_picker":
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			var seg: Dictionary = dartboard.get_segment_at_position(get_global_mouse_position())
+			if seg.is_empty():
+				return
+			get_viewport().set_input_as_handled()
+			_complete_pick_segment(seg)
+		elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			_cancel_picker()
+		return
+
 	if _leg_phase != "wedge_picker":
 		return
 
@@ -2102,6 +2318,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _complete_pick_wedge(wedge_idx: int) -> void:
 	add_scoring_modifier(_pending_modifier, {"wedge_index": wedge_idx})
+	_finish_picker()
+
+
+func _complete_pick_segment(seg: Dictionary) -> void:
+	dartboard.animate_color_transition()
+	add_scoring_modifier(_pending_modifier, {"wedge_index": seg["wedge_index"], "ring_name": seg["ring_key"]})
 	_finish_picker()
 
 
@@ -2129,6 +2351,7 @@ func _handle_pick_two_wedges_click(wedge_idx: int) -> void:
 
 func _cancel_picker() -> void:
 	dartboard.set_picker_mode(false)
+	dartboard.set_segment_picker_mode(false)
 	hud.hide_picker()
 	_pending_modifier = null
 	_picker_selected_wedge = -1
@@ -2164,6 +2387,7 @@ func _cancel_picker() -> void:
 
 func _finish_picker() -> void:
 	dartboard.set_picker_mode(false)
+	dartboard.set_segment_picker_mode(false)
 	hud.hide_picker()
 	_pending_modifier = null
 	_picker_selected_wedge = -1
@@ -2191,15 +2415,8 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 
 	if _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
 		var current_val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
-		if _pending_modifier is ColorFlipModifier:
-			var current_single: ScoringEnums.SegmentColor = scoring_modifier_manager.get_effective_color(wedge_idx, false)
-			var from_name: String = ColorFlipModifier.get_color_pair_name(current_single)
-			var to_single: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.WHITE if current_single == ScoringEnums.SegmentColor.BLACK else ScoringEnums.SegmentColor.BLACK
-			var to_name: String = ColorFlipModifier.get_color_pair_name(to_single)
-			hud.show_picker_prompt("Flip %d from %s to %s? Click to confirm, Escape to cancel" % [current_val, from_name, to_name])
-		else:
-			var new_val: int = current_val + _pending_modifier.bonus_value
-			hud.show_picker_prompt("Make %d into %d? Click to confirm, Escape to cancel" % [current_val, new_val])
+		var new_val: int = current_val + _pending_modifier.bonus_value
+		hud.show_picker_prompt("Make %d into %d? Click to confirm, Escape to cancel" % [current_val, new_val])
 	elif _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
 		if _picker_selected_wedge < 0:
 			var val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
@@ -2210,7 +2427,42 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 			hud.show_picker_prompt("Swap %d and %d? Click to confirm, Escape to cancel" % [val1, val2])
 
 
-func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
+const RING_DISPLAY_NAMES: Dictionary = {
+	"inner_single": "Inner Single",
+	"triple": "Triple",
+	"outer_single": "Outer Single",
+	"double": "Double",
+}
+
+const COLOR_DISPLAY_NAMES: Dictionary = {
+	ScoringEnums.SegmentColor.RED: "Red",
+	ScoringEnums.SegmentColor.GREEN: "Green",
+	ScoringEnums.SegmentColor.BLACK: "Black",
+	ScoringEnums.SegmentColor.WHITE: "White",
+}
+
+
+func _show_segment_picker_header(modifier: ScoringModifier) -> void:
+	if modifier.has_method("get_brush_color_name"):
+		hud.show_picker_header("Paint a segment %s" % modifier.get_brush_color_name())
+	else:
+		hud.show_picker_header("Pick a segment")
+
+
+func _update_segment_picker_prompt(seg: Dictionary) -> void:
+	if seg.is_empty():
+		hud.show_picker_prompt("Hover over a segment and click to select")
+		return
+	var wedge_idx: int = seg["wedge_index"]
+	var ring_key: String = seg["ring_key"]
+	var value: int = scoring_modifier_manager.get_effective_value(wedge_idx)
+	var ring_display: String = RING_DISPLAY_NAMES.get(ring_key, ring_key)
+	var current_color: ScoringEnums.SegmentColor = scoring_modifier_manager.get_effective_color(wedge_idx, ring_key)
+	var color_name: String = COLOR_DISPLAY_NAMES.get(current_color, "?")
+	hud.show_picker_prompt("Paint %s %d (%s)? Click to confirm, Escape to cancel" % [ring_display, value, color_name])
+
+
+func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false, remaining_info: Dictionary = {}) -> Tween:
 	var score: int = result["total_score"]
 	if score == 0:
 		return _spawn_zero_floating_score(hit_position)
@@ -2224,7 +2476,7 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_
 	if multiplier_mods.is_empty():
 		return _spawn_simple_floating_score(hit_position, result, recession_data, is_leg_won)
 	else:
-		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data, is_leg_won)
+		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data, is_leg_won, remaining_info)
 
 
 func _spawn_zero_floating_score(hit_position: Vector2) -> Tween:
@@ -2237,7 +2489,7 @@ func _spawn_zero_floating_score(hit_position: Vector2) -> Tween:
 	label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 0.8))
 	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.6))
 	label.pivot_offset = label.size / 2.0
-	add_child(label)
+	_score_layer.add_child(label)
 
 	var tween: Tween = create_tween()
 	tween.set_parallel(true)
@@ -2261,7 +2513,7 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, rec
 
 	var label: Label = _create_score_label(display_score, hit_position, result)
 	label.pivot_offset = label.size / 2.0
-	add_child(label)
+	_score_layer.add_child(label)
 
 	if is_leg_won:
 		label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
@@ -2280,7 +2532,7 @@ func _spawn_simple_floating_score(hit_position: Vector2, result: Dictionary, rec
 		recession_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
 		recession_label.position = hit_position + Vector2(50.0, -40.0)
 		recession_label.modulate.a = 0.0
-		add_child(recession_label)
+		_score_layer.add_child(recession_label)
 
 		var tween: Tween = create_tween()
 		tween.tween_interval(0.3)
@@ -2358,7 +2610,7 @@ func _create_source_label(group: Dictionary, start_position: Vector2) -> HBoxCon
 	return container
 
 
-func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary], recession_data: Dictionary = {}, is_leg_won: bool = false) -> Tween:
+func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multiplier_mods: Array[Dictionary], recession_data: Dictionary = {}, is_leg_won: bool = false, remaining_info: Dictionary = {}) -> Tween:
 	var has_recession: bool = not recession_data.is_empty()
 	var face_value: int = result["face_value"]
 	var display_face: int = face_value
@@ -2368,10 +2620,21 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 	var base_score: int = display_face * int(multiplier_mods[0]["old_value"])
 	var main_label: Label = _create_score_label(base_score, hit_position, result, score_trigger_font_size)
 	main_label.pivot_offset = main_label.size / 2.0
-	add_child(main_label)
+	_score_layer.add_child(main_label)
 
 	hud.hide_hover_tooltip()
 	_trigger_anim_active = true
+
+	# Remaining score countdown: show remaining after base score, then tick down per trigger
+	var remaining_countdown: int = -1
+	var gc: bool = remaining_info.get("glass_cannon", false)
+	var is_bust_anim: bool = remaining_info.get("is_bust", false)
+	if not remaining_info.is_empty():
+		var base_mult: int = int(multiplier_mods[0]["old_value"])
+		remaining_countdown = remaining_info["remaining_before"] - face_value * base_mult
+		if is_bust_anim and remaining_countdown <= 0:
+			hud.set_remaining_bust(true)
+		hud.update_remaining(remaining_countdown, gc)
 
 	var tween: Tween = create_tween()
 	tween.tween_interval(0.3)
@@ -2393,7 +2656,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		trigger_label.add_theme_color_override("font_color", rarity_color)
 		trigger_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
 		trigger_label.modulate.a = 0.0
-		add_child(trigger_label)
+		_score_layer.add_child(trigger_label)
 		trigger_labels.append(trigger_label)
 
 	var groups: Array[Dictionary] = _group_multiplier_mods(multiplier_mods)
@@ -2412,7 +2675,7 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		var old_label_ref: HBoxContainer = prev_source_label
 
 		tween.tween_callback(func() -> void:
-			add_child(new_source_label)
+			_score_layer.add_child(new_source_label)
 		)
 
 		tween.set_parallel(true)
@@ -2443,13 +2706,22 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 			var source_ref: HBoxContainer = new_source_label
 			var local_j: int = j
 
+			remaining_countdown -= face_value
+			var snap_remaining: int = remaining_countdown
+
 			if num_triggers > 3 and global_trigger_idx > 2:
 				var speed: float = 1.0 + 0.2 * float(global_trigger_idx - 2)
 				tween.tween_callback(tween.set_speed_scale.bind(speed))
 
 			tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
 			tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-			tween.tween_callback(_on_trigger_impact_with_source.bind(trigger_lbl, main_label, source_ref, final_total, scale_bump, global_trigger_idx, local_j))
+			tween.tween_callback(_on_trigger_impact_with_source.bind(trigger_lbl, main_label, source_ref, final_total, scale_bump, global_trigger_idx, local_j, snap_remaining, is_bust_anim))
+			if snap_remaining >= 0:
+				tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
+			elif is_bust_anim:
+				if snap_remaining + face_value >= 0:
+					tween.tween_callback(hud.set_remaining_bust.bind(true))
+				tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
 			var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
 			tween.tween_property(main_label, "position", main_label.position + shake_offset, 0.04)
 			tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
@@ -2482,19 +2754,28 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		recession_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
 		recession_label.position = hit_position + Vector2(55.0, -45.0)
 		recession_label.modulate.a = 0.0
-		add_child(recession_label)
+		_score_layer.add_child(recession_label)
 
 		tween.tween_property(recession_label, "modulate:a", 1.0, 0.1)
 		tween.tween_property(recession_label, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		var final_remaining: int = remaining_info.get("remaining_final", -1)
 		tween.tween_callback(func() -> void:
 			recession_label.queue_free()
 			main_label.text = str(actual_score)
 			main_label.scale *= scale_factor
 			AuidoManager.play_void_hit()
+			if final_remaining >= 0:
+				hud.update_remaining(final_remaining, gc)
 		)
 		var r_shake: Vector2 = Vector2(randf_range(-5.0, 5.0), randf_range(-4.0, 4.0))
 		tween.tween_property(main_label, "position", main_label.position + r_shake, 0.04)
 		tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)
+
+	if is_bust_anim and not has_recession:
+		var bust_final: int = remaining_info.get("remaining_final", -1)
+		tween.tween_callback(func() -> void:
+			hud.update_remaining(bust_final, gc)
+		)
 
 	var final_source: HBoxContainer = prev_source_label
 	tween.tween_interval(0.15)
@@ -2521,11 +2802,14 @@ func _on_trigger_impact(trigger_lbl: Label, main_label: Label, total: int, scale
 	AuidoManager.play_bonus_hit(trigger_index)
 
 
-func _on_trigger_impact_with_source(trigger_lbl: Label, main_label: Label, source_label: HBoxContainer, total: int, scale: float, global_trigger_index: int, group_local_index: int) -> void:
+func _on_trigger_impact_with_source(trigger_lbl: Label, main_label: Label, source_label: HBoxContainer, total: int, scale: float, global_trigger_index: int, group_local_index: int, remaining: int = -1, is_bust: bool = false) -> void:
 	trigger_lbl.queue_free()
 	main_label.text = str(total)
 	main_label.scale = Vector2(scale, scale)
-	AuidoManager.play_bonus_hit(global_trigger_index)
+	if is_bust and remaining != -1 and remaining <= 0:
+		AuidoManager.play_bust_sound()
+	else:
+		AuidoManager.play_bonus_hit(global_trigger_index)
 	if is_instance_valid(source_label):
 		var source_scale: float = 1.0 + 0.03 * float(group_local_index + 1)
 		source_label.scale = Vector2(source_scale, source_scale)
@@ -2599,8 +2883,10 @@ func _build_target_tooltip(target_result: Dictionary) -> Dictionary:
 
 func _get_ring_prefix(ring_name: String) -> String:
 	match ring_name:
-		"Inner Single", "Outer Single":
-			return "S"
+		"Inner Single":
+			return "iS"
+		"Outer Single":
+			return "oS"
 		"Double":
 			return "D"
 		"Triple":

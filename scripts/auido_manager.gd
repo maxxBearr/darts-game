@@ -7,6 +7,7 @@ extends Node
 @onready var leg_win_sound: AudioStreamPlayer = $leg_win_sound
 @onready var leg_lost_sound: AudioStreamPlayer = $leg_lost_sound
 @onready var source_label_slam: AudioStreamPlayer = $SourceLabelSlam
+@onready var bust_sound: AudioStreamPlayer = $bust_sound
 @onready var menu_music: AudioStreamPlayer = $MenuMusic
 @onready var game_music: AudioStreamPlayer = $GameMusic
 
@@ -14,6 +15,7 @@ const BONUS_BASE_PITCH: float = 0.9
 const BONUS_PITCH_STEP: float = 0.15
 const MUSIC_FADE_DURATION: float = 1.5
 const PITCH_TWEEN_DURATION: float = 0.4
+const PITCH_TWEEN_DURATION_LONG: float = 1.5
 const MUSIC_SILENT_DB: float = -40.0
 
 var _music_tween: Tween = null
@@ -60,6 +62,10 @@ func play_ui_click() -> void:
 func play_leg_win(pitch: float = 1.0) -> void:
 	leg_win_sound.pitch_scale = pitch
 	leg_win_sound.play()
+
+
+func play_bust_sound() -> void:
+	bust_sound.play()
 
 
 func play_bonus_hit(trigger_index: int) -> void:
@@ -118,14 +124,22 @@ func transition_to_menu_music() -> void:
 func on_turn_ended(turn_number: int) -> void:
 	var delta: float
 	if turn_number ==1:
-		delta = -0.035
+		delta = -0.038
 	if turn_number ==2:
-		delta = -0.043
+		delta = -0.048
 	elif turn_number == 3:
-		delta = -0.05
+		delta = -0.058
 	elif turn_number ==4:
-		delta = -0.07
+		delta = -0.08
 	_tween_game_pitch(game_music.pitch_scale + delta)
+
+
+func on_shop_entered() -> void:
+	_tween_game_pitch(0.45, PITCH_TWEEN_DURATION_LONG)
+
+
+func on_shop_exited() -> void:
+	_tween_game_pitch(1.0, PITCH_TWEEN_DURATION_LONG)
 
 
 func on_leg_won() -> void:
@@ -136,10 +150,10 @@ func on_leg_lost() -> void:
 	_tween_game_pitch(game_music.pitch_scale - 0.5)
 
 
-func _tween_game_pitch(target: float) -> void:
+func _tween_game_pitch(target: float, duration: float = PITCH_TWEEN_DURATION) -> void:
 	_kill_pitch_tween()
 	_pitch_tween = create_tween()
-	_pitch_tween.tween_property(game_music, "pitch_scale", target, PITCH_TWEEN_DURATION)
+	_pitch_tween.tween_property(game_music, "pitch_scale", target, duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 
 
 func _kill_music_tween() -> void:

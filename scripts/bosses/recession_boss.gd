@@ -19,19 +19,29 @@ func on_leg_start(game_state: Dictionary) -> void:
 	var dartboard: Node2D = game_state["dartboard"]
 	_original_wedge_values = smm.effective_wedge_values.duplicate()
 
-	var colors: Array[int] = [
-		ScoringEnums.SegmentColor.RED,
-		ScoringEnums.SegmentColor.GREEN,
-		ScoringEnums.SegmentColor.BLACK,
-		ScoringEnums.SegmentColor.WHITE,
-	]
-	_affected_color = colors[randi_range(0, 3)]
+	# Build roll pool from colors actually present on the board
+	var present_colors: Array[int] = []
+	for idx: int in range(20):
+		if idx < smm.effective_wedge_colors.size():
+			var wedge_color: Dictionary = smm.effective_wedge_colors[idx]
+			for ring_key: String in ["inner_single", "outer_single", "triple", "double"]:
+				var c: int = wedge_color.get(ring_key, -1)
+				if c >= 0 and c not in present_colors:
+					present_colors.append(c)
+	if present_colors.is_empty():
+		return
+	_affected_color = present_colors[randi_range(0, present_colors.size() - 1)]
 
 	_affected_wedge_indices.clear()
 	for idx: int in range(20):
 		if idx < smm.effective_wedge_colors.size():
 			var wedge_color: Dictionary = smm.effective_wedge_colors[idx]
-			if wedge_color.get("single", -1) == _affected_color:
+			var has_color: bool = false
+			for ring_key: String in ["inner_single", "outer_single", "triple", "double"]:
+				if wedge_color.get(ring_key, -1) == _affected_color:
+					has_color = true
+					break
+			if has_color:
 				_affected_wedge_indices.append(idx)
 				var original_val: int = smm.effective_wedge_values[idx]
 				var reduced: int = int(original_val * (1.0 - reduction_percent))
@@ -61,6 +71,8 @@ func on_leg_end(game_state: Dictionary) -> void:
 
 
 func get_status_text() -> String:
+	if _affected_wedge_indices.is_empty():
+		return "No wedges affected"
 	var color_names: Array[String] = ["Red", "Green", "Black", "White"]
 	var name: String = color_names[_affected_color] if _affected_color >= 0 and _affected_color < 4 else "?"
 	return "%s wedges -%d%% for the leg" % [name, int(reduction_percent * 100)]

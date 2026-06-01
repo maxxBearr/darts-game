@@ -132,7 +132,8 @@ var _flash_wedge_idx: int = -1
 var effective_wedge_values: Array[int] = []
 
 ## The effective wedge colors for segment color reporting.
-## Set by ScoringModifierManager. Each entry is a dict with "single" and "multi" keys.
+## Set by ScoringModifierManager. Each entry is a dict with per-ring keys:
+## "inner_single", "triple", "outer_single", "double".
 ## When empty, derives colors from wedge index (standard board colors).
 var effective_wedge_colors: Array[Dictionary] = []
 
@@ -158,6 +159,12 @@ var _checkout_segments: Array[Dictionary] = []
 var _checkout_pulse_active: bool = false
 var _checkout_pulse_time: float = 0.0
 
+# Path illumination state — equivalent segments for the selected checkout path step
+var _illumination_segments: Array[Dictionary] = []
+var _illumination_active: bool = false
+var _illumination_pulse_time: float = 0.0
+var _illumination_is_finish: bool = false
+
 ## The currently declared target segment. Set by main.gd when the player places the aim zone.
 ## Dictionary with wedge_index, ring_name, is_bull keys. Empty = no target.
 var declared_target: Dictionary = {}
@@ -166,6 +173,11 @@ var declared_target: Dictionary = {}
 var picker_mode: bool = false
 var _picker_hover_wedge: int = -1
 var _picker_selected_wedges: Array[int] = []
+
+## Segment picker mode — for selecting a specific ring on a wedge (brushes)
+var segment_picker_mode: bool = false
+var _segment_picker_hover_wedge: int = -1
+var _segment_picker_hover_ring: String = ""
 
 @export_group("Target & Picker")
 
@@ -248,11 +260,30 @@ const RING_BOUNDS: Dictionary = {
 ## Child node for shop spot rendering — lets a shader apply to just the spots.
 var _shop_overlay: Node2D
 
+## Child node for a single shop spot dissolving after being hit.
+var _shop_dissolve_overlay: Node2D
+
+## Dissolve animation state.
+var _shop_dissolve_active: bool = false
+var _shop_dissolve_time: float = 0.0
+var _shop_dissolve_spot: Dictionary = {}
+var _shop_dissolve_center: Vector2 = Vector2.ZERO
+
 ## Child node for boss visual overlays (voids, etc.).
 var _boss_overlay: Node2D
 
 ## Child node for recession damage overlay (separate shader from voids).
 var _recession_overlay: Node2D
+
+## Child node for hit shockwave overlay.
+var _shockwave_overlay: Node2D
+
+## Shockwave animation state.
+var _shockwave_active: bool = false
+var _shockwave_time: float = 0.0
+var _shockwave_hit_point: Vector2 = Vector2.ZERO
+var _shockwave_ring_name: String = ""
+var _shockwave_wedge_idx: int = -1
 
 ## Wedge indices currently voided by a boss (drawn as dark segments).
 var _boss_void_wedges: Array[int] = []
@@ -307,6 +338,55 @@ var _prev_wedge_colors: Array[Dictionary] = []
 ## Glow strength for void swirl highlights.
 @export var void_glow_strength: float = 0.5
 
+@export_group("Hit Shockwave")
+
+## Duration of the shockwave animation in seconds.
+@export_range(0.1, 2.0, 0.05) var shockwave_duration: float = 0.45
+
+## How far the wave travels in normalized board units (0–1).
+@export_range(0.05, 1.0, 0.01) var shockwave_reach: float = 0.35
+
+## Width of the bright leading edge band.
+@export_range(0.01, 0.2, 0.005) var shockwave_edge_width: float = 0.06
+
+## Width of the softer glow trail behind the edge.
+@export_range(0.01, 0.4, 0.01) var shockwave_trail_width: float = 0.12
+
+## Peak brightness of the leading edge (additive).
+@export_range(0.0, 3.0, 0.1) var shockwave_edge_intensity: float = 1.8
+
+## Brightness of the trail glow.
+@export_range(0.0, 2.0, 0.1) var shockwave_trail_intensity: float = 0.6
+
+## Tint color for the shockwave wave (normal hits).
+@export var shockwave_color: Color = Color(1.0, 0.95, 0.8, 1.0)
+
+## Tint color for the shockwave on a winning (leg-closing) dart.
+@export var shockwave_win_color: Color = Color(1.0, 0.85, 0.2, 1.0)
+
+## Tint color for the shockwave on a bust.
+@export var shockwave_bust_color: Color = Color(1.0, 0.15, 0.1, 1.0)
+
+@export_group("Path Illumination")
+
+## Color of the path illumination outline on qualifying segments.
+@export var illumination_color: Color = Color(0.2, 0.5, 1.0, 0.8)
+
+## Speed of the illumination pulse animation.
+@export var illumination_pulse_speed: float = 2.5
+
+## Minimum opacity of the illumination pulse.
+@export var illumination_pulse_min_alpha: float = 0.2
+
+## Maximum opacity of the illumination pulse.
+@export var illumination_pulse_max_alpha: float = 0.7
+
+## Border thickness for illumination outlines.
+@export var illumination_border_thickness: float = 3.0
+
+## Alpha multiplier applied to the gold checkout pulse when illumination is active.
+@export var checkout_pulse_dimming: float = 0.3
+
 @export_group("Recession Overlay")
 
 ## Base color of the recession damage overlay polygons (fed to the recession shader).
@@ -337,6 +417,15 @@ func _ready() -> void:
 	_shop_overlay.material = mat
 	add_child(_shop_overlay)
 
+	_shop_dissolve_overlay = Node2D.new()
+	_shop_dissolve_overlay.draw.connect(_draw_shop_dissolve_overlay)
+	var dissolve_shader: Shader = load("res://shaders/shop_spot_dissolve.gdshader")
+	var dissolve_mat: ShaderMaterial = ShaderMaterial.new()
+	dissolve_mat.shader = dissolve_shader
+	_sync_shop_shader(dissolve_mat)
+	_shop_dissolve_overlay.material = dissolve_mat
+	add_child(_shop_dissolve_overlay)
+
 	_boss_overlay = Node2D.new()
 	_boss_overlay.draw.connect(_draw_boss_overlay)
 	var boss_shader: Shader = load("res://shaders/shop_spot.gdshader")
@@ -364,6 +453,15 @@ func _ready() -> void:
 	_recession_overlay.material = recession_mat
 	add_child(_recession_overlay)
 
+	_shockwave_overlay = Node2D.new()
+	_shockwave_overlay.draw.connect(_draw_shockwave_overlay)
+	var sw_shader: Shader = load("res://shaders/hit_shockwave.gdshader")
+	var sw_mat: ShaderMaterial = ShaderMaterial.new()
+	sw_mat.shader = sw_shader
+	_sync_shockwave_shader(sw_mat)
+	_shockwave_overlay.material = sw_mat
+	add_child(_shockwave_overlay)
+
 
 func _draw() -> void:
 	# Draw surround ring (off-board area)
@@ -374,36 +472,44 @@ func _draw() -> void:
 		var start_angle_deg: float = _wedge_start_deg(wedge_idx)
 		var end_angle_deg: float = start_angle_deg + WEDGE_ANGLE_DEG
 
-		var single_color: Color
-		var multi_color: Color
+		var double_color: Color
+		var outer_single_color: Color
+		var triple_color: Color
+		var inner_single_color: Color
 		if effective_wedge_colors.size() == 20:
-			single_color = _segment_color_to_render(effective_wedge_colors[wedge_idx]["single"])
-			multi_color = _segment_color_to_render(effective_wedge_colors[wedge_idx]["multi"])
+			var entry: Dictionary = effective_wedge_colors[wedge_idx]
+			double_color = _segment_color_to_render(entry["double"])
+			outer_single_color = _segment_color_to_render(entry["outer_single"])
+			triple_color = _segment_color_to_render(entry["triple"])
+			inner_single_color = _segment_color_to_render(entry["inner_single"])
 			if _color_transition_t < 1.0 and _prev_wedge_colors.size() == 20:
-				var prev_single: Color = _segment_color_to_render(_prev_wedge_colors[wedge_idx]["single"])
-				var prev_multi: Color = _segment_color_to_render(_prev_wedge_colors[wedge_idx]["multi"])
-				single_color = prev_single.lerp(single_color, _color_transition_t)
-				multi_color = prev_multi.lerp(multi_color, _color_transition_t)
+				var prev: Dictionary = _prev_wedge_colors[wedge_idx]
+				double_color = _segment_color_to_render(prev["double"]).lerp(double_color, _color_transition_t)
+				outer_single_color = _segment_color_to_render(prev["outer_single"]).lerp(outer_single_color, _color_transition_t)
+				triple_color = _segment_color_to_render(prev["triple"]).lerp(triple_color, _color_transition_t)
+				inner_single_color = _segment_color_to_render(prev["inner_single"]).lerp(inner_single_color, _color_transition_t)
 		else:
 			var is_even: bool = wedge_idx % 2 == 0
-			single_color = wedge_a_single if is_even else wedge_b_single
-			multi_color = wedge_a_multi if is_even else wedge_b_multi
+			inner_single_color = wedge_a_single if is_even else wedge_b_single
+			outer_single_color = inner_single_color
+			triple_color = wedge_a_multi if is_even else wedge_b_multi
+			double_color = triple_color
 
 		# Double ring (inner boundary narrows when Narrow Double Ring boss is active)
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_DOUBLE_OUTER, _effective_double_inner(), multi_color)
+			RING_DOUBLE_OUTER, _effective_double_inner(), double_color)
 
 		# Outer single (expands outward to fill the gap when double ring is narrowed)
 		_draw_segment(start_angle_deg, end_angle_deg,
-			_effective_double_inner(), RING_TRIPLE_OUTER, single_color)
+			_effective_double_inner(), RING_TRIPLE_OUTER, outer_single_color)
 
 		# Triple ring
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, multi_color)
+			RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, triple_color)
 
 		# Inner single
 		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, single_color)
+			RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, inner_single_color)
 
 	# Bullseyes drawn on top as filled circles
 	draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, bull_single_color)
@@ -438,9 +544,17 @@ func _draw() -> void:
 	if picker_mode:
 		_draw_picker_highlights()
 
+	# Draw segment picker highlight for brush/ring selection
+	if segment_picker_mode and _segment_picker_hover_ring != "" and _segment_picker_hover_wedge >= 0:
+		_draw_segment_picker_highlight()
+
 	# Draw checkout pulse on valid finishing double segments
 	if _checkout_pulse_active and _checkout_segments.size() > 0:
 		_draw_checkout_pulses()
+
+	# Draw path illumination outlines (selected checkout path step equivalents)
+	if _illumination_active and _illumination_segments.size() > 0:
+		_draw_illumination_outlines()
 
 	# Draw tutorial highlights (rules slideshow / tutorial callouts)
 	if _tutorial_highlight_active:
@@ -488,7 +602,9 @@ func _draw() -> void:
 
 ## Trigger a flash on the segment at the given global hit position.
 ## Call this after scoring to highlight where the dart landed.
-func flash_segment(global_hit_position: Vector2) -> void:
+## Pass is_winning_dart = true for the leg-closing dart (gold shockwave),
+## or is_bust = true for a bust (red shockwave).
+func flash_segment(global_hit_position: Vector2, is_winning_dart: bool = false, is_bust: bool = false) -> void:
 	var relative: Vector2 = global_hit_position - global_position
 	var distance: float = relative.length()
 	var normalized_distance: float = distance / board_radius
@@ -520,6 +636,21 @@ func flash_segment(global_hit_position: Vector2) -> void:
 	var tween: Tween = create_tween()
 	tween.tween_property(self, "_flash_alpha", 0.0, flash_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 	tween.tween_callback(queue_redraw)
+
+	# Trigger shockwave on the same segment
+	_shockwave_hit_point = relative / board_radius
+	_shockwave_ring_name = _flash_ring_name
+	_shockwave_wedge_idx = _flash_wedge_idx
+	_shockwave_time = 0.0
+	_shockwave_active = true
+	var sw_mat2: ShaderMaterial = _shockwave_overlay.material as ShaderMaterial
+	_sync_shockwave_shader(sw_mat2)
+	var tint: Color = shockwave_win_color if is_winning_dart else (shockwave_bust_color if is_bust else shockwave_color)
+	sw_mat2.set_shader_parameter("wave_color", tint)
+	sw_mat2.set_shader_parameter("hit_point", _shockwave_hit_point)
+	sw_mat2.set_shader_parameter("progress", 0.0)
+	_shockwave_overlay.queue_redraw()
+
 	# Redraw every frame during the tween
 	set_process(true)
 
@@ -534,9 +665,36 @@ func _process(delta: float) -> void:
 		_checkout_pulse_time += delta
 		needs_redraw = true
 
+	if _illumination_active:
+		_illumination_pulse_time += delta
+		needs_redraw = true
+
+	if _shockwave_active:
+		_shockwave_time += delta
+		var progress: float = clampf(_shockwave_time / shockwave_duration, 0.0, 1.0)
+		var sw_mat: ShaderMaterial = _shockwave_overlay.material as ShaderMaterial
+		sw_mat.set_shader_parameter("progress", progress)
+		_shockwave_overlay.queue_redraw()
+		if progress >= 1.0:
+			_shockwave_active = false
+		else:
+			needs_redraw = true
+
+	if _shop_dissolve_active:
+		_shop_dissolve_time += delta
+		var dissolve_progress: float = clampf(_shop_dissolve_time / shockwave_duration, 0.0, 1.0)
+		var d_mat: ShaderMaterial = _shop_dissolve_overlay.material as ShaderMaterial
+		d_mat.set_shader_parameter("dissolve_progress", dissolve_progress)
+		_shop_dissolve_overlay.queue_redraw()
+		if dissolve_progress >= 1.0:
+			_shop_dissolve_active = false
+			_shop_dissolve_spot = {}
+		else:
+			needs_redraw = true
+
 	if needs_redraw:
 		queue_redraw()
-	elif not _checkout_pulse_active:
+	elif not _checkout_pulse_active and not _illumination_active:
 		set_process(false)
 
 
@@ -664,25 +822,25 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		multiplier = 1
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, false)
+		segment_color = _lookup_segment_color(wedge_index, "inner_single")
 	elif normalized_distance <= RING_TRIPLE_OUTER:
 		ring_name = "Triple"
 		multiplier = 3
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, true)
+		segment_color = _lookup_segment_color(wedge_index, "triple")
 	elif normalized_distance <= _effective_double_inner():
 		ring_name = "Outer Single"
 		multiplier = 1
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, false)
+		segment_color = _lookup_segment_color(wedge_index, "outer_single")
 	elif normalized_distance <= RING_DOUBLE_OUTER:
 		ring_name = "Double"
 		multiplier = 2
 		wedge_index = _get_wedge_index(relative)
 		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, true)
+		segment_color = _lookup_segment_color(wedge_index, "double")
 	else:
 		ring_name = "Off Board"
 		face_value = 0
@@ -742,16 +900,14 @@ func _segment_color_to_render(seg_color: ScoringEnums.SegmentColor) -> Color:
 	return wedge_a_single
 
 
-## Look up the segment color for a wedge index and ring type.
-## is_multi = true for double/triple rings, false for single rings.
+## Look up the segment color for a wedge index and ring.
+## ring_key is one of "inner_single", "triple", "outer_single", "double".
 ## Uses effective_wedge_colors if populated, otherwise derives from wedge index.
-func _lookup_segment_color(wedge_idx: int, is_multi: bool) -> ScoringEnums.SegmentColor:
+func _lookup_segment_color(wedge_idx: int, ring_key: String) -> ScoringEnums.SegmentColor:
 	if effective_wedge_colors.size() == 20:
-		var color_entry: Dictionary = effective_wedge_colors[wedge_idx]
-		return color_entry["multi"] if is_multi else color_entry["single"]
-	# Fallback: standard board colors based on wedge index parity
+		return effective_wedge_colors[wedge_idx][ring_key]
 	var is_even: bool = wedge_idx % 2 == 0
-	if is_multi:
+	if ring_key == "triple" or ring_key == "double":
 		return ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
 	else:
 		return ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
@@ -996,6 +1152,24 @@ func clear_checkout_segments() -> void:
 	queue_redraw()
 
 
+## Set which segments should be illuminated for the selected checkout path step.
+## is_finish: true if this step IS the checkout (1-dart path) — draws gold instead of blue.
+func set_illumination_segments(segments: Array[Dictionary], is_finish: bool = false) -> void:
+	_illumination_segments = segments
+	_illumination_active = segments.size() > 0
+	_illumination_is_finish = is_finish
+	if _illumination_active:
+		set_process(true)
+	queue_redraw()
+
+
+## Clear path illumination highlights.
+func clear_illumination() -> void:
+	_illumination_segments.clear()
+	_illumination_active = false
+	queue_redraw()
+
+
 ## Enable/disable picker mode for interactive wedge selection.
 func set_picker_mode(enabled: bool) -> void:
 	picker_mode = enabled
@@ -1031,6 +1205,71 @@ func set_picker_selected(wedges: Array[int]) -> void:
 	queue_redraw()
 
 
+## Enable/disable segment picker mode for interactive ring+wedge selection.
+func set_segment_picker_mode(enabled: bool) -> void:
+	segment_picker_mode = enabled
+	_segment_picker_hover_wedge = -1
+	_segment_picker_hover_ring = ""
+	if enabled:
+		hover_enabled = false
+	queue_redraw()
+
+
+## Update segment picker hover and return {wedge_index, ring_key} or empty dict.
+func update_segment_picker_hover(global_pos: Vector2) -> Dictionary:
+	var relative: Vector2 = global_pos - global_position
+	var distance: float = relative.length()
+	var normalized: float = distance / board_radius
+
+	var ring_key: String = ""
+	if normalized <= RING_SINGLE_BULL_OUTER or normalized > RING_DOUBLE_OUTER:
+		if _segment_picker_hover_ring != "":
+			_segment_picker_hover_wedge = -1
+			_segment_picker_hover_ring = ""
+			queue_redraw()
+		return {}
+
+	if normalized <= RING_INNER_SINGLE_OUTER:
+		ring_key = "inner_single"
+	elif normalized <= RING_TRIPLE_OUTER:
+		ring_key = "triple"
+	elif normalized <= _effective_double_inner():
+		ring_key = "outer_single"
+	elif normalized <= RING_DOUBLE_OUTER:
+		ring_key = "double"
+
+	var wedge: int = _get_wedge_index(relative)
+
+	if wedge != _segment_picker_hover_wedge or ring_key != _segment_picker_hover_ring:
+		_segment_picker_hover_wedge = wedge
+		_segment_picker_hover_ring = ring_key
+		queue_redraw()
+
+	return {"wedge_index": wedge, "ring_key": ring_key}
+
+
+## Get the segment at a global position for segment picker click. Returns same format as hover.
+func get_segment_at_position(global_pos: Vector2) -> Dictionary:
+	var relative: Vector2 = global_pos - global_position
+	var distance: float = relative.length()
+	var normalized: float = distance / board_radius
+
+	if normalized <= RING_SINGLE_BULL_OUTER or normalized > RING_DOUBLE_OUTER:
+		return {}
+
+	var ring_key: String = ""
+	if normalized <= RING_INNER_SINGLE_OUTER:
+		ring_key = "inner_single"
+	elif normalized <= RING_TRIPLE_OUTER:
+		ring_key = "triple"
+	elif normalized <= _effective_double_inner():
+		ring_key = "outer_single"
+	elif normalized <= RING_DOUBLE_OUTER:
+		ring_key = "double"
+
+	return {"wedge_index": _get_wedge_index(relative), "ring_key": ring_key}
+
+
 ## Draw picker highlights — selected wedges and hovered wedge.
 func _draw_picker_highlights() -> void:
 	for wedge_idx: int in _picker_selected_wedges:
@@ -1047,10 +1286,38 @@ func _draw_full_wedge_highlight(wedge_idx: int, fill_color: Color, border_col: C
 	_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, border_col, hover_border_thickness)
 
 
+## Draw a highlight on the segment under the cursor in segment picker mode.
+func _draw_segment_picker_highlight() -> void:
+	var ring_name: String = _segment_picker_hover_ring
+	if not RING_BOUNDS.has(_ring_key_to_display(ring_name)):
+		return
+	var bounds: Array = RING_BOUNDS[_ring_key_to_display(ring_name)]
+	var start_deg: float = _wedge_start_deg(_segment_picker_hover_wedge)
+	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+	_draw_segment(start_deg, end_deg, bounds[1], bounds[0], picker_highlight_color)
+	_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], picker_border_color, hover_border_thickness)
+
+
+## Map a per-ring dict key to the RING_BOUNDS display name.
+static func _ring_key_to_display(ring_key: String) -> String:
+	match ring_key:
+		"inner_single":
+			return "Inner Single"
+		"triple":
+			return "Triple"
+		"outer_single":
+			return "Outer Single"
+		"double":
+			return "Double"
+	return ""
+
+
 ## Draw pulsing border outlines on all valid checkout segments.
 func _draw_checkout_pulses() -> void:
 	var t: float = sin(_checkout_pulse_time * checkout_pulse_speed)
 	var alpha: float = lerpf(checkout_pulse_min_alpha, checkout_pulse_max_alpha, (t + 1.0) / 2.0)
+	if _illumination_active and not _illumination_is_finish:
+		alpha *= checkout_pulse_dimming
 	var pulse_color: Color = Color(checkout_pulse_color, alpha)
 
 	for segment: Dictionary in _checkout_segments:
@@ -1076,7 +1343,48 @@ func _draw_checkout_pulses() -> void:
 			var wedge_idx: int = segment["wedge_idx"]
 			var start_deg: float = _wedge_start_deg(wedge_idx)
 			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, pulse_color, checkout_border_thickness)
+			var ring_key: String = segment.get("ring_key", "outer_single")
+			if ring_key == "inner_single":
+				_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, pulse_color, checkout_border_thickness)
+			else:
+				_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, pulse_color, checkout_border_thickness)
+
+
+## Draw pulsing border outlines for path illumination (selected checkout step equivalents).
+func _draw_illumination_outlines() -> void:
+	var base_color: Color = checkout_pulse_color if _illumination_is_finish else illumination_color
+	var t: float = sin(_illumination_pulse_time * illumination_pulse_speed)
+	var alpha: float = lerpf(illumination_pulse_min_alpha, illumination_pulse_max_alpha, (t + 1.0) / 2.0)
+	var pulse_color: Color = Color(base_color, alpha)
+
+	for segment: Dictionary in _illumination_segments:
+		var segment_type: String = segment["type"]
+
+		if segment_type == "double_bull":
+			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
+			draw_polyline(points, pulse_color, illumination_border_thickness)
+		elif segment_type == "single_bull":
+			var points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
+			draw_polyline(points, pulse_color, illumination_border_thickness)
+		elif segment_type == "wedge":
+			var wedge_idx: int = segment["wedge_idx"]
+			var start_deg: float = _wedge_start_deg(wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), pulse_color, illumination_border_thickness)
+		elif segment_type == "triple_wedge":
+			var wedge_idx: int = segment["wedge_idx"]
+			var start_deg: float = _wedge_start_deg(wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, pulse_color, illumination_border_thickness)
+		elif segment_type == "single_wedge":
+			var wedge_idx: int = segment["wedge_idx"]
+			var start_deg: float = _wedge_start_deg(wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			var ring_key: String = segment.get("ring_key", "outer_single")
+			if ring_key == "inner_single":
+				_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, pulse_color, illumination_border_thickness)
+			else:
+				_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, pulse_color, illumination_border_thickness)
 
 
 # ── Tutorial highlight API ──────────────────────────────────────────────────
@@ -1176,7 +1484,10 @@ func set_shop_spots(spots: Array[Dictionary]) -> void:
 func clear_shop_spots() -> void:
 	_shop_spots.clear()
 	_shop_active = false
+	_shop_dissolve_active = false
+	_shop_dissolve_spot = {}
 	_shop_overlay.queue_redraw()
+	_shop_dissolve_overlay.queue_redraw()
 	queue_redraw()
 
 
@@ -1197,11 +1508,28 @@ func check_shop_hit(global_hit_position: Vector2) -> int:
 	return -1
 
 
-## Deactivate a shop spot after it's been hit.
-func deactivate_shop_spot(index: int) -> void:
-	if index >= 0 and index < _shop_spots.size():
-		_shop_spots[index]["active"] = false
-		_shop_overlay.queue_redraw()
+## Deactivate a shop spot after it's been hit — triggers dissolve animation.
+func deactivate_shop_spot(index: int, hit_position: Vector2 = Vector2.ZERO) -> void:
+	if index < 0 or index >= _shop_spots.size():
+		return
+	var spot: Dictionary = _shop_spots[index]
+	_shop_spots[index]["active"] = false
+	_shop_overlay.queue_redraw()
+
+	# Start dissolve animation on the hit spot
+	_shop_dissolve_spot = spot.duplicate()
+	var relative: Vector2 = hit_position - global_position if hit_position != Vector2.ZERO else Vector2.ZERO
+	_shop_dissolve_center = relative / board_radius
+	_shop_dissolve_time = 0.0
+	_shop_dissolve_active = true
+
+	var d_mat: ShaderMaterial = _shop_dissolve_overlay.material as ShaderMaterial
+	_sync_shop_shader(d_mat)
+	d_mat.set_shader_parameter("dissolve_center", _shop_dissolve_center)
+	d_mat.set_shader_parameter("dissolve_progress", 0.0)
+	d_mat.set_shader_parameter("dissolve_reach", shockwave_reach)
+	_shop_dissolve_overlay.queue_redraw()
+	set_process(true)
 
 
 ## Draw shop spot segments on the overlay child (shader applies to this geometry).
@@ -1234,6 +1562,35 @@ func _draw_shop_overlay() -> void:
 		# Border
 		var border_points: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
 		_shop_overlay.draw_polyline(border_points, border_color, shop_border_thickness)
+
+
+## Draw the dissolving shop spot on its own overlay (separate shader with dissolve uniforms).
+func _draw_shop_dissolve_overlay() -> void:
+	if not _shop_dissolve_active or _shop_dissolve_spot.is_empty():
+		return
+
+	var rarity: int = _shop_dissolve_spot.get("rarity", ScoringEnums.Rarity.COMMON)
+	var base_color: Color = _get_shop_rarity_color(rarity)
+	var fill_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_fill_alpha)
+	var border_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_border_alpha)
+
+	var ring_name: String = _shop_dissolve_spot["ring_name"]
+	var wedge_idx: int = _shop_dissolve_spot["wedge_index"]
+
+	if not RING_BOUNDS.has(ring_name):
+		return
+
+	var bounds: Array = RING_BOUNDS[ring_name]
+	var inner_norm: float = bounds[0]
+	var outer_norm: float = bounds[1]
+	var start_deg: float = _wedge_start_deg(wedge_idx)
+	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+
+	var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
+	_shop_dissolve_overlay.draw_colored_polygon(points, fill_color)
+
+	var border_points: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
+	_shop_dissolve_overlay.draw_polyline(border_points, border_color, shop_border_thickness)
 
 
 ## Set the wedge indices that should be drawn as voids by the boss overlay.
@@ -1296,10 +1653,17 @@ func animate_color_transition() -> void:
 	, 0.0, 1.0, color_transition_duration)
 
 
-## Set the double ring width scale. Used by Narrow Double Ring boss.
-func set_double_ring_scale(scale: float) -> void:
-	double_ring_width_scale = scale
-	queue_redraw()
+## Set the double ring width scale with a smooth tween. Used by Narrow Double Ring boss.
+func set_double_ring_scale(scale: float, animate: bool = true) -> void:
+	if not animate or is_equal_approx(double_ring_width_scale, scale):
+		double_ring_width_scale = scale
+		queue_redraw()
+		return
+	var tw: Tween = create_tween()
+	tw.tween_method(func(val: float) -> void:
+		double_ring_width_scale = val
+		queue_redraw()
+	, double_ring_width_scale, scale, 0.5).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
 
 
 ## Compute the effective inner boundary of the double ring, accounting for narrowing.
@@ -1405,3 +1769,48 @@ func _build_segment_border_points(start_deg: float, end_deg: float, outer_norm: 
 
 	points.append(points[0])
 	return points
+
+
+## Push exported shockwave values into the ShaderMaterial.
+func _sync_shockwave_shader(mat: ShaderMaterial) -> void:
+	mat.set_shader_parameter("board_radius", board_radius)
+	mat.set_shader_parameter("wave_reach", shockwave_reach)
+	mat.set_shader_parameter("edge_width", shockwave_edge_width)
+	mat.set_shader_parameter("trail_width", shockwave_trail_width)
+	mat.set_shader_parameter("edge_intensity", shockwave_edge_intensity)
+	mat.set_shader_parameter("trail_intensity", shockwave_trail_intensity)
+	mat.set_shader_parameter("wave_color", shockwave_color)
+
+
+## Draw callback for the shockwave shader overlay node.
+func _draw_shockwave_overlay() -> void:
+	if not _shockwave_active:
+		return
+
+	var base_color: Color = Color(0.0, 0.0, 0.0, 1.0)
+
+	match _shockwave_ring_name:
+		"double_bull":
+			_shockwave_overlay.draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, base_color)
+		"single_bull":
+			_shockwave_overlay.draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, base_color)
+		"inner_single":
+			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER)
+			_shockwave_overlay.draw_colored_polygon(points, base_color)
+		"triple":
+			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER)
+			_shockwave_overlay.draw_colored_polygon(points, base_color)
+		"outer_single":
+			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER)
+			_shockwave_overlay.draw_colored_polygon(points, base_color)
+		"double":
+			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
+			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner())
+			_shockwave_overlay.draw_colored_polygon(points, base_color)

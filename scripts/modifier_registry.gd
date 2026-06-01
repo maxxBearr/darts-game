@@ -9,7 +9,7 @@ const _WedgeValue = preload("res://scripts/modifiers/wedge_value_modifier.gd")
 const _StreakBonus = preload("res://scripts/modifiers/streak_bonus_modifier.gd")
 const _WedgeSwap = preload("res://scripts/modifiers/wedge_swap_modifier.gd")
 const _OddEvenBonus = preload("res://scripts/modifiers/odd_even_bonus_modifier.gd")
-const _ColorFlip = preload("res://scripts/modifiers/color_flip_modifier.gd")
+const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
 const _ColorStreak = preload("res://scripts/modifiers/color_streak_modifier.gd")
 const _EvenStreak = preload("res://scripts/modifiers/even_streak_modifier.gd")
 const _OddStreak = preload("res://scripts/modifiers/odd_streak_modifier.gd")
@@ -17,6 +17,10 @@ const _OddStreak = preload("res://scripts/modifiers/odd_streak_modifier.gd")
 ## Rarity weight shift applied to all modifier rolls during the current run.
 ## Set from main.gd based on LevelDefinition.rarity_weight_shift.
 static var current_rarity_shift: float = 0.0
+
+## Colors available for BrushModifier generation. Set by the shop call site
+## based on which color modifiers the player owns. Empty = no brushes offered.
+static var available_brush_colors: Array[ScoringEnums.SegmentColor] = []
 
 ## Apply the current rarity shift to a [common, uncommon, rare] weight array.
 ## Positive shift moves weight from common to rare; negative does the reverse.
@@ -40,7 +44,7 @@ const MODIFIER_TYPES: Array = [
 	_StreakBonus,
 	_WedgeSwap,
 	_OddEvenBonus,
-	_ColorFlip,
+	_Brush,
 	_ColorStreak,
 	_EvenStreak,
 	_OddStreak,

@@ -26,7 +26,10 @@
       "Bash(Format-Table FullName)",
       "Bash(grep -E \"\\\\.\\(gd|tscn|tres\\)$\")",
       "Bash(xargs grep -l \"assembly\\\\|Assembly\")",
-      "PowerShell(Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\(\\(Resolve-Path \"sprites\\\\point.png\"\\).Path\\); Write-Output \"point.png: $\\($img.Width\\)x$\\($img.Height\\)\"; $img.Dispose\\(\\))"
+      "PowerShell(Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\(\\(Resolve-Path \"sprites\\\\point.png\"\\).Path\\); Write-Output \"point.png: $\\($img.Width\\)x$\\($img.Height\\)\"; $img.Dispose\\(\\))",
+      "Bash(xargs grep -l \"next_leg_pressed\")",
+      "Bash(Select-Object -First 30)",
+      "Bash(xargs grep -l \"boss_pool\\\\|boss_count\")"
     ]
   }
 }

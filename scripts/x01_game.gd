@@ -131,7 +131,8 @@ func process_throw(result: Dictionary) -> Dictionary:
 		"current_turn": current_turn,
 		"current_leg": current_leg,
 		"target_score": target_score,
-		"reverted_score": score_at_turn_start if is_bust else -1
+		"reverted_score": score_at_turn_start if is_bust else -1,
+		"pre_revert_remaining": new_remaining if is_bust else -1
 	}
 
 

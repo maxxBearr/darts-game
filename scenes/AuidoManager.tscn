@@ -6,6 +6,7 @@
 [ext_resource type="AudioStream" uid="uid://cbst0vmvcf6tl" path="res://sounds/bonus_score_sound_effect.mp3" id="4_2jm2t"]
 [ext_resource type="AudioStream" uid="uid://df0gcgt2n43g1" path="res://sounds/ui_click.wav" id="5_ilfjs"]
 [ext_resource type="AudioStream" uid="uid://c5p8lgistwbqr" path="res://sounds/dart_missed_board.wav" id="6_ilfjs"]
+[ext_resource type="AudioStream" uid="uid://cuif75aswv0wg" path="res://sounds/lose sound 2 - 1_0.wav" id="6_wskqf"]
 [ext_resource type="AudioStream" uid="uid://ljd7sau81t6n" path="res://sounds/leg_won_sound.wav" id="7_khg3p"]
 [ext_resource type="AudioStream" uid="uid://brb8oa505ngdu" path="res://sounds/Loop-Menu.wav" id="9_khg3p"]
 [ext_resource type="AudioStream" uid="uid://bhhk5muccjb0j" path="res://sounds/game_over.wav" id="9_w0x6a"]
@@ -33,7 +34,7 @@ volume_db = 2.0
 pitch_scale = 0.85
 
 [node name="hit_void_thunk" type="AudioStreamPlayer" parent="." unique_id=426206565]
-stream = ExtResource("6_ilfjs")
+stream = ExtResource("6_wskqf")
 volume_db = 2.0
 
 [node name="leg_win_sound" type="AudioStreamPlayer" parent="." unique_id=1535283951]
@@ -53,3 +54,6 @@ volume_db = -13.0
 [node name="SourceLabelSlam" type="AudioStreamPlayer" parent="." unique_id=1096377416]
 stream = ExtResource("11_2gc06")
 volume_db = 8.0
+
+[node name="bust_sound" type="AudioStreamPlayer" parent="." unique_id=965109075]
+stream = ExtResource("6_ilfjs")

@@ -10,6 +10,7 @@ signal modifier_selected(index: int)
 signal modifier_toggled
 signal modifier_skipped
 signal reward_selected(index: int)
+signal checkout_path_clicked(index: int)
 
 @onready var score_label: Label = $ScoreLabel
 @onready var instruction_label: Label = $InstructionLabel
@@ -101,6 +102,12 @@ signal reward_selected(index: int)
 ## Color for committed (already-thrown) steps in a path.
 @export var checkout_committed_color: Color = Color(0.3, 1.0, 0.4)
 
+## Color for the selected/illuminated path line (non-finishing step).
+@export var illumination_text_color: Color = Color(0.4, 0.7, 1.0)
+
+## Color for the selected path line when it's a direct checkout (gold = win).
+@export var illumination_finish_text_color: Color = Color(1.0, 0.85, 0.2)
+
 @export_group("Streak Section")
 
 ## Pixel size of the small icon in each streak section line.
@@ -124,11 +131,9 @@ signal reward_selected(index: int)
 ## Setup text for off-board preservation mode (every scoring dart busts).
 @export var off_board_preserve_text: String = "Aim off-board — any scoring dart busts"
 
-## Position of the checkout helper panel on screen.
-@export var checkout_position: Vector2 = Vector2(1000.0, 200.0)
+## Gap in pixels between the stats bars and the checkout helper below them.
+@export var checkout_top_margin: float = 12.0
 
-## Width of the checkout helper panel.
-@export var checkout_width: float = 280.0
 
 @onready var stats_container: VBoxContainer = $StatsContainer
 
@@ -181,6 +186,7 @@ var _skip_modifier_button: Button = null
 var _boss_status_label: Label = null
 var _boss_bg_tint: ColorRect = null
 var _boss_bg_layer: CanvasLayer = null
+var _boss_bg_tween: Tween = null
 var _legendary_panel: HBoxContainer = null
 var _legendary_tooltip: Label = null
 
@@ -210,8 +216,10 @@ var _checkout_panel: VBoxContainer
 var _checkout_toggle_button: Button
 var _checkout_path_labels: Array[Label] = []
 var _checkout_hint_label: Label
-var _checkout_visible: bool = false
+var _checkout_visible: bool = true
 var _checkout_has_paths: bool = false
+var _divergent_wedges: Dictionary = {}
+var _checkout_paths_ref: Array[Array] = []
 
 
 func _ready() -> void:
@@ -343,6 +351,13 @@ func set_remaining_checkout_available(has_checkout: bool) -> void:
 		remaining_label.modulate = Color(1.0, 1.0, 1.0)
 
 
+func set_remaining_bust(is_bust: bool) -> void:
+	if is_bust:
+		remaining_label.modulate = Color(1.0, 0.15, 0.1)
+	else:
+		remaining_label.modulate = Color(1.0, 1.0, 1.0)
+
+
 ## Update the turn counter display.
 func update_turn(turn: int, max_turns: int) -> void:
 	if turn == max_turns:
@@ -421,8 +436,23 @@ func hide_boss_status() -> void:
 	if _boss_status_label != null and _boss_status_label.visible:
 		_boss_status_label.visible = false
 		_shift_gameplay_labels(-boss_label_offset)
-	if _boss_bg_tint != null:
-		_boss_bg_tint.visible = false
+	_hide_boss_bg_tint()
+
+
+func _hide_boss_bg_tint() -> void:
+	if _boss_bg_tint == null or not _boss_bg_tint.visible:
+		return
+	_kill_boss_bg_tween()
+	var target: Color = Color(_boss_bg_tint.color, 0.0)
+	_boss_bg_tween = create_tween()
+	_boss_bg_tween.tween_property(_boss_bg_tint, "color", target, boss_bg_tween_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	_boss_bg_tween.tween_callback(func() -> void: _boss_bg_tint.visible = false)
+
+
+func _kill_boss_bg_tween() -> void:
+	if _boss_bg_tween != null and _boss_bg_tween.is_valid():
+		_boss_bg_tween.kill()
+	_boss_bg_tween = null
 
 
 ## Shift the left-column gameplay labels vertically by the given amount.
@@ -433,11 +463,10 @@ func _shift_gameplay_labels(offset: float) -> void:
 	turn_score_label.position.y += offset
 
 
-## Show a full-screen background tint during boss legs.
+## Show a full-screen background tint during boss legs (tweened fade-in).
 func show_boss_background_tint(tint: Color) -> void:
 	if tint.a <= 0.0:
-		if _boss_bg_tint != null:
-			_boss_bg_tint.visible = false
+		_hide_boss_bg_tint()
 		return
 	if _boss_bg_tint == null:
 		_boss_bg_layer = CanvasLayer.new()
@@ -448,8 +477,12 @@ func show_boss_background_tint(tint: Color) -> void:
 		_boss_bg_tint.size = get_viewport().get_visible_rect().size
 		_boss_bg_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_boss_bg_layer.add_child(_boss_bg_tint)
-	_boss_bg_tint.color = tint
-	_boss_bg_tint.visible = true
+	_kill_boss_bg_tween()
+	if not _boss_bg_tint.visible:
+		_boss_bg_tint.color = Color(tint, 0.0)
+		_boss_bg_tint.visible = true
+	_boss_bg_tween = create_tween()
+	_boss_bg_tween.tween_property(_boss_bg_tint, "color", tint, boss_bg_tween_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 
 
 ## Show bust message and make the bust label visible.
@@ -499,6 +532,9 @@ func show_bust(reason: String) -> void:
 ## How many pixels to shift the left-column labels down during a boss leg
 ## to make room for the boss status label.
 @export var boss_label_offset: float = 24.0
+
+## Duration of the boss background tint fade in/out.
+@export var boss_bg_tween_duration: float = 0.6
 
 
 func show_leg_won_banner() -> Tween:
@@ -1059,8 +1095,10 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 ## Get the ring prefix abbreviation for the simplified tooltip.
 func _get_hover_prefix(ring_name: String) -> String:
 	match ring_name:
-		"Inner Single", "Outer Single":
-			return "S"
+		"Inner Single":
+			return "iS"
+		"Outer Single":
+			return "oS"
 		"Double":
 			return "D"
 		"Triple":
@@ -1630,25 +1668,31 @@ func reset_next_leg_button() -> void:
 
 # --- Checkout Helper ---
 
-## Build the checkout helper panel as a standalone positioned container.
+## Build the checkout helper panel as a child of the stats container.
 func _build_checkout_panel() -> void:
+	var spacer: Control = Control.new()
+	spacer.custom_minimum_size = Vector2(0.0, checkout_top_margin)
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stats_container.add_child(spacer)
+
 	var container: VBoxContainer = VBoxContainer.new()
-	container.position = checkout_position
-	container.size = Vector2(checkout_width, 0.0)
+	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.alignment = BoxContainer.ALIGNMENT_CENTER
 	container.add_theme_constant_override("separation", 4)
-	add_child(container)
+	container.mouse_filter = Control.MOUSE_FILTER_PASS
+	stats_container.add_child(container)
 
 	_checkout_toggle_button = Button.new()
 	_checkout_toggle_button.text = "Show Checkout"
 	_checkout_toggle_button.add_theme_font_size_override("font_size", 12)
-	_checkout_toggle_button.custom_minimum_size = Vector2(checkout_width, 0.0)
+	_checkout_toggle_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_checkout_toggle_button.pressed.connect(_on_checkout_toggle)
 	container.add_child(_checkout_toggle_button)
 	_checkout_toggle_button.visible = false
 
 	_checkout_panel = VBoxContainer.new()
 	_checkout_panel.add_theme_constant_override("separation", 2)
-	_checkout_panel.custom_minimum_size = Vector2(checkout_width, 0.0)
+	_checkout_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_checkout_panel.visible = false
 	container.add_child(_checkout_panel)
 
@@ -1656,7 +1700,7 @@ func _build_checkout_panel() -> void:
 	_checkout_hint_label.add_theme_font_size_override("font_size", 11)
 	_checkout_hint_label.modulate = Color(0.6, 0.6, 0.7)
 	_checkout_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_checkout_hint_label.custom_minimum_size = Vector2(checkout_width, 0.0)
+	_checkout_hint_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_checkout_hint_label.visible = false
 	container.add_child(_checkout_hint_label)
 
@@ -1671,8 +1715,10 @@ func _on_checkout_toggle() -> void:
 ## Update the checkout helper display with solved paths.
 ## paths: Array of Arrays of {target, result} dicts from the solver.
 ## has_toggleable_modifiers: whether the hint should show.
-func update_checkout_display(paths: Array[Array], has_toggleable_modifiers: bool) -> void:
+func update_checkout_display(paths: Array[Array], has_toggleable_modifiers: bool, divergent_wedges: Dictionary = {}, selected_index: int = -1) -> void:
 	_checkout_has_paths = paths.size() > 0
+	_divergent_wedges = divergent_wedges
+	_checkout_paths_ref = paths
 
 	# Clear old path labels
 	for label: Label in _checkout_path_labels:
@@ -1694,15 +1740,31 @@ func update_checkout_display(paths: Array[Array], has_toggleable_modifiers: bool
 		_checkout_panel.add_child(title)
 		_checkout_path_labels.append(title)
 
-		for path: Array in paths:
+		for i: int in range(paths.size()):
+			var path: Array = paths[i]
 			var line: Label = Label.new()
 			line.text = _format_checkout_path(path)
 			line.add_theme_font_size_override("font_size", checkout_font_size)
-			line.add_theme_color_override("font_color", checkout_text_color)
+			if i == selected_index:
+				var sel_color: Color = illumination_finish_text_color if path.size() == 1 else illumination_text_color
+				line.add_theme_color_override("font_color", sel_color)
+			else:
+				line.add_theme_color_override("font_color", checkout_text_color)
 			line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			line.custom_minimum_size = Vector2(280.0, 0.0)
+			line.mouse_filter = Control.MOUSE_FILTER_STOP
+			line.gui_input.connect(_on_checkout_path_gui_input.bind(i))
 			_checkout_panel.add_child(line)
 			_checkout_path_labels.append(line)
+
+		if paths.size() > 1:
+			var nav_hint: Label = Label.new()
+			nav_hint.text = "Scroll or ↑↓ to browse paths"
+			nav_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			nav_hint.add_theme_font_size_override("font_size", checkout_font_size - 2)
+			nav_hint.modulate = Color(0.6, 0.6, 0.6, 0.7)
+			_checkout_panel.add_child(nav_hint)
+			_checkout_path_labels.append(nav_hint)
 	else:
 		_checkout_toggle_button.visible = true
 		_checkout_toggle_button.disabled = true
@@ -1718,7 +1780,8 @@ func update_checkout_display(paths: Array[Array], has_toggleable_modifiers: bool
 
 
 ## Update the display with a setup recommendation (no checkout available).
-func update_setup_display(recommendation: Dictionary, has_toggleable_modifiers: bool) -> void:
+func update_setup_display(recommendation: Dictionary, has_toggleable_modifiers: bool, divergent_wedges: Dictionary = {}) -> void:
+	_divergent_wedges = divergent_wedges
 	# Clear old path labels
 	for label: Label in _checkout_path_labels:
 		label.queue_free()
@@ -1771,12 +1834,41 @@ func hide_checkout_helper() -> void:
 	_checkout_hint_label.visible = false
 
 
+## Update which path line is visually selected.
+func set_selected_path(index: int) -> void:
+	# Path labels start at index 1 (index 0 is the title); nav hint may be at end
+	for i: int in range(1, _checkout_path_labels.size()):
+		var path_index: int = i - 1
+		if path_index >= _checkout_paths_ref.size():
+			break
+		if path_index == index:
+			var is_finish: bool = _checkout_paths_ref[path_index].size() == 1
+			var sel_color: Color = illumination_finish_text_color if is_finish else illumination_text_color
+			_checkout_path_labels[i].add_theme_color_override("font_color", sel_color)
+		else:
+			_checkout_path_labels[i].add_theme_color_override("font_color", checkout_text_color)
+
+
+func _on_checkout_path_gui_input(event: InputEvent, index: int) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		checkout_path_clicked.emit(index)
+
+
 ## Get a display-friendly name for a solver target (e.g., "T20", "D-Bull", "S5").
+## Singles show "Inner S18" / "Outer S18" only when the wedge's two singles diverge.
 func _get_target_display_name(target: Dictionary) -> String:
 	var ring: String = target.get("ring_name", "")
 	var face: int = target.get("face_value", 0)
 	match ring:
-		"Inner Single", "Outer Single":
+		"Inner Single":
+			var wi: int = target.get("wedge_index", -1)
+			if wi >= 0 and _divergent_wedges.get(wi, false):
+				return "Inner S%d" % face
+			return "S%d" % face
+		"Outer Single":
+			var wi: int = target.get("wedge_index", -1)
+			if wi >= 0 and _divergent_wedges.get(wi, false):
+				return "Outer S%d" % face
 			return "S%d" % face
 		"Double":
 			return "D%d" % face

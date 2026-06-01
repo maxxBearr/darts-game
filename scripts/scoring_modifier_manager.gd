@@ -16,10 +16,9 @@ const DEFAULT_WEDGE_ORDER: Array[int] = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 
 var effective_wedge_values: Array[int] = []
 
 ## The effective segment colors for each wedge. Index matches wedge position.
-## Each entry is a dictionary with "single" and "multi" keys mapping to SegmentColor.
-## "single" = color for inner_single and outer_single rings.
-## "multi" = color for double and triple rings.
-## Dartboard reads from this for segment color rendering (future) and score enrichment.
+## Each entry is a dictionary with four ring keys mapping to SegmentColor:
+## "inner_single", "triple", "outer_single", "double".
+## Dartboard reads from this for segment color rendering and score enrichment.
 var effective_wedge_colors: Array[Dictionary] = []
 
 ## All currently active scoring modifiers, in acquisition order.
@@ -99,9 +98,13 @@ func _init_default_board_state() -> void:
 	effective_wedge_colors.clear()
 	for wedge_idx: int in range(20):
 		var is_even: bool = wedge_idx % 2 == 0
+		var single_color: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
+		var multi_color: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
 		effective_wedge_colors.append({
-			"single": ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE,
-			"multi": ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN,
+			"inner_single": single_color,
+			"triple": multi_color,
+			"outer_single": single_color,
+			"double": multi_color,
 		})
 
 
@@ -151,10 +154,15 @@ func get_active_streak_modifiers() -> Array:
 
 ## Check if adding a modifier would replace an existing streak modifier.
 ## Returns the existing modifier that would be replaced, or null if no conflict.
+## With extra streak slots, a conflict only occurs when all slots are full AND
+## there's an existing modifier of the same category to swap with.
 func get_streak_conflict(new_modifier: ScoringModifier) -> ScoringModifier:
 	if new_modifier.streak_category == ScoringEnums.StreakCategory.NONE:
 		return null
-	for existing: Resource in active_modifiers:
+	var active_streaks: Array = get_active_streak_modifiers()
+	if active_streaks.size() < max_streak_slots:
+		return null
+	for existing: Resource in active_streaks:
 		if existing is ScoringModifier and existing.streak_category == new_modifier.streak_category:
 			return existing
 	return null
@@ -237,16 +245,30 @@ func get_effective_value(wedge_index: int) -> int:
 	return effective_wedge_values[wedge_index]
 
 
-## Get the effective SegmentColor for a wedge + ring type. For display/hover.
-## is_multi should be true for double/triple rings, false for single rings.
-func get_effective_color(wedge_index: int, is_multi: bool) -> ScoringEnums.SegmentColor:
+## Get the effective SegmentColor for a wedge + ring. ring_key is one of
+## "inner_single", "triple", "outer_single", "double".
+func get_effective_color(wedge_index: int, ring_key: String) -> ScoringEnums.SegmentColor:
 	var color_entry: Dictionary = effective_wedge_colors[wedge_index]
-	return color_entry["multi"] if is_multi else color_entry["single"]
+	return color_entry[ring_key]
 
 
 ## Get the SegmentColor for a bullseye hit. Single bull = GREEN, double bull = RED.
 func get_bull_color(is_double_bull: bool) -> ScoringEnums.SegmentColor:
 	return ScoringEnums.SegmentColor.RED if is_double_bull else ScoringEnums.SegmentColor.GREEN
+
+
+## Map a display ring name ("Inner Single", "Triple", etc.) to the per-ring dict key.
+static func _ring_name_to_key(ring_name: String) -> String:
+	match ring_name:
+		"Inner Single":
+			return "inner_single"
+		"Triple":
+			return "triple"
+		"Outer Single":
+			return "outer_single"
+		"Double":
+			return "double"
+	return "inner_single"
 
 
 ## Clear turn-level history. Call from main.gd at the start of each new turn.
@@ -372,39 +394,38 @@ func _build_solver_candidates() -> void:
 
 	for wedge_idx: int in range(20):
 		var face_value: int = effective_wedge_values[wedge_idx]
-		var single_color: int = -1
-		var multi_color: int = -1
+		var colors: Dictionary = {}
 		if effective_wedge_colors.size() == 20:
-			single_color = effective_wedge_colors[wedge_idx]["single"]
-			multi_color = effective_wedge_colors[wedge_idx]["multi"]
+			colors = effective_wedge_colors[wedge_idx]
 		else:
 			var is_even: bool = wedge_idx % 2 == 0
-			single_color = ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
-			multi_color = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
+			var sc: int = ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
+			var mc: int = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
+			colors = {"inner_single": sc, "triple": mc, "outer_single": sc, "double": mc}
 
 		# Inner Single
 		_solver_candidates.append({
 			"wedge_index": wedge_idx, "ring_name": "Inner Single",
 			"face_value": face_value, "multiplier": 1,
-			"segment_color": single_color, "is_bull": false,
+			"segment_color": colors["inner_single"], "is_bull": false,
 		})
 		# Outer Single
 		_solver_candidates.append({
 			"wedge_index": wedge_idx, "ring_name": "Outer Single",
 			"face_value": face_value, "multiplier": 1,
-			"segment_color": single_color, "is_bull": false,
+			"segment_color": colors["outer_single"], "is_bull": false,
 		})
 		# Double
 		_solver_candidates.append({
 			"wedge_index": wedge_idx, "ring_name": "Double",
 			"face_value": face_value, "multiplier": 2,
-			"segment_color": multi_color, "is_bull": false,
+			"segment_color": colors["double"], "is_bull": false,
 		})
 		# Triple
 		_solver_candidates.append({
 			"wedge_index": wedge_idx, "ring_name": "Triple",
 			"face_value": face_value, "multiplier": 3,
-			"segment_color": multi_color, "is_bull": false,
+			"segment_color": colors["triple"], "is_bull": false,
 		})
 
 	# Single Bull
@@ -566,12 +587,43 @@ func _compare_paths(a: Array, b: Array) -> bool:
 	return offboard_a < offboard_b
 
 
+## Check if a wedge's inner and outer singles produce different total_score
+## under the current scoring pipeline (preview mode, no streak mutation).
+func singles_diverge(wedge_index: int) -> bool:
+	if wedge_index < 0 or wedge_index >= effective_wedge_values.size():
+		return false
+	var face_value: int = effective_wedge_values[wedge_index]
+	var colors: Dictionary = effective_wedge_colors[wedge_index]
+	var inner_synth: Dictionary = {
+		"face_value": face_value, "multiplier": 1, "total_score": face_value,
+		"ring_name": "Inner Single", "wedge_index": wedge_index,
+		"segment_color": colors.get("inner_single", -1), "is_bull": false,
+	}
+	var outer_synth: Dictionary = {
+		"face_value": face_value, "multiplier": 1, "total_score": face_value,
+		"ring_name": "Outer Single", "wedge_index": wedge_index,
+		"segment_color": colors.get("outer_single", -1), "is_bull": false,
+	}
+	var inner_result: Dictionary = process_score(inner_synth, true)
+	var outer_result: Dictionary = process_score(outer_synth, true)
+	return inner_result["total_score"] != outer_result["total_score"]
+
+
 ## Get a display-friendly name for a target (e.g., "T20", "D-Bull", "S5").
-static func get_target_display_name(target: Dictionary) -> String:
+## Singles show "Inner S18" / "Outer S18" only when the wedge's two singles diverge.
+func get_target_display_name(target: Dictionary) -> String:
 	var ring: String = target["ring_name"]
 	var face: int = target["face_value"]
 	match ring:
-		"Inner Single", "Outer Single":
+		"Inner Single":
+			var wi: int = target.get("wedge_index", -1)
+			if wi >= 0 and singles_diverge(wi):
+				return "Inner S%d" % face
+			return "S%d" % face
+		"Outer Single":
+			var wi: int = target.get("wedge_index", -1)
+			if wi >= 0 and singles_diverge(wi):
+				return "Outer S%d" % face
 			return "S%d" % face
 		"Double":
 			return "D%d" % face
@@ -700,7 +752,7 @@ func _compute_one_dart_finishable() -> void:
 		var face: int = effective_wedge_values[wedge_idx]
 		var color: int = ScoringEnums.SegmentColor.RED if wedge_idx % 2 == 0 else ScoringEnums.SegmentColor.GREEN
 		if effective_wedge_colors.size() == 20:
-			color = effective_wedge_colors[wedge_idx]["multi"]
+			color = effective_wedge_colors[wedge_idx]["double"]
 		var synth: Dictionary = synthesize_result({
 			"wedge_index": wedge_idx, "ring_name": "Double",
 			"face_value": face, "multiplier": 2,
@@ -893,36 +945,39 @@ func calculate_checkout_segments(remaining_score: int) -> Array[Dictionary]:
 	if allow_triple_checkout or glass_cannon_active:
 		finish_rings.append({"ring_name": "Triple", "multiplier": 3, "type": "triple_wedge"})
 	if glass_cannon_active:
-		finish_rings.append({"ring_name": "Inner Single", "multiplier": 1, "type": "single_wedge"})
-		finish_rings.append({"ring_name": "Outer Single", "multiplier": 1, "type": "single_wedge"})
+		finish_rings.append({"ring_name": "Inner Single", "multiplier": 1, "type": "single_wedge", "ring_key": "inner_single"})
+		finish_rings.append({"ring_name": "Outer Single", "multiplier": 1, "type": "single_wedge", "ring_key": "outer_single"})
 
 	for wedge_idx: int in range(20):
 		var face_value: int = effective_wedge_values[wedge_idx]
-		var single_color: int = -1
-		var multi_color: int = -1
+		var colors: Dictionary = {}
 		if effective_wedge_colors.size() == 20:
-			single_color = effective_wedge_colors[wedge_idx]["single"]
-			multi_color = effective_wedge_colors[wedge_idx]["multi"]
+			colors = effective_wedge_colors[wedge_idx]
 		else:
 			var is_even: bool = wedge_idx % 2 == 0
-			single_color = ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
-			multi_color = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
+			var sc: int = ScoringEnums.SegmentColor.BLACK if is_even else ScoringEnums.SegmentColor.WHITE
+			var mc: int = ScoringEnums.SegmentColor.RED if is_even else ScoringEnums.SegmentColor.GREEN
+			colors = {"inner_single": sc, "triple": mc, "outer_single": sc, "double": mc}
 
 		for ring_info: Dictionary in finish_rings:
 			var mult: int = ring_info["multiplier"]
-			var is_multi: bool = mult > 1
+			var ring_name: String = ring_info["ring_name"]
+			var ring_key: String = _ring_name_to_key(ring_name)
 			var synthetic_result: Dictionary = {
 				"face_value": face_value,
 				"multiplier": mult,
 				"total_score": face_value * mult,
-				"ring_name": ring_info["ring_name"],
+				"ring_name": ring_name,
 				"wedge_index": wedge_idx,
-				"segment_color": multi_color if is_multi else single_color,
+				"segment_color": colors[ring_key],
 				"is_bull": false,
 			}
 			var modified_result: Dictionary = process_score(synthetic_result, true)
 			if modified_result["total_score"] == remaining_score:
-				checkout_segments.append({"type": ring_info["type"], "wedge_idx": wedge_idx})
+				var seg_entry: Dictionary = {"type": ring_info["type"], "wedge_idx": wedge_idx}
+				if ring_info.has("ring_key"):
+					seg_entry["ring_key"] = ring_info["ring_key"]
+				checkout_segments.append(seg_entry)
 
 	# Check double bull (always a valid finish)
 	var bull_result: Dictionary = {
@@ -954,3 +1009,43 @@ func calculate_checkout_segments(remaining_score: int) -> Array[Dictionary]:
 			checkout_segments.append({"type": "single_bull"})
 
 	return checkout_segments
+
+
+## Find all board segments that produce a given total_score under the current
+## scoring pipeline. Used by path illumination to highlight equivalent aims.
+## When is_finish is true, only includes segments with valid checkout rings.
+func find_equivalent_segments(target_score: int, is_finish: bool = false) -> Array[Dictionary]:
+	if _solver_candidates.is_empty():
+		_build_solver_candidates()
+
+	var equivalents: Array[Dictionary] = []
+	for candidate: Dictionary in _solver_candidates:
+		var ring_name: String = candidate["ring_name"]
+		if ring_name == "Off Board":
+			continue
+		if is_finish and not _is_valid_finish(ring_name):
+			continue
+		var synth: Dictionary = synthesize_result(candidate)
+		var result: Dictionary = process_score(synth, true)
+		if result["total_score"] == target_score:
+			equivalents.append(_candidate_to_segment_descriptor(candidate))
+	return equivalents
+
+
+func _candidate_to_segment_descriptor(candidate: Dictionary) -> Dictionary:
+	var ring: String = candidate["ring_name"]
+	var wedge_idx: int = candidate.get("wedge_index", -1)
+	match ring:
+		"Double":
+			return {"type": "wedge", "wedge_idx": wedge_idx}
+		"Triple":
+			return {"type": "triple_wedge", "wedge_idx": wedge_idx}
+		"Inner Single":
+			return {"type": "single_wedge", "wedge_idx": wedge_idx, "ring_key": "inner_single"}
+		"Outer Single":
+			return {"type": "single_wedge", "wedge_idx": wedge_idx, "ring_key": "outer_single"}
+		"Double Bull":
+			return {"type": "double_bull"}
+		"Single Bull":
+			return {"type": "single_bull"}
+	return {}
