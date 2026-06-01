@@ -11,6 +11,7 @@ signal modifier_toggled
 signal modifier_skipped
 signal reward_selected(index: int)
 signal checkout_path_clicked(index: int)
+signal streak_replace_selected(index: int)
 
 @onready var score_label: Label = $ScoreLabel
 @onready var instruction_label: Label = $InstructionLabel
@@ -182,6 +183,7 @@ var _streak_title_label: Label = null
 ## Whether upgrade buttons are in modifier selection mode.
 var _modifier_mode: bool = false
 var _reward_mode: bool = false
+var _streak_replace_mode: bool = false
 var _skip_modifier_button: Button = null
 var _boss_status_label: Label = null
 var _boss_bg_tint: ColorRect = null
@@ -1426,7 +1428,10 @@ func _select_upgrade(index: int) -> void:
 	AuidoManager.play_ui_click()
 	_skip_modifier_button.visible = false
 	upgrade_container.visible = false
-	if _reward_mode:
+	if _streak_replace_mode:
+		_streak_replace_mode = false
+		streak_replace_selected.emit(index)
+	elif _reward_mode:
 		_reward_mode = false
 		reward_selected.emit(index)
 	elif _modifier_mode:
@@ -1632,6 +1637,25 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 	# Hide the third button for 2-of-2 pick
 	buttons[2].visible = false
 	upgrade_container.visible = true
+	next_leg_button.visible = false
+
+
+## Show a chooser for which existing streak to replace when multiple same-category conflicts exist.
+func show_streak_replace_chooser(new_modifier: ScoringModifier, conflicts: Array) -> void:
+	_streak_replace_mode = true
+	score_label.text = "Replace which streak with %s?" % new_modifier.modifier_name
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
+	for i: int in range(3):
+		if i < conflicts.size():
+			var existing: ScoringModifier = conflicts[i] as ScoringModifier
+			buttons[i].text = "%s\n%s" % [existing.modifier_name, existing.description]
+			buttons[i].self_modulate = Color(existing.rarity_color.r, existing.rarity_color.g, existing.rarity_color.b, 1.0)
+			buttons[i].tooltip_text = existing.description
+			buttons[i].visible = true
+		else:
+			buttons[i].visible = false
+	upgrade_container.visible = true
+	_skip_modifier_button.visible = false
 	next_leg_button.visible = false
 
 

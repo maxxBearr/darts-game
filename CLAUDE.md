@@ -1,58 +1,44 @@
-# Spec: Checkout Path Illumination + Necessity-Gated Ring Labels
+# Spec: Throw Anticipation Animation
 
-Follow-up to the Post-Color-Brush Bug Fixes spec (archived at `specs/2026-05-31-post-color-brush-bug-fixes.md`, handed to Claude Code). That pass makes the checkout help **trustworthy** (ring-accurate gold highlight + a guard that drops any segment that would bust). This spec makes it **legible** once per-ring color/value brushing makes the board ambiguous — so the player can act on the help with confidence rather than reading paragraphs of qualifier text.
+Adds a pre-impact "fly-in" to the dart throw. The intent is to inject anticipation into the moment between the RNG resolving the landing point and the scoring juice firing, and to make the accuracy miss *legible* as motion: the dart visibly travels from where you aimed to where it actually landed.
 
-**Depends on:** the Bug 3 ring-threading + bust guard from the archived spec must land first. Illumination reads the same ring-accurate, re-validated path/segment data that fix produces. Do not start this until that fix is merged.
+Shipped 2026-06-01 (manual implementation in this session). This section documents the design so future work doesn't undo the reasoning.
 
 ## Problem
 
-Per-ring color brushing breaks the old assumption that a face value identifies a segment. Max's worked example: with a +1 value brush on 19 and color brushes making one 20's inner single green and another 20's outer single red, the board can show **four different single-20 segments** with different colors and different resulting scores. A text-only checkout line ("S20") can't address that, and pushing text to disambiguate spirals into nonsense ("Inner Green S20, upper-left"). The disambiguation has to live on the **board** (spatial), with text staying a label, not an address.
+When a throw resolves, `throw_mechanic` samples the final landing point (gaussian + accuracy-ellipse math) and emits `throw_completed(hit_pos)`. The old `_on_throw_completed` then did everything on a single frame: dropped the marker (`_place_dart`), played the thunk, popped the floating score, and fired `flash_segment` (which drives the shader shockwave). No travel, no build-up — the juiciest moment of the game had zero anticipation, and the accuracy system (how far off you landed from your aim) was invisible after the fact.
 
-Two complementary pieces:
-1. **Necessity-gated ring labels** — small text nicety for the common two-rings-one-wedge case.
-2. **Path illumination** — the general mechanism for everything text can't address.
+## Design
 
-## Part 1 — Necessity-gated inner/outer ring labels
+A **pure pre-step**. The entire existing impact flow is unchanged; the animation is bolted on in front of it. Sequence: **fly-in/shrink → impact → all the normal stuff**.
 
-The archived spec's step 3 added an unconditional "(inner)/(outer)" qualifier to `get_target_display_name()`. Refine it:
+- **Start anchor = aim center → land point.** The flying dart spawns large, centered on the aim point the player locked (`throw_mechanic.get_resolve_center()` = the accuracy-ellipse center), then shrinks to normal marker size while drifting onto the actual RNG landing point. The drift vector *is* the accuracy miss made visible — this was the deliberate choice over a pure in-place zoom (which would lose the accuracy story) or a fixed off-board "hand" anchor (literal flight, but a long travel path occludes the board and the drift no longer maps to accuracy).
+- **The shrink reads as the dart flying away from the player** (big = close, small = stuck in the distant board). A faint→opaque fade-in reinforces the far-to-near read.
+- **Easing is EASE_IN (accelerate)** so arrival lands like a sudden thunk — the anticipation payoff. Build slow, snap on contact.
+- **Nothing about the impact changed.** Per Max: "basically everything after the dart impact is the same. this just adds a step before the dart impact." All scoring juice (marker, thunk, shockwave, floating score, remaining-score countdown, game logic) fires together at arrival exactly as it did before.
 
-- **Only show the qualifier when it matters.** A single-ring finish gets an "Inner"/"Outer" prefix **iff** that wedge's inner single and outer single produce a **different resulting `total_score`** under the current scoring pipeline (run both rings through `process_score` and compare). If they're identical, show plain "S18" — no qualifier.
-- This is the same necessity philosophy as the Color Brush UI (which stays hidden until the player has color modifiers): the qualifier is invisible on a vanilla board and only appears when brushing has actually made the rings diverge. It is **self-maintaining** — keyed on score divergence, not on "does the player own a brush" — so it covers value mods, parity mods, color mods, and anything future without special-casing.
-- **Format:** leading and capitalized — `"Inner S18"` / `"Outer S18"` (not the trailing `"S18 (inner)"` from the archived draft).
-- This handles the two-singles-of-one-wedge case only. It deliberately does **not** try to address two-different-wedges-same-value — that is illumination's job. Keep the printed path text simple; the board carries the precision.
+**Seamless hand-off:** the transient flyer is the same visual as the real marker (`dart_marker.gd`, same colors and `dart_size`). It ends at `hit_position` at exactly final marker size, at which point it is freed and `_resolve_throw_impact()` places the real marker on the same spot — no pop. The `throw_mechanic` stops drawing its frozen marker/ellipse the instant it resolves (DONE state draws nothing), so there's no double-marker during the flight. The declared-target highlight stays lit through the fly-in, which reinforces the aim-vs-land read.
 
-## Part 2 — Checkout path illumination
+## Implementation (as shipped)
 
-**Model (always-on helper, one selected path illuminated):**
-- The checkout helper is visible by default whenever checkouts exist (current behavior).
-- A **toggle** controls path illumination on/off (exported default for Max to set). When illumination is on, exactly **one** path is the *selected* path and it is highlighted on the board. When off, no path highlight is drawn (the trust-critical gold finish pulse from the archived fix still behaves as before).
-- **Selection:** default to the solver's top-ranked path (fattest/safest, per `_compare_paths`). The player can **click** a path line in the helper panel to select it, or use **arrow keys** to cycle once a selection exists. The selected line is visually marked in the panel to match its board highlight.
-- Rationale for "always-on selected path" over a bare toggle: the bug being addressed is "help shown but not spatially grounded." A toggle that leaves text visible with nothing lit reintroduces that ungrounded state. Fewer modes = more trust. (If Max prefers a default-off toggle, that's a one-line default flip — but the selected-path-always-lit-when-on behavior should hold.)
-
-**Illumination semantics (the important part):**
-- For a path step, illuminate **every board segment that genuinely satisfies that step under the path's accumulated scoring state** — not just one segment. Max's example: a first-throw step `S20 (80)` should light **all** single-20 segments that resolve to 80 given current color/value modifiers, so the player has equivalent options rather than one arbitrary pick.
-- **Streak/state correctness is the gating constraint.** A step's resulting score can depend on state earlier steps build (e.g. a path that routes through a red streak: the `(80)` only holds if the red streak is active). Illumination must compute each step's highlight set against the **streak/parity state the path produces up to that step** (snapshot → replay prior steps → evaluate candidates → restore), the same speculative machinery the solver already uses. Only segments that *actually* yield the step under that state may light up. Never illuminate a face-equal segment that would diverge once the streak is considered — that would recreate the very "trust" bug this whole effort is fixing.
-- Equivalence is by **resulting effect** (resulting score, and that it advances the path), evaluated through the real pipeline — not by raw face value.
-
-**Open sub-decision (flag for Max during implementation):** whether to illuminate all steps of the selected path at once (step 1 + step 2 + step 3, color-coded or numbered 1/2/3) or only the *current/next* step's equivalent set with later steps shown as text. Multi-step illumination is richer but later steps fan out combinatorially (step 2's valid set depends on which step-1 segment was hit). Recommended default: illuminate the **current step's** full equivalent set; render later steps as text in the panel. Revisit if Max wants the whole route drawn.
-
-**Visual — blue ring outline, all tunable:**
-- Path illumination draws a **blue outline on the ring** of each qualifying segment (distinct from the gold checkout-finish pulse so the two layers read differently).
-- Export vars on `dartboard.gd` (mirror the existing `checkout_pulse_*` group): outline color, pulse rate/speed, border thickness, and min/max alpha. Max tunes all of these.
-- When a path is selected and illuminated, **de-emphasize the generic gold all-finishes pulse** (dim or suppress) so the chosen route is the focus and the two highlight systems don't fight for attention.
-
-## Files in scope
-- `scripts/scoring_modifier_manager.gd` — score-divergence test for label gating; per-step equivalent-segment + state-aware enumeration for illumination (reuses `snapshot_all_streak_state` / `restore_all_streak_state` / `speculative_score`).
-- `scripts/main.gd` — selection state, click + arrow-key input, wiring selected path → dartboard.
-- `scripts/dartboard.gd` — blue path-illumination draw pass + exported tuning vars; de-emphasis of gold pulse when a path is illuminated.
-- `scripts/hud.gd` — illumination toggle, selected-line marking in the checkout panel, simplified (gated) path text.
+- `scripts/throw_mechanic.gd` — added `get_resolve_center() -> Vector2`, returning `Vector2(_horizontal_x, _locked_release_y + accuracy_skew_v)`, the same point used as the ellipse center in `_resolve_throw`. Valid immediately after a resolve.
+- `scripts/main.gd`:
+  - New `@export_group("Throw Anticipation")`: `throw_anticipation_enabled` (bool, default true — off = instant land, original behavior), `anticipation_start_scale` (default 3.0×), `anticipation_start_alpha` (default 0.45; 1.0 disables the fade-in), `anticipation_duration` (default 0.3s).
+  - `_on_throw_completed` keeps the tutorial/shop guards, then dispatches: `_play_throw_anticipation(hit_position)` when enabled, else `_resolve_throw_impact(hit_position)` directly.
+  - The former body of `_on_throw_completed` (everything from `clear_declared_target` onward) moved verbatim into `_resolve_throw_impact(hit_position)`.
+  - `_play_throw_anticipation` spawns the transient flyer and runs a parallel tween (position + scale + modulate alpha), chained to `_on_anticipation_landed`, which frees the flyer and calls `_resolve_throw_impact`.
+- Tutorial and shop throw paths are untouched (they short-circuit before the dispatch).
 
 ## Acceptance
-- Vanilla board: no inner/outer qualifiers, illumination behaves as a single clear path; nothing regresses.
-- Four-color-S20 board: selecting a path that finishes on a specific single-20 lights exactly the segments that yield the path's required score, and no others; the printed line stays simple ("S20") because the board disambiguates.
-- Streak path: a checkout that depends on a red streak only illuminates segments consistent with that streak's accumulated state; face-equal but state-divergent segments are not lit.
-- Label gating: "Inner S18"/"Outer S18" appears only when that wedge's two singles resolve to different scores; otherwise plain "S18".
-- No illuminated or suggested segment may ever bust when thrown (inherited invariant from the archived fix; must still hold).
+- Anticipation on: throw resolves → large dart flies in from aim center, shrinking/drifting to the landing point → on arrival, marker + thunk + shockwave + score all fire as before. No double marker, no pop.
+- Anticipation off (`throw_anticipation_enabled = false`): lands instantly, byte-identical to old behavior.
+- Tutorial and shop throws unaffected.
+- Drift direction/magnitude matches the actual accuracy miss (start = locked aim, end = RNG sample).
+
+## Deferred / easy follow-ups
+- Scale **overshoot** at the end (tween to ~0.9× then settle to 1.0) for a squash-on-impact pop.
+- A faint motion-trail / streak behind the flyer.
+Both are additive and don't touch the impact flow.
 
 ---
 

@@ -29,6 +29,26 @@ extends Node2D
 ## Whether checkout path illumination is enabled (blue board highlights).
 @export var illumination_enabled: bool = true
 
+@export_group("Throw Anticipation")
+
+## When enabled, a large dart flies in from the aim center and shrinks down onto the
+## RNG landing point before the normal impact flow (thunk, shockwave, score) fires.
+## The drift from aim center to landing point visualizes the accuracy miss.
+## Disable to land instantly with no fly-in, exactly as before.
+@export var throw_anticipation_enabled: bool = true
+
+## How large the flying dart starts, as a multiple of the final marker size.
+## Sells the "dart flying away from the player" read — bigger = starts closer in.
+@export_range(1.0, 8.0, 0.1) var anticipation_start_scale: float = 3.0
+
+## Starting opacity of the flying dart. It fades up to fully opaque as it arrives,
+## reinforcing the far-to-near read. Set to 1.0 to disable the fade-in.
+@export_range(0.0, 1.0, 0.05) var anticipation_start_alpha: float = 0.45
+
+## Duration of the fly-in / shrink animation in seconds, before impact fires.
+## Shorter = snappier; longer = more drawn-out anticipation.
+@export_range(0.05, 1.0, 0.01) var anticipation_duration: float = 0.3
+
 @onready var dartboard: Node2D = $Dartboard
 @onready var throw_mechanic: Node2D = $ThrowMechanic
 @onready var dart_container: Node2D = $DartContainer
@@ -178,6 +198,11 @@ var _boss_leg_just_cleared: bool = false
 ## The modifier awaiting wedge picker configuration.
 var _pending_modifier: ScoringModifier = null
 
+## Streak replacement chooser state — set when a modifier has multiple same-category conflicts.
+var _streak_replace_candidates: Array = []
+var _streak_replace_modifier: ScoringModifier = null
+var _streak_replace_config: Dictionary = {}
+
 ## First selected wedge in PICK_TWO_WEDGES flow (-1 = none).
 var _picker_selected_wedge: int = -1
 
@@ -284,6 +309,7 @@ func _ready() -> void:
 	hud.modifier_selected.connect(_on_modifier_selected)
 	hud.modifier_skipped.connect(_on_modifier_skipped)
 	hud.reward_selected.connect(_on_reward_selected)
+	hud.streak_replace_selected.connect(_on_streak_replace_selected)
 	hud.modifier_toggled.connect(_on_modifier_toggled)
 	hud.checkout_path_clicked.connect(_on_checkout_path_clicked)
 
@@ -411,8 +437,8 @@ func _disable_hover() -> void:
 
 
 ## Add a scoring modifier to the game. Handles replacement, manager, and HUD panel.
-func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
-	var replaced: Resource = scoring_modifier_manager.add_modifier(modifier, config)
+func add_scoring_modifier(modifier: Resource, config: Dictionary, explicit_replacement: Resource = null) -> void:
+	var replaced: Resource = scoring_modifier_manager.add_modifier(modifier, config, explicit_replacement)
 
 	# If a modifier was replaced, remove its panel square
 	if replaced != null:
@@ -429,6 +455,46 @@ func add_scoring_modifier(modifier: Resource, config: Dictionary) -> void:
 	scoring_modifier_manager._build_solver_candidates()
 	_update_checkout_highlights()
 	_update_checkout_helper()
+
+
+## Build the replacement warning string for a streak modifier.
+## Returns "" if no conflict, "Replaces: X" for single conflict,
+## or "Choose streak to replace" for multiple same-category conflicts.
+func _get_replacement_text(mod: ScoringModifier) -> String:
+	var conflicts: Array = scoring_modifier_manager.get_streak_conflicts(mod)
+	if conflicts.size() == 1:
+		return "Replaces: %s" % conflicts[0].modifier_name
+	elif conflicts.size() > 1:
+		return "Choose streak to replace"
+	return ""
+
+
+## Show the streak replacement chooser for a modifier with multiple same-category conflicts.
+func _show_streak_replace_chooser(modifier: ScoringModifier, config: Dictionary, conflicts: Array) -> void:
+	_streak_replace_modifier = modifier
+	_streak_replace_config = config
+	_streak_replace_candidates = conflicts
+	_leg_phase = "streak_replace"
+	hud.show_streak_replace_chooser(modifier, conflicts)
+
+
+## Player picked which streak to replace in the multi-conflict chooser.
+func _on_streak_replace_selected(index: int) -> void:
+	var replacement: Resource = _streak_replace_candidates[index]
+	add_scoring_modifier(_streak_replace_modifier, _streak_replace_config, replacement)
+	_streak_replace_modifier = null
+	_streak_replace_candidates = []
+	_streak_replace_config = {}
+	if _in_shop:
+		_continue_shop_after_pick()
+	else:
+		_leg_phase = ""
+		if _start_modifier_pending:
+			_start_modifier_pending = false
+			_start_new_throw()
+		else:
+			hud.score_label.text = ""
+			hud.next_leg_button.visible = true
 
 
 ## Start a new throw (single dart).
@@ -479,6 +545,53 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 		_on_shop_throw_completed(hit_position)
 		return
 
+	# Anticipation pre-step: fly a large dart in from the aim center, shrinking and
+	# drifting onto the RNG landing point, THEN run the normal impact flow unchanged.
+	# When disabled, impact fires immediately (original behavior).
+	if throw_anticipation_enabled:
+		_play_throw_anticipation(hit_position)
+	else:
+		_resolve_throw_impact(hit_position)
+
+
+## Fly-in pre-step: spawn a large, faint dart marker at the aim center and tween it
+## down to normal size while it drifts onto the RNG landing point. The shrink reads as
+## the dart flying away from the player; the drift is the accuracy miss made visible.
+## On arrival the transient is freed and the normal impact flow runs.
+func _play_throw_anticipation(hit_position: Vector2) -> void:
+	var start_pos: Vector2 = throw_mechanic.get_resolve_center()
+
+	# Transient flying dart — same visual as the real marker so the hand-off at impact
+	# is seamless: it ends at hit_position at exactly the final marker size, right as
+	# _resolve_throw_impact() places the real marker on the same spot.
+	var flyer: Node2D = Node2D.new()
+	flyer.set_script(preload("res://scripts/dart_marker.gd"))
+	flyer.set("dart_color", dart_build.dart_outer_color)
+	flyer.set("dart_inner_color", dart_build.dart_inner_color)
+	flyer.set("dart_size", dart_size)
+	flyer.position = start_pos
+	flyer.scale = Vector2.ONE * anticipation_start_scale
+	flyer.modulate = Color(1.0, 1.0, 1.0, anticipation_start_alpha)
+	dart_container.add_child(flyer)
+
+	# Accelerate in (EASE_IN) so arrival lands like a sudden thunk — the anticipation payoff.
+	var tween: Tween = create_tween().set_parallel(true)
+	tween.tween_property(flyer, "position", hit_position, anticipation_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_property(flyer, "scale", Vector2.ONE, anticipation_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_property(flyer, "modulate:a", 1.0, anticipation_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.chain().tween_callback(_on_anticipation_landed.bind(flyer, hit_position))
+
+
+## Called when the fly-in finishes: drop the transient and run the real impact flow.
+func _on_anticipation_landed(flyer: Node2D, hit_position: Vector2) -> void:
+	if is_instance_valid(flyer):
+		flyer.queue_free()
+	_resolve_throw_impact(hit_position)
+
+
+## Run the full landing flow — score, marker, thunk, shockwave, floating score, and
+## game logic. Called either immediately (anticipation off) or at the end of the fly-in.
+func _resolve_throw_impact(hit_position: Vector2) -> void:
 	# Clear target highlight and tooltip
 	dartboard.clear_declared_target()
 	hud.hide_target_tooltip()
@@ -642,8 +755,8 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 	# Re-enable hover so the player can inspect the board while deciding
 	_enable_hover()
 
-	_update_checkout_highlights()
-	# Only recompute checkout helper if darts remain this turn
+	if not response["is_bust"] and not response["is_leg_won"]:
+		_update_checkout_highlights()
 	if not response["is_turn_over"] and not response["is_bust"] and not response["is_leg_won"]:
 		_update_checkout_helper()
 
@@ -1140,11 +1253,7 @@ func _on_shop_throw_completed(hit_position: Vector2) -> void:
 		for item: Dictionary in _shop_pick_items:
 			if item["type"] == "modifier":
 				var mod: ScoringModifier = item["data"] as ScoringModifier
-				var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
-				if conflict != null:
-					replacement_info.append("Replaces: %s" % conflict.modifier_name)
-				else:
-					replacement_info.append("")
+				replacement_info.append(_get_replacement_text(mod))
 			else:
 				replacement_info.append("")
 		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining, replacement_info)
@@ -1266,6 +1375,12 @@ func _on_shop_pick_selected(index: int) -> void:
 
 	# Modifier pick
 	var modifier: ScoringModifier = item["data"] as ScoringModifier
+
+	# Check for multi-conflict streak replacement before adding
+	var conflicts: Array = scoring_modifier_manager.get_streak_conflicts(modifier)
+	if conflicts.size() > 1:
+		_show_streak_replace_chooser(modifier, {}, conflicts)
+		return
 
 	if modifier.config_type == ScoringEnums.ConfigType.NONE:
 		add_scoring_modifier(modifier, {})
@@ -1666,11 +1781,7 @@ func _on_run_confirmed() -> void:
 		# Build replacement info for each modifier choice
 		var replacement_info: Array[String] = []
 		for mod: ScoringModifier in _current_modifiers:
-			var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
-			if conflict != null:
-				replacement_info.append("Replaces: %s" % conflict.modifier_name)
-			else:
-				replacement_info.append("")
+			replacement_info.append(_get_replacement_text(mod))
 		hud.show_modifier_choices_with_replacement(_current_modifiers, replacement_info)
 	else:
 		_start_new_throw()
@@ -1708,6 +1819,12 @@ func _on_modifier_selected(index: int) -> void:
 		return
 
 	var modifier: ScoringModifier = _current_modifiers[index]
+
+	# Check for multi-conflict streak replacement before adding
+	var conflicts: Array = scoring_modifier_manager.get_streak_conflicts(modifier)
+	if conflicts.size() > 1:
+		_show_streak_replace_chooser(modifier, {}, conflicts)
+		return
 
 	if modifier.config_type == ScoringEnums.ConfigType.NONE:
 		add_scoring_modifier(modifier, {})
@@ -2362,11 +2479,7 @@ func _cancel_picker() -> void:
 		for item: Dictionary in _shop_pick_items:
 			if item["type"] == "modifier":
 				var mod: ScoringModifier = item["data"] as ScoringModifier
-				var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
-				if conflict != null:
-					shop_replace_info.append("Replaces: %s" % conflict.modifier_name)
-				else:
-					shop_replace_info.append("")
+				shop_replace_info.append(_get_replacement_text(mod))
 			else:
 				shop_replace_info.append("")
 		hud.show_shop_pick_items(_shop_pick_items, _shop_darts_remaining, shop_replace_info)
@@ -2377,11 +2490,7 @@ func _cancel_picker() -> void:
 	# Rebuild replacement info when returning to modifier pick
 	var replacement_info: Array[String] = []
 	for mod: ScoringModifier in _current_modifiers:
-		var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
-		if conflict != null:
-			replacement_info.append("Replaces: %s" % conflict.modifier_name)
-		else:
-			replacement_info.append("")
+		replacement_info.append(_get_replacement_text(mod))
 	hud.show_modifier_choices_with_replacement(_current_modifiers, replacement_info)
 
 

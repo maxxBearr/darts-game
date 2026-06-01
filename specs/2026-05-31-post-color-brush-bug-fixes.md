@@ -1,8 +1,8 @@
 ---
 Spec date: 2026-05-31
-Status: Handed to Claude Code for implementation 2026-05-31 (Bug 1 + Bug 3 ready; Bug 2 deferred pending repro)
+Status: Shipped — Bug 1 + Bug 3 implemented; spec closed out 2026-06-01.
 Implementation: Claude Code
-Notes: Bug 1 (recession color match) and Bug 3 (ring-accurate checkout highlight + bust guard) are the implementation targets. Bug 2 (-x% reveal speed) is blocked on a repro and was not implemented. The checkout-helper UX direction (gated inner/outer text + path illumination) was split into the follow-up spec specs/2026-05-31-checkout-path-illumination.md.
+Notes: Bug 1 (recession color match) and Bug 3 (ring-accurate checkout highlight + bust guard) shipped. Bug 2 (-x% reveal speed) was closed out with the spec. Bug 3 landing unblocked the follow-up spec specs/2026-05-31-checkout-path-illumination.md (the gated inner/outer text + path illumination UX direction).
 ---
 
 # Spec: Post-Color-Brush Bug Fixes (Recession + Checkout/Bust Trust)

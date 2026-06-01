@@ -152,19 +152,45 @@ func get_active_streak_modifiers() -> Array:
 	return result
 
 
-## Check if adding a modifier would replace an existing streak modifier.
-## Returns the existing modifier that would be replaced, or null if no conflict.
-## With extra streak slots, a conflict only occurs when all slots are full AND
-## there's an existing modifier of the same category to swap with.
-func get_streak_conflict(new_modifier: ScoringModifier) -> ScoringModifier:
+## Get all active streak modifiers of the same category that would be candidates
+## for replacement. Returns empty if there's a free slot (no conflict).
+## Base rule: 1 streak per category (3 base slots). Bonus slots (max_streak_slots - 3)
+## allow duplicates within a category.
+func get_streak_conflicts(new_modifier: ScoringModifier) -> Array:
 	if new_modifier.streak_category == ScoringEnums.StreakCategory.NONE:
-		return null
+		return []
 	var active_streaks: Array = get_active_streak_modifiers()
-	if active_streaks.size() < max_streak_slots:
-		return null
+	var same_category: Array = []
 	for existing: Resource in active_streaks:
 		if existing is ScoringModifier and existing.streak_category == new_modifier.streak_category:
-			return existing
+			same_category.append(existing)
+	if same_category.is_empty():
+		return []
+	var unique_categories: int = _count_unique_streak_categories(active_streaks)
+	var bonus_slots: int = max_streak_slots - 3
+	var bonus_used: int = active_streaks.size() - unique_categories
+	if bonus_used < bonus_slots:
+		return []
+	return same_category
+
+
+func _count_unique_streak_categories(streaks: Array) -> int:
+	var seen: Array[int] = []
+	for s: Resource in streaks:
+		if s is ScoringModifier:
+			var cat: int = (s as ScoringModifier).streak_category
+			if not seen.has(cat):
+				seen.append(cat)
+	return seen.size()
+
+
+## Convenience: returns the single conflict if exactly one exists, or null.
+## When multiple same-category conflicts exist, returns null — caller must
+## use get_streak_conflicts() and present a choice to the player.
+func get_streak_conflict(new_modifier: ScoringModifier) -> ScoringModifier:
+	var conflicts: Array = get_streak_conflicts(new_modifier)
+	if conflicts.size() == 1:
+		return conflicts[0]
 	return null
 
 
@@ -182,12 +208,15 @@ func remove_modifier(modifier: Resource) -> void:
 ## (e.g., {"wedge_index": 5} for PICK_WEDGE modifiers).
 ## For NONE config_type modifiers, pass an empty dictionary.
 ## If the modifier has a streak category that conflicts with an existing modifier,
-## the existing one is removed first (replacement).
+## the existing one is removed first (replacement). When multiple same-category
+## conflicts exist, pass the chosen one via explicit_replacement.
 ## Returns the replaced modifier, or null if no replacement occurred.
-func add_modifier(modifier: Resource, config: Dictionary) -> Resource:
-	# Check for streak slot conflict and remove the existing one
+func add_modifier(modifier: Resource, config: Dictionary, explicit_replacement: Resource = null) -> Resource:
 	var replaced: Resource = null
-	if modifier is ScoringModifier:
+	if explicit_replacement != null:
+		remove_modifier(explicit_replacement)
+		replaced = explicit_replacement
+	elif modifier is ScoringModifier:
 		var conflict: ScoringModifier = get_streak_conflict(modifier as ScoringModifier)
 		if conflict != null:
 			remove_modifier(conflict)

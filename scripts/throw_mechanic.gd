@@ -580,6 +580,14 @@ func _resolve_throw() -> void:
 	throw_completed.emit(hit_position)
 
 
+## The aim center used as the accuracy-ellipse center when the dart resolved — the
+## point the player actually locked onto. The anticipation fly-in starts the large
+## dart here; it then drifts to the RNG landing point, so the drift distance is a
+## direct visualization of the accuracy miss. Valid immediately after a resolve.
+func get_resolve_center() -> Vector2:
+	return Vector2(_horizontal_x, _locked_release_y + accuracy_skew_v)
+
+
 # ── Drawing ──────────────────────────────────────────────────────────────────
 
 func _draw() -> void:
