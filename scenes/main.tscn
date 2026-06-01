@@ -55,6 +55,8 @@ outline_color = Color(0, 0, 0, 1)
 [node name="Main" type="Node2D" unique_id=1602768068]
 script = ExtResource("1_main")
 next_dart_delay = 0.05
+anticipation_start_scale = 3.5
+anticipation_duration = 0.2
 shop_spot_slack = 2
 shop_cadence = 2
 shop_after_boss = false
@@ -305,7 +307,6 @@ offset_left = -321.0
 offset_top = 121.0
 offset_right = -1.0
 grow_horizontal = 0
-mouse_filter = 1
 
 [node name="StatsTitle" type="Label" parent="HUD/StatsContainer" unique_id=2114441324]
 layout_mode = 2

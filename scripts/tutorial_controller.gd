@@ -445,6 +445,18 @@ func _capture_h_meter() -> void:
 func _on_tutorial_throw_completed(hit_position: Vector2) -> void:
 	if not _active:
 		return
+	# Route through main's shared anticipation fly-in so tutorial throws match the real
+	# game. The tutorial marker is yellow (see _place_tutorial_dart), so the flyer uses
+	# the same colors for a seamless hand-off. on_landed runs the rest at impact.
+	var main: Node = get_parent()
+	if main != null and main.has_method("play_throw_anticipation"):
+		main.play_throw_anticipation(hit_position, Color(0.9, 0.85, 0.0), Color(0.2, 0.2, 0.2), _resolve_tutorial_throw.bind(hit_position))
+	else:
+		_resolve_tutorial_throw(hit_position)
+
+
+## Tutorial landing flow: place the marker, then advance the tutorial beat.
+func _resolve_tutorial_throw(hit_position: Vector2) -> void:
 	_place_tutorial_dart(hit_position)
 
 	if _current_throw == 1:

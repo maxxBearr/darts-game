@@ -547,27 +547,29 @@ func _on_throw_completed(hit_position: Vector2) -> void:
 
 	# Anticipation pre-step: fly a large dart in from the aim center, shrinking and
 	# drifting onto the RNG landing point, THEN run the normal impact flow unchanged.
-	# When disabled, impact fires immediately (original behavior).
-	if throw_anticipation_enabled:
-		_play_throw_anticipation(hit_position)
-	else:
-		_resolve_throw_impact(hit_position)
+	play_throw_anticipation(hit_position, dart_build.dart_outer_color, dart_build.dart_inner_color, _resolve_throw_impact.bind(hit_position))
 
 
-## Fly-in pre-step: spawn a large, faint dart marker at the aim center and tween it
-## down to normal size while it drifts onto the RNG landing point. The shrink reads as
-## the dart flying away from the player; the drift is the accuracy miss made visible.
-## On arrival the transient is freed and the normal impact flow runs.
-func _play_throw_anticipation(hit_position: Vector2) -> void:
+## Fly-in pre-step shared by EVERY throw path (normal, shop, tutorial): spawn a large,
+## faint dart marker at the aim center and tween it down to normal size while it drifts
+## onto the RNG landing point, THEN invoke on_landed — a zero-arg Callable that runs the
+## caller's real impact logic (bind the hit_position at the call site). The shrink reads
+## as the dart flying away from the player; the drift is the accuracy miss made visible.
+## outer/inner_color let each caller match its own marker so the hand-off is seamless.
+## When anticipation is disabled, on_landed fires immediately (original behavior).
+func play_throw_anticipation(hit_position: Vector2, outer_color: Color, inner_color: Color, on_landed: Callable) -> void:
+	if not throw_anticipation_enabled:
+		on_landed.call()
+		return
+
 	var start_pos: Vector2 = throw_mechanic.get_resolve_center()
 
-	# Transient flying dart — same visual as the real marker so the hand-off at impact
-	# is seamless: it ends at hit_position at exactly the final marker size, right as
-	# _resolve_throw_impact() places the real marker on the same spot.
+	# Transient flying dart — same visual as the marker the caller will place, so it ends
+	# at hit_position at exactly final marker size right as the real marker appears.
 	var flyer: Node2D = Node2D.new()
 	flyer.set_script(preload("res://scripts/dart_marker.gd"))
-	flyer.set("dart_color", dart_build.dart_outer_color)
-	flyer.set("dart_inner_color", dart_build.dart_inner_color)
+	flyer.set("dart_color", outer_color)
+	flyer.set("dart_inner_color", inner_color)
 	flyer.set("dart_size", dart_size)
 	flyer.position = start_pos
 	flyer.scale = Vector2.ONE * anticipation_start_scale
@@ -579,14 +581,14 @@ func _play_throw_anticipation(hit_position: Vector2) -> void:
 	tween.tween_property(flyer, "position", hit_position, anticipation_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
 	tween.tween_property(flyer, "scale", Vector2.ONE, anticipation_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
 	tween.tween_property(flyer, "modulate:a", 1.0, anticipation_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	tween.chain().tween_callback(_on_anticipation_landed.bind(flyer, hit_position))
+	tween.chain().tween_callback(_on_anticipation_landed.bind(flyer, on_landed))
 
 
-## Called when the fly-in finishes: drop the transient and run the real impact flow.
-func _on_anticipation_landed(flyer: Node2D, hit_position: Vector2) -> void:
+## Called when the fly-in finishes: drop the transient and run the caller's impact logic.
+func _on_anticipation_landed(flyer: Node2D, on_landed: Callable) -> void:
 	if is_instance_valid(flyer):
 		flyer.queue_free()
-	_resolve_throw_impact(hit_position)
+	on_landed.call()
 
 
 ## Run the full landing flow — score, marker, thunk, shockwave, floating score, and
@@ -1219,8 +1221,13 @@ func _random_shop_spot(rarity: ScoringEnums.Rarity, multi_ring: bool, used: Arra
 	return {"wedge_index": wedge_idx, "ring_name": ring, "rarity": rarity, "active": true}
 
 
-## Handle a throw during the shop phase.
+## Handle a throw during the shop phase — fly-in pre-step, then the shop impact.
 func _on_shop_throw_completed(hit_position: Vector2) -> void:
+	play_throw_anticipation(hit_position, dart_build.dart_outer_color, dart_build.dart_inner_color, _resolve_shop_impact.bind(hit_position))
+
+
+## Shop landing flow: marker, thunk, segment flash, and shop spot/pick logic.
+func _resolve_shop_impact(hit_position: Vector2) -> void:
 	dartboard.clear_declared_target()
 	hud.hide_target_tooltip()
 

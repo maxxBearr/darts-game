@@ -24,15 +24,16 @@ A **pure pre-step**. The entire existing impact flow is unchanged; the animation
 - `scripts/throw_mechanic.gd` — added `get_resolve_center() -> Vector2`, returning `Vector2(_horizontal_x, _locked_release_y + accuracy_skew_v)`, the same point used as the ellipse center in `_resolve_throw`. Valid immediately after a resolve.
 - `scripts/main.gd`:
   - New `@export_group("Throw Anticipation")`: `throw_anticipation_enabled` (bool, default true — off = instant land, original behavior), `anticipation_start_scale` (default 3.0×), `anticipation_start_alpha` (default 0.45; 1.0 disables the fade-in), `anticipation_duration` (default 0.3s).
-  - `_on_throw_completed` keeps the tutorial/shop guards, then dispatches: `_play_throw_anticipation(hit_position)` when enabled, else `_resolve_throw_impact(hit_position)` directly.
-  - The former body of `_on_throw_completed` (everything from `clear_declared_target` onward) moved verbatim into `_resolve_throw_impact(hit_position)`.
-  - `_play_throw_anticipation` spawns the transient flyer and runs a parallel tween (position + scale + modulate alpha), chained to `_on_anticipation_landed`, which frees the flyer and calls `_resolve_throw_impact`.
-- Tutorial and shop throw paths are untouched (they short-circuit before the dispatch).
+  - `play_throw_anticipation(hit_position, outer_color, inner_color, on_landed)` is the **shared, public** fly-in used by every throw path. It spawns the transient flyer (in the caller's marker colors, for a seamless hand-off) and runs a parallel tween (position + scale + modulate alpha) chained to `_on_anticipation_landed`, which frees the flyer and invokes `on_landed` — a zero-arg Callable (each caller binds its `hit_position`). When `throw_anticipation_enabled` is false, `on_landed` fires immediately.
+  - Normal throw: `_on_throw_completed` calls `play_throw_anticipation(..., _resolve_throw_impact.bind(hit_position))`. The former body of `_on_throw_completed` (everything from `clear_declared_target` onward) moved verbatim into `_resolve_throw_impact(hit_position)`.
+  - Shop throw: `_on_shop_throw_completed` calls `play_throw_anticipation(..., _resolve_shop_impact.bind(hit_position))`; its former body moved into `_resolve_shop_impact`.
+- `scripts/tutorial_controller.gd` — `_on_tutorial_throw_completed` routes through `get_parent().play_throw_anticipation(...)` (guarded by `has_method`), passing the tutorial's yellow marker colors and `_resolve_tutorial_throw.bind(hit_position)`; its former body (place marker + advance beat) moved into `_resolve_tutorial_throw`.
+- The fly-in is universal: normal, shop, and tutorial throws all play it (and all honor the single `throw_anticipation_enabled` flag on `main.gd`).
 
 ## Acceptance
 - Anticipation on: throw resolves → large dart flies in from aim center, shrinking/drifting to the landing point → on arrival, marker + thunk + shockwave + score all fire as before. No double marker, no pop.
-- Anticipation off (`throw_anticipation_enabled = false`): lands instantly, byte-identical to old behavior.
-- Tutorial and shop throws unaffected.
+- Anticipation off (`throw_anticipation_enabled = false`): every path lands instantly, byte-identical to old behavior.
+- Applies to ALL throws — normal, shop, and tutorial — each with a seamless color-matched hand-off to its own marker.
 - Drift direction/magnitude matches the actual accuracy miss (start = locked aim, end = RNG sample).
 
 ## Deferred / easy follow-ups
