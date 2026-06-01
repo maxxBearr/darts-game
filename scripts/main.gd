@@ -275,6 +275,9 @@ var all_in_active: bool = false
 ## Duration of the board slide transition into/out of shop in seconds.
 @export var shop_transition_duration: float = 0.5
 
+## Duration of the board slide transition between legs in seconds.
+@export var leg_transition_duration: float = 0.5
+
 @export_group("Score Animation")
 
 ## Font size for the number that floats up after a dart scores (e.g. "20", "0").
@@ -615,7 +618,7 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 
 	# If the dart hit a voided wedge, tween it away into the void
 	var hit_wedge: int = result.get("wedge_index", -1)
-	var hit_void: bool = hit_wedge >= 0 and dartboard._boss_void_wedges.has(hit_wedge)
+	var hit_void: bool = result.get("is_void", false) or (hit_wedge >= 0 and dartboard._boss_void_wedges.has(hit_wedge))
 	if hit_void:
 		var void_tween: Tween = create_tween()
 		void_tween.tween_property(dart_node, "scale", Vector2.ZERO, 0.7).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
@@ -627,7 +630,13 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 	var response: Dictionary = x01_game.process_throw(result)
 
 	# Floating score number (gold if winning dart)
-	var recession_data: Dictionary = boss_manager.get_recession_data(hit_wedge)
+	var recession_data: Dictionary = boss_manager.get_weak_board_data(hit_wedge)
+
+	# Reactive bosses mutate the board in response to this hit. Done after the
+	# landing dart's own score/recession_data are captured above, so the change
+	# only affects subsequent darts.
+	if boss_manager.is_boss_active():
+		boss_manager.on_dart_landed(result, _build_game_state())
 
 	# Build remaining-countdown info for trigger animations
 	var remaining_info: Dictionary = {}
@@ -635,7 +644,7 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		if response["is_bust"]:
 			remaining_info = {
 				"remaining_before": response["pre_revert_remaining"] + result["total_score"],
-				"remaining_final": response["remaining_score"],
+				"remaining_final": response["pre_revert_remaining"],
 				"face_value": result["face_value"],
 				"glass_cannon": x01_game.glass_cannon_active,
 				"is_bust": true,
@@ -686,7 +695,10 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 			break
 	var _defer_remaining: bool = _has_trigger_anim and not response["is_leg_won"]
 	if not _defer_remaining:
-		hud.update_remaining(response["remaining_score"], x01_game.glass_cannon_active)
+		if response["is_bust"]:
+			hud.update_remaining(response["pre_revert_remaining"], x01_game.glass_cannon_active)
+		else:
+			hud.update_remaining(response["remaining_score"], x01_game.glass_cannon_active)
 
 	# Branch on what happened
 	if response["is_bust"]:
@@ -893,6 +905,7 @@ func _on_next_turn() -> void:
 	_turn_darts_scored = 0
 	hud.update_turn_score(0)
 	hud.set_remaining_bust(false)
+	hud.update_remaining(x01_game.remaining_score, x01_game.glass_cannon_active)
 	scoring_modifier_manager.reset_for_turn()
 	_clear_darts()
 	AuidoManager.on_turn_ended(x01_game.current_turn)
@@ -937,28 +950,42 @@ func _on_next_leg() -> void:
 	_turn_darts_scored = 0
 	_leg_phase = ""
 	hud.update_turn_score(0)
-	scoring_modifier_manager.reset_for_leg()
-	_clear_darts()
-	x01_game.advance_leg()
-	_update_all_hud()
-	hud.update_streak_section(
-		scoring_modifier_manager.get_active_streak_modifiers(),
-		scoring_modifier_manager.effective_wedge_values
+
+	var viewport_size: Vector2 = get_viewport_rect().size
+	var center: Vector2 = viewport_size / 2.0
+	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
+	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(dartboard, "position", off_left, leg_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(func() -> void:
+		scoring_modifier_manager.reset_for_leg()
+		_clear_darts()
+		x01_game.advance_leg()
+		_update_all_hud()
+		hud.update_streak_section(
+			scoring_modifier_manager.get_active_streak_modifiers(),
+			scoring_modifier_manager.effective_wedge_values
+		)
+		if boss_manager.is_boss_leg(x01_game.current_leg):
+			var game_state: Dictionary = _build_game_state()
+			var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
+			boss_manager.on_turn_start(game_state)
+			_sync_board_and_solver()
+			_update_boss_status()
+		dartboard.position = off_right
 	)
-
-	if boss_manager.is_boss_leg(x01_game.current_leg):
-		var game_state: Dictionary = _build_game_state()
-		var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
-		boss_manager.on_turn_start(game_state)
-		_sync_board_and_solver()
-		_update_boss_status()
-		var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
-		announce_tween.tween_callback(_start_new_throw)
-	else:
-		_start_new_throw()
-
-	_update_checkout_highlights()
-	_update_checkout_helper()
+	tween.tween_property(dartboard, "position", center, leg_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(func() -> void:
+		_update_checkout_highlights()
+		_update_checkout_helper()
+		if boss_manager.is_boss_active():
+			var boss_def: BossDefinition = boss_manager.get_active_boss_definition()
+			var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
+			announce_tween.tween_callback(_start_new_throw)
+		else:
+			_start_new_throw()
+	)
 
 
 ## Show the game over overlay with run stats.
@@ -999,6 +1026,7 @@ func _build_game_state() -> Dictionary:
 		"scoring_modifier_manager": scoring_modifier_manager,
 		"dartboard": dartboard,
 		"hud": hud,
+		"throw_mechanic": throw_mechanic,
 	}
 
 
@@ -1139,15 +1167,14 @@ func _start_shop(response: Dictionary) -> void:
 	}
 	hud.cache_stats(current_stats, base_stats)
 
-	# Slide board off to the left, then back from the right with shop spots
+	# Slide board up off the top, then drop down from the top with shop spots
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var center: Vector2 = viewport_size / 2.0
-	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
-	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
+	var off_top: Vector2 = Vector2(center.x, -dartboard.board_radius * 2.0)
 
 	var tween: Tween = create_tween()
-	tween.tween_property(dartboard, "position", off_left, shop_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-	tween.tween_callback(_setup_shop_board.bind(response, off_right, center))
+	tween.tween_property(dartboard, "position", off_top, shop_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(_setup_shop_board.bind(response, off_top, center))
 
 
 ## Set up the shop board and slide it in from the right.
@@ -1445,17 +1472,16 @@ func _end_shop(response: Dictionary) -> void:
 	hud.exit_shop_mode()
 	UnlockManager.on_shop_closed()
 
-	# Slide board off to the right, clear shop, slide back from the left
+	# Slide board up off the top, clear shop, drop back down from the top
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var center: Vector2 = viewport_size / 2.0
-	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
-	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
+	var off_top: Vector2 = Vector2(center.x, -dartboard.board_radius * 2.0)
 
 	var tween: Tween = create_tween()
-	tween.tween_property(dartboard, "position", off_right, shop_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_property(dartboard, "position", off_top, shop_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tween.tween_callback(func() -> void:
 		dartboard.clear_shop_spots()
-		dartboard.position = off_left
+		dartboard.position = off_top
 		_awaiting_next_leg = false
 		scoring_modifier_manager.reset_for_leg()
 		x01_game.advance_leg()
@@ -2128,6 +2154,12 @@ func _recache_stats() -> void:
 func _update_checkout_highlights() -> void:
 	if _in_shop:
 		return
+	# Under Prism the board recolors reactively, so color/value can't be trusted —
+	# suppress the checkout hints entirely (the uncertainty is the boss).
+	if boss_manager.get_active_boss() is PrismBoss:
+		dartboard.set_checkout_segments([] as Array[Dictionary])
+		hud.set_remaining_checkout_available(false)
+		return
 	var remaining: int = x01_game.remaining_score
 	var checkout_segments: Array[Dictionary] = scoring_modifier_manager.calculate_checkout_segments(remaining)
 	# Defense-in-depth: drop any segment that would actually bust when thrown
@@ -2148,6 +2180,13 @@ func _update_checkout_highlights() -> void:
 ## Runs the solver for the current remaining score and darts left.
 func _update_checkout_helper() -> void:
 	if _in_shop:
+		hud.hide_checkout_helper()
+		dartboard.clear_illumination()
+		return
+
+	# Under Prism the board recolors reactively — the checkout helper goes dark
+	# because color/value can no longer be trusted.
+	if boss_manager.get_active_boss() is PrismBoss:
 		hud.hide_checkout_helper()
 		dartboard.clear_illumination()
 		return
@@ -2897,6 +2936,8 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 			AuidoManager.play_void_hit()
 			if final_remaining >= 0:
 				hud.update_remaining(final_remaining, gc)
+			if is_bust_anim and final_remaining > 0:
+				AuidoManager.play_bust_sound()
 		)
 		var r_shake: Vector2 = Vector2(randf_range(-5.0, 5.0), randf_range(-4.0, 4.0))
 		tween.tween_property(main_label, "position", main_label.position + r_shake, 0.04)
@@ -2906,6 +2947,8 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 		var bust_final: int = remaining_info.get("remaining_final", -1)
 		tween.tween_callback(func() -> void:
 			hud.update_remaining(bust_final, gc)
+			if bust_final > 0:
+				AuidoManager.play_bust_sound()
 		)
 
 	var final_source: HBoxContainer = prev_source_label

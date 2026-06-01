@@ -270,16 +270,86 @@ func get_throw_state() -> ThrowState:
 	return _state
 
 
+# ── The Drunkard boss: distorted aim + enforced meter length ──────────────────
+# Set by DrunkardBoss.on_leg_start via set_drunk_distortion(); cleared at leg end.
+var _drunk_active: bool = false
+## Zigzag depth applied to the bounce→position mapping (fraction of the meter half-
+## length). Makes the marker wander as it travels — learnable, not random.
+var _drunk_warp_amp: float = 0.0
+## Number of zigzag lobes along the meter.
+var _drunk_freq: float = 3.0
+## Visual-only perpendicular squiggle amplitude in px (the drunk "track" the marker rides).
+var _drunk_perp_amp: float = 0.0
+## Enforced minimum meter half-length: base px plus extra scaled by (100 − range stat).
+var _drunk_floor_base: float = 0.0
+var _drunk_floor_scale: float = 0.0
+## The vertical-release squiggle's X offset, locked when the player commits the
+## vertical meter. The horizontal phase (and the final landing) are shifted by this,
+## so the dart respects the curve the player rode on the vertical arm too. 0 = no drunk.
+var _drunk_locked_perp_x: float = 0.0
+
+
+## Configure the drunk distortion (called by DrunkardBoss). All amplitudes scale with
+## difficulty tier. Pass clear via clear_drunk_distortion().
+func set_drunk_distortion(warp_amp: float, freq: float, perp_amp: float, floor_base: float, floor_scale: float) -> void:
+	_drunk_active = true
+	_drunk_warp_amp = warp_amp
+	_drunk_freq = freq
+	_drunk_perp_amp = perp_amp
+	_drunk_floor_base = floor_base
+	_drunk_floor_scale = floor_scale
+	queue_redraw()
+
+
+## Remove the drunk distortion (called at the Drunkard's leg end).
+func clear_drunk_distortion() -> void:
+	_drunk_active = false
+	_drunk_warp_amp = 0.0
+	_drunk_perp_amp = 0.0
+	_drunk_floor_base = 0.0
+	_drunk_floor_scale = 0.0
+	_drunk_locked_perp_x = 0.0
+	queue_redraw()
+
+
+## Base X of the horizontal sweep: the placed centre shifted by the vertical lock's
+## squiggle offset, so the horizontal meter and the dart land where the vertical curve
+## left off. Equals _placed_center.x when not drunk (offset is 0).
+func _drunk_h_base() -> float:
+	return _placed_center.x + _drunk_locked_perp_x
+
+
+## Normalized horizontal-meter position (warped), measured from the shifted base.
+func _drunk_u_h() -> float:
+	return (_horizontal_x - _drunk_h_base()) / maxf(_aim_half_width, 0.001)
+
+
+## Warp a normalized meter position (sin(bounce_t), in [-1,1]) into a drunk zigzag.
+## Returns the input unchanged when the distortion is inactive.
+func _drunk_warp_pos(p: float) -> float:
+	if not _drunk_active:
+		return p
+	return clampf(p + _drunk_warp_amp * sin(p * _drunk_freq * PI), -1.0, 1.0)
+
+
+## Apply the enforced meter-length floor to a natural half-length, scaled by range stat.
+func _apply_drunk_floor(natural_half: float, range_stat: float) -> float:
+	if not _drunk_active:
+		return natural_half
+	var floor_half: float = _drunk_floor_base + _drunk_floor_scale * (100.0 - range_stat) / 99.0
+	return maxf(natural_half, floor_half)
+
+
 ## Compute the aim crosshair half-width in pixels from the horizontal_range stat (1-100).
 func _get_aim_half_width() -> float:
 	var normalized: float = clampf((horizontal_range - 1.0) / 99.0, 0.0, 1.0)
-	return lerpf(max_aim_half_width, min_aim_half_width, normalized)
+	return _apply_drunk_floor(lerpf(max_aim_half_width, min_aim_half_width, normalized), horizontal_range)
 
 
 ## Compute the aim crosshair half-height in pixels from the vertical_range stat (1-100).
 func _get_aim_half_height() -> float:
 	var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
-	return lerpf(max_aim_half_height, min_aim_half_height, normalized)
+	return _apply_drunk_floor(lerpf(max_aim_half_height, min_aim_half_height, normalized), vertical_range)
 
 
 ## Compute the vertical accuracy half-height in pixels (1-100 stat).
@@ -401,7 +471,7 @@ func _process(delta: float) -> void:
 			if not _scripted_mode:
 				var bounce_speed: float = _get_vertical_bounce_speed()
 				_bounce_t += delta * bounce_speed
-				_release_y = _placed_center.y + sin(_bounce_t) * _aim_half_height
+				_release_y = _placed_center.y + _drunk_warp_pos(sin(_bounce_t)) * _aim_half_height
 			# Emit normalized position for tutorial controller
 			var normalized_v: float = sin(_bounce_t)
 			meter_position_changed.emit(ThrowState.VERTICAL_RELEASE, normalized_v)
@@ -411,7 +481,7 @@ func _process(delta: float) -> void:
 			if not _scripted_mode:
 				var bounce_speed: float = _get_horizontal_bounce_speed()
 				_horizontal_bounce_t += delta * bounce_speed
-				_horizontal_x = _placed_center.x + sin(_horizontal_bounce_t) * _aim_half_width
+				_horizontal_x = _drunk_h_base() + _drunk_warp_pos(sin(_horizontal_bounce_t)) * _aim_half_width
 			# Emit normalized position for tutorial controller
 			var normalized_h: float = sin(_horizontal_bounce_t)
 			meter_position_changed.emit(ThrowState.HORIZONTAL_RELEASE, normalized_h)
@@ -524,9 +594,16 @@ func _cancel_to_aiming() -> void:
 ## Lock the vertical position and transition to HORIZONTAL_RELEASE.
 func _lock_vertical() -> void:
 	_locked_release_y = _release_y
+	# Lock the vertical squiggle's X offset (the marker's perpendicular position when
+	# committed) so the horizontal phase and the landing respect that curve too.
+	if _drunk_active:
+		var u_v: float = (_locked_release_y - _placed_center.y) / maxf(_aim_half_height, 0.001)
+		_drunk_locked_perp_x = _drunk_perp_offset(u_v)
+	else:
+		_drunk_locked_perp_x = 0.0
 	_state = ThrowState.HORIZONTAL_RELEASE
 	_horizontal_bounce_t = 0.0
-	_horizontal_x = _placed_center.x
+	_horizontal_x = _drunk_h_base()
 	state_changed.emit(ThrowState.HORIZONTAL_RELEASE)
 	queue_redraw()
 
@@ -562,7 +639,7 @@ func _resolve_throw() -> void:
 	var h_half: float = _get_horizontal_accuracy_half() * accuracy_mult
 	var v_half: float = _get_vertical_accuracy_half() * accuracy_mult
 	var center_x: float = _horizontal_x
-	var center_y: float = _locked_release_y + accuracy_skew_v
+	var center_y: float = _locked_release_y + accuracy_skew_v + _drunk_landing_perp_y()
 
 	# Gaussian sample with ellipse rejection
 	var offset_x: float = 0.0
@@ -585,7 +662,17 @@ func _resolve_throw() -> void:
 ## dart here; it then drifts to the RNG landing point, so the drift distance is a
 ## direct visualization of the accuracy miss. Valid immediately after a resolve.
 func get_resolve_center() -> Vector2:
-	return Vector2(_horizontal_x, _locked_release_y + accuracy_skew_v)
+	return Vector2(_horizontal_x, _locked_release_y + accuracy_skew_v + _drunk_landing_perp_y())
+
+
+## The perpendicular squiggle offset the horizontal-release marker visibly rode, in
+## Y (its travel is along X). Folded into the committed landing so the dart lands on
+## the drunk path the player saw, not the straight line under it. 0 when not drunk.
+## Mirrors the marker math in _draw_horizontal_release.
+func _drunk_landing_perp_y() -> float:
+	if not _drunk_active:
+		return 0.0
+	return _drunk_perp_offset(_drunk_u_h())
 
 
 # ── Drawing ──────────────────────────────────────────────────────────────────
@@ -633,6 +720,31 @@ func _draw_aim_crosshair(center: Vector2, h_arm_half: float, v_arm_half: float,
 		for y_sign: float in [-1.0, 1.0]:
 			var tip: Vector2 = center + Vector2(0.0, y_sign * v_arm_half)
 			draw_line(tip + Vector2(-tick_size, 0.0), tip + Vector2(tick_size, 0.0), v_color, width)
+
+
+## Draw the drunk "track" — the squiggly path the release marker rides (visual only).
+## `vertical` selects the meter axis; `center_local` is the arm centre in local coords.
+func _draw_drunk_track(vertical: bool, center_local: Vector2, half_w: float, half_h: float) -> void:
+	if not _drunk_active or _drunk_perp_amp <= 0.0:
+		return
+	var pts: PackedVector2Array = PackedVector2Array()
+	var steps: int = 48
+	for i: int in range(steps + 1):
+		var u: float = lerpf(-1.0, 1.0, float(i) / float(steps))
+		var perp: float = _drunk_perp_amp * sin(u * _drunk_freq * PI)
+		if vertical:
+			pts.append(center_local + Vector2(perp, u * half_h))
+		else:
+			pts.append(center_local + Vector2(u * half_w, perp))
+	var col: Color = Color(v_arm_color, 0.45) if vertical else Color(h_arm_color, 0.45)
+	draw_polyline(pts, col, 2.0)
+
+
+## Perpendicular squiggle offset (px) for the marker at a warped normalized position.
+func _drunk_perp_offset(normalized_pos: float) -> float:
+	if not _drunk_active:
+		return 0.0
+	return _drunk_perp_amp * sin(normalized_pos * _drunk_freq * PI)
 
 
 ## Draw the bouncing marker dot with optional outline ring for visibility.
@@ -705,14 +817,22 @@ func _draw_vertical_release() -> void:
 	_draw_ellipse_outline(ghost_local, ghost_h_half, ghost_v_half,
 		Color(ghost_color.r, ghost_color.g, ghost_color.b, outline_alpha), outline_width)
 
-	# Bouncing marker dot
-	var marker_pos: Vector2 = Vector2(_placed_center.x, _release_y) - global_position
+	# Bouncing marker dot (rides the drunk squiggle track when distorted)
+	var marker_x: float = _placed_center.x
+	if _drunk_active:
+		_draw_drunk_track(true, center, _aim_half_width, _aim_half_height)
+		var u_v: float = (_release_y - _placed_center.y) / maxf(_aim_half_height, 0.001)
+		marker_x += _drunk_perp_offset(u_v)
+	var marker_pos: Vector2 = Vector2(marker_x, _release_y) - global_position
 	_draw_marker(marker_pos)
 
 
 ## Draw the HORIZONTAL_RELEASE state: dimmed crosshair (H arm at locked Y) + ghost preview + marker.
 func _draw_horizontal_release() -> void:
-	var center: Vector2 = _placed_center - global_position
+	# X is the drunk-shifted base (the vertical lock's squiggle offset) so the whole
+	# horizontal crosshair lines up with where the dart will actually land. Equal to
+	# _placed_center.x when not drunk.
+	var center: Vector2 = Vector2(_drunk_h_base(), _placed_center.y) - global_position
 	var locked_y_local: float = _locked_release_y - global_position.y
 	var h_arm_center: Vector2 = Vector2(center.x, locked_y_local)
 	var pulse: Dictionary = _get_pulse_values()
@@ -740,8 +860,8 @@ func _draw_horizontal_release() -> void:
 			var tip: Vector2 = h_arm_center + Vector2(x_sign * _aim_half_width, 0.0)
 			draw_line(tip + Vector2(0.0, -tick), tip + Vector2(0.0, tick), h_arm_dimmed_color, dimmed_w)
 
-	# Ghost accuracy preview at current marker position
-	var preview_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y)
+	# Ghost accuracy preview at current marker position (incl. the drunk perp-Y)
+	var preview_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y + _drunk_landing_perp_y())
 	var ghost_dist: float = _get_target_distance_normalized_at(preview_pos)
 	var ghost_mult: float = _get_accuracy_multiplier(ghost_dist)
 	var ghost_h_half: float = _get_horizontal_accuracy_half() * ghost_mult
@@ -760,8 +880,12 @@ func _draw_horizontal_release() -> void:
 	_draw_ellipse_outline(ghost_local, ghost_h_half, ghost_v_half,
 		Color(ghost_color.r, ghost_color.g, ghost_color.b, outline_alpha), outline_width)
 
-	# Bouncing marker dot at locked Y
-	var marker_pos: Vector2 = Vector2(_horizontal_x, _locked_release_y) - global_position
+	# Bouncing marker dot at locked Y (rides the drunk squiggle track when distorted)
+	var marker_y: float = _locked_release_y
+	if _drunk_active:
+		_draw_drunk_track(false, h_arm_center, _aim_half_width, _aim_half_height)
+		marker_y += _drunk_perp_offset(_drunk_u_h())
+	var marker_pos: Vector2 = Vector2(_horizontal_x, marker_y) - global_position
 	_draw_marker(marker_pos)
 
 
@@ -966,7 +1090,8 @@ func sample_scatter_points(locked_release_pos: Vector2, sample_count: int = 10, 
 
 ## Draw the RESOLVING state: dimmed crosshair + accuracy-scaled ellipse with color feedback + frozen marker.
 func _draw_resolving() -> void:
-	var center: Vector2 = _placed_center - global_position
+	# Crosshair X uses the drunk-shifted base so it lines up with the landing point.
+	var center: Vector2 = Vector2(_drunk_h_base(), _placed_center.y) - global_position
 
 	# Dimmed crosshair — V arm at center, H arm at locked Y
 	var dimmed_w: float = maxf(aim_crosshair_thickness * 0.75, 1.0)
@@ -988,7 +1113,7 @@ func _draw_resolving() -> void:
 	var h_half: float = _get_horizontal_accuracy_half() * accuracy_mult
 	var v_half: float = _get_vertical_accuracy_half() * accuracy_mult
 	var zone_color: Color = _get_accuracy_zone_color(accuracy_mult)
-	var skewed_center: Vector2 = Vector2(_horizontal_x, _locked_release_y + _current_skew_offset) - global_position
+	var skewed_center: Vector2 = Vector2(_horizontal_x, _locked_release_y + _current_skew_offset + _drunk_landing_perp_y()) - global_position
 
 	_draw_filled_ellipse(skewed_center, h_half, v_half, zone_color)
 	_draw_ellipse_outline(skewed_center, h_half, v_half, Color(zone_color, minf(zone_color.a + 0.3, 1.0)), 1.5)

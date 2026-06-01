@@ -1,13 +1,15 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://dsoyhksjd6wrj"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/prism_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://dj8cvk1ufyqet" path="res://scripts/bosses/prism_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
 boss_id = &"prism_medium"
 display_name = "Prism"
-description = "Wedge colors reshuffle every turn."
+description = "Hits recolor the whole wedge plus that ring on both neighbor wedges."
 boss_script = ExtResource("2")
-tuning = {"reshuffle_interval": 1}
+tuning = {
+"splash": "wedge_neighbors"
+}
 difficulty_tier = &"medium"

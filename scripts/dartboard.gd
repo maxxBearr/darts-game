@@ -294,6 +294,30 @@ var _boss_void_wedges_prev: Array[int] = []
 ## Transition progress for void overlay (0 = old state, 1 = new state).
 var _void_transition_t: float = 1.0
 
+## Individually-voided rings on partially-void wedges (Void boss drift). Keyed
+## "<wedge_index>:<RingName>" (ring names as produced by calculate_score, e.g.
+## "3:Inner Single"). Whole-wedge voids stay in _boss_void_wedges; these are the
+## drifted rings that landed on otherwise-hittable wedges.
+var _boss_void_rings: Dictionary = {}
+
+## Previous drifted-ring set (fading out during the migration tween).
+var _boss_void_rings_prev: Dictionary = {}
+
+## Drift migration state (Void boss two-phase reveal). During phase 2 each entry
+## {"from": int, "to": int, "ring": String} is drawn sliding from its source wedge
+## to its neighbor; _drift_t (0→1) is the migration progress. Empty when idle.
+var _drift_moves: Array[Dictionary] = []
+var _drift_t: float = 1.0
+
+## Final steady-state void sets + pending moves, stashed between the two phases.
+var _void_final_whole: Array[int] = []
+var _void_final_rings: Dictionary = {}
+var _void_pending_moves: Array[Dictionary] = []
+
+## Active void-sequence tweens, killed if a new turn starts mid-animation.
+var _void_fill_tween: Tween = null
+var _void_drift_tween: Tween = null
+
 ## Wedge indices with boss-reduced values (shown in red instead of green).
 var boss_reduced_wedges: Array[int] = []
 
@@ -306,13 +330,35 @@ var _color_transition_t: float = 1.0
 ## Previous wedge colors for blending during transition.
 var _prev_wedge_colors: Array[Dictionary] = []
 
+## Prism recolor burst (per-hit, radiates outward from the hit ring). Keyed
+## "<wedge>:<ring_key>" (ring_key = inner_single/triple/outer_single/double).
+## _prism_burst_prev holds each ring's pre-recolor SegmentColor; _prism_burst_delay
+## holds its reveal delay as a fraction of the burst clock _prism_burst_t (0→1).
+var _prism_burst_active: bool = false
+var _prism_burst_t: float = 1.0
+var _prism_burst_prev: Dictionary = {}
+var _prism_burst_delay: Dictionary = {}
+var _prism_burst_tween: Tween = null
+
 @export_group("Void Overlay")
 
-## Duration of the void transition animation.
+## Duration of the void transition animation (cross-turn fade of whole-wedge voids).
 @export var void_transition_duration: float = 0.3
+
+## Void two-phase reveal (medium/hard with drift): phase 1 fades the freshly-chosen
+## whole wedges in (matching the easy version), then phase 2 slides the drifted rings
+## from their source wedge to the neighbor. Sequenced — phase 2 starts after phase 1.
+@export var void_fill_duration: float = 0.45
+@export var void_drift_duration: float = 0.6
 
 ## Duration for color transition animations (Prism boss).
 @export var color_transition_duration: float = 0.35
+
+## Prism recolor burst: total time for the radiating recolor of all affected rings,
+## and the per-ring fade window (as a fraction of the total) — the hit ring fades at
+## the start, the outermost affected rings finish by the end.
+@export var prism_recolor_duration: float = 0.5
+@export var prism_recolor_fade: float = 0.35
 
 ## Color used to draw voided wedge segments (base color under the swirl shader).
 @export var void_fill_color: Color = Color(0.05, 0.02, 0.1, 0.88)
@@ -494,6 +540,14 @@ func _draw() -> void:
 			outer_single_color = inner_single_color
 			triple_color = wedge_a_multi if is_even else wedge_b_multi
 			double_color = triple_color
+
+		# Prism recolor burst: each affected ring fades from its old colour to the new
+		# one on a delay that radiates outward from the hit ring.
+		if _prism_burst_active:
+			inner_single_color = _apply_prism_burst(wedge_idx, "inner_single", inner_single_color)
+			triple_color = _apply_prism_burst(wedge_idx, "triple", triple_color)
+			outer_single_color = _apply_prism_burst(wedge_idx, "outer_single", outer_single_color)
+			double_color = _apply_prism_burst(wedge_idx, "double", double_color)
 
 		# Double ring (inner boundary narrows when Narrow Double Ring boss is active)
 		_draw_segment(start_angle_deg, end_angle_deg,
@@ -846,7 +900,16 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		face_value = 0
 		multiplier = 0
 
-	var total_score: int = face_value * multiplier
+	# Boss voids: a whole-void wedge already scores 0 (its value is zeroed), but a
+	# drifted ring void sits on a wedge with a live value, so zero it here.
+	var seg_voided: bool = false
+	if wedge_index >= 0 and ring_name != "Off Board":
+		if _boss_void_wedges.has(wedge_index):
+			seg_voided = true
+		elif _boss_void_rings.has("%d:%s" % [wedge_index, ring_name]):
+			seg_voided = true
+
+	var total_score: int = 0 if seg_voided else face_value * multiplier
 	return {
 		"face_value": face_value,
 		"multiplier": multiplier,
@@ -855,6 +918,7 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 		"wedge_index": wedge_index,
 		"segment_color": segment_color,
 		"is_bull": is_bull,
+		"is_void": seg_voided,
 	}
 
 
@@ -1609,10 +1673,109 @@ func _set_void_transition(t: float) -> void:
 	queue_redraw()
 
 
+## Set the individually-voided drifted rings (Void boss medium/hard). Each entry is
+## a Dictionary {"wedge": int, "ring": String} where ring is a calculate_score ring
+## name. Does not start its own tween — call this BEFORE set_boss_void_wedges so the
+## shared _void_transition_t fades the whole-wedge voids and drifted rings together.
+func set_boss_void_rings(rings: Array) -> void:
+	_boss_void_rings_prev = _boss_void_rings.duplicate()
+	_boss_void_rings = {}
+	for entry: Dictionary in rings:
+		_boss_void_rings["%d:%s" % [entry["wedge"], entry["ring"]]] = true
+	_boss_overlay.queue_redraw()
+
+
+## Drive a full Void turn with the two-phase reveal. Phase 1 fades in every freshly-
+## chosen whole wedge (drift sources still shown whole, for continuity with easy);
+## phase 2 then slides the drifted rings from source → neighbor. `initial_wedges` are
+## the wedges shown whole in phase 1; `final_whole`/`final_rings` are the steady state
+## after drift; `drift_moves` are {"from","to","ring"} entries. With no drift this is
+## just the phase-1 fade. Supersedes the per-set set_boss_void_* path for Void.
+func play_void_turn(initial_wedges: Array[int], final_whole: Array[int], final_rings: Array[Dictionary], drift_moves: Array[Dictionary]) -> void:
+	if _void_fill_tween != null and _void_fill_tween.is_valid():
+		_void_fill_tween.kill()
+	if _void_drift_tween != null and _void_drift_tween.is_valid():
+		_void_drift_tween.kill()
+
+	# Cross-turn fade-out of the previous turn's voids.
+	_boss_void_wedges_prev = _boss_void_wedges.duplicate()
+	_boss_void_rings_prev = _boss_void_rings.duplicate()
+
+	# Stash the steady state for phase 2.
+	_void_final_whole = final_whole.duplicate()
+	_void_final_rings = {}
+	for entry: Dictionary in final_rings:
+		_void_final_rings["%d:%s" % [entry["wedge"], entry["ring"]]] = true
+	_void_pending_moves = drift_moves.duplicate()
+
+	# Phase 1: show all initial whole wedges fading in; no separated rings yet.
+	_boss_void_wedges = initial_wedges.duplicate()
+	boss_reduced_wedges = initial_wedges.duplicate()
+	_boss_void_rings = {}
+	_drift_moves.clear()
+	_drift_t = 1.0
+	_void_transition_t = 0.0
+
+	_void_fill_tween = create_tween()
+	_void_fill_tween.tween_method(_set_void_transition, 0.0, 1.0, void_fill_duration)
+	if not _void_pending_moves.is_empty():
+		_void_fill_tween.tween_callback(_start_void_drift)
+
+
+## Phase 2: drift sources drop to partial; their migrating ring slides to the neighbor.
+func _start_void_drift() -> void:
+	_boss_void_wedges = _void_final_whole.duplicate()
+	boss_reduced_wedges = _void_final_whole.duplicate()
+	# Static rings shown during the slide = final rings minus the arriving (to,ring)
+	# entries, which are represented by the in-flight migrating rings until t = 1.
+	_boss_void_rings = _void_final_rings.duplicate()
+	for move: Dictionary in _void_pending_moves:
+		_boss_void_rings.erase("%d:%s" % [move["to"], move["ring"]])
+	_boss_void_rings_prev = {}
+	_drift_moves = _void_pending_moves.duplicate()
+	_drift_t = 0.0
+	_void_transition_t = 1.0
+
+	_void_drift_tween = create_tween()
+	_void_drift_tween.tween_method(_set_drift_t, 0.0, 1.0, void_drift_duration)
+	_void_drift_tween.tween_callback(_finish_void_drift)
+
+
+func _set_drift_t(t: float) -> void:
+	_drift_t = t
+	_boss_overlay.queue_redraw()
+	queue_redraw()
+
+
+## Migration done: the arrived rings join the steady set; drop the in-flight overlay.
+func _finish_void_drift() -> void:
+	_boss_void_rings = _void_final_rings.duplicate()
+	_drift_moves.clear()
+	_drift_t = 1.0
+	_boss_overlay.queue_redraw()
+	queue_redraw()
+
+
 ## Clear all boss visual overlays and reset boss-specific board modifications.
 func clear_boss_overlays() -> void:
+	if _void_fill_tween != null and _void_fill_tween.is_valid():
+		_void_fill_tween.kill()
+	if _void_drift_tween != null and _void_drift_tween.is_valid():
+		_void_drift_tween.kill()
 	_boss_void_wedges.clear()
 	_boss_void_wedges_prev.clear()
+	_boss_void_rings.clear()
+	_boss_void_rings_prev.clear()
+	_drift_moves.clear()
+	_drift_t = 1.0
+	_void_final_whole.clear()
+	_void_final_rings.clear()
+	_void_pending_moves.clear()
+	if _prism_burst_tween != null and _prism_burst_tween.is_valid():
+		_prism_burst_tween.kill()
+	_prism_burst_active = false
+	_prism_burst_prev.clear()
+	_prism_burst_delay.clear()
 	_void_transition_t = 1.0
 	_color_transition_t = 1.0
 	_prev_wedge_colors.clear()
@@ -1653,6 +1816,49 @@ func animate_color_transition() -> void:
 	, 0.0, 1.0, color_transition_duration)
 
 
+## Play a Prism recolor burst. `segments` is an array of
+## {"wedge": int, "ring": String (ring_key), "prev_color": int (SegmentColor),
+## "dist": int (rings away from the hit ring)}. effective_wedge_colors must already
+## hold the new colors; this animates the reveal radiating outward by `dist`.
+func play_prism_recolor(segments: Array[Dictionary]) -> void:
+	if _prism_burst_tween != null and _prism_burst_tween.is_valid():
+		_prism_burst_tween.kill()
+	_prism_burst_prev.clear()
+	_prism_burst_delay.clear()
+	var max_dist: int = 0
+	for s: Dictionary in segments:
+		max_dist = maxi(max_dist, int(s["dist"]))
+	for s: Dictionary in segments:
+		var key: String = "%d:%s" % [s["wedge"], s["ring"]]
+		_prism_burst_prev[key] = int(s["prev_color"])
+		var frac: float = (float(s["dist"]) / float(max_dist)) if max_dist > 0 else 0.0
+		_prism_burst_delay[key] = frac * (1.0 - prism_recolor_fade)
+	_prism_burst_active = true
+	_prism_burst_t = 0.0
+	_prism_burst_tween = create_tween()
+	_prism_burst_tween.tween_method(_set_prism_burst_t, 0.0, 1.0, prism_recolor_duration)
+	_prism_burst_tween.tween_callback(func() -> void:
+		_prism_burst_active = false
+		queue_redraw())
+
+
+func _set_prism_burst_t(t: float) -> void:
+	_prism_burst_t = t
+	queue_redraw()
+
+
+## Blend a ring's target colour from its pre-recolor colour based on the burst clock,
+## so closer rings reveal first. Returns target_color unchanged if not in the burst.
+func _apply_prism_burst(wedge_idx: int, ring_key: String, target_color: Color) -> Color:
+	var key: String = "%d:%s" % [wedge_idx, ring_key]
+	if not _prism_burst_prev.has(key):
+		return target_color
+	var delay: float = float(_prism_burst_delay.get(key, 0.0))
+	var local_t: float = clampf((_prism_burst_t - delay) / maxf(prism_recolor_fade, 0.001), 0.0, 1.0)
+	var prev_render: Color = _segment_color_to_render(_prism_burst_prev[key])
+	return prev_render.lerp(target_color, local_t)
+
+
 ## Set the double ring width scale with a smooth tween. Used by Narrow Double Ring boss.
 func set_double_ring_scale(scale: float, animate: bool = true) -> void:
 	if not animate or is_equal_approx(double_ring_width_scale, scale):
@@ -1691,6 +1897,29 @@ func _draw_boss_overlay() -> void:
 	for wedge_idx: int in _boss_void_wedges:
 		_draw_void_wedge(wedge_idx, new_alpha)
 
+	# Drifted single-ring voids on partially-void wedges (Void boss medium/hard).
+	# These migrate as the reveal: prev rings fade out, current rings fade in.
+	if _void_transition_t < 1.0:
+		var ring_fade: float = 1.0 - _void_transition_t
+		for key: String in _boss_void_rings_prev:
+			if _boss_void_rings.has(key):
+				continue
+			_draw_void_ring_from_key(key, ring_fade)
+	for key: String in _boss_void_rings:
+		_draw_void_ring_from_key(key, new_alpha)
+
+	# Phase 2: drifted rings sliding from their source wedge to the neighbor.
+	for move: Dictionary in _drift_moves:
+		var from_idx: int = move["from"]
+		var to_idx: int = move["to"]
+		var delta: int = to_idx - from_idx
+		if delta == 19:
+			delta = -1
+		elif delta == -19:
+			delta = 1
+		var cur_start: float = _wedge_start_deg(from_idx) + _drift_t * float(delta) * WEDGE_ANGLE_DEG
+		_draw_void_ring_segment(cur_start, move["ring"], 1.0)
+
 
 func _draw_void_wedge(wedge_idx: int, alpha: float) -> void:
 	var start_deg: float = _wedge_start_deg(wedge_idx)
@@ -1708,6 +1937,35 @@ func _draw_void_wedge(wedge_idx: int, alpha: float) -> void:
 
 		var border_pts: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
 		_boss_overlay.draw_polyline(border_pts, border, void_border_thickness)
+
+
+## Draw a single voided ring from a "<wedge>:<RingName>" key (Void boss drift).
+func _draw_void_ring_from_key(key: String, alpha: float) -> void:
+	var sep: int = key.find(":")
+	if sep < 0:
+		return
+	var wedge_idx: int = key.substr(0, sep).to_int()
+	var ring_name: String = key.substr(sep + 1)
+	_draw_void_ring_segment(_wedge_start_deg(wedge_idx), ring_name, alpha)
+
+
+## Draw one void ring band at an arbitrary angular start (used by both keyed static
+## rings and the migrating rings sliding between wedges during the drift phase).
+func _draw_void_ring_segment(start_deg: float, ring_name: String, alpha: float) -> void:
+	if not RING_BOUNDS.has(ring_name):
+		return
+	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+	var bounds: Array = RING_BOUNDS[ring_name]
+	var inner_norm: float = bounds[0]
+	var outer_norm: float = bounds[1]
+	var fill: Color = Color(void_fill_color.r, void_fill_color.g, void_fill_color.b, void_fill_color.a * alpha)
+	var border: Color = Color(void_border_color.r, void_border_color.g, void_border_color.b, void_border_color.a * alpha)
+
+	var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
+	_boss_overlay.draw_colored_polygon(points, fill)
+
+	var border_pts: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
+	_boss_overlay.draw_polyline(border_pts, border, void_border_thickness)
 
 
 ## Set the wedge indices affected by the Recession boss (scuff/damage overlay).

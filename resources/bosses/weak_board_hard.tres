@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/bosses/weak_board_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"weak_board_hard"
+display_name = "Weak Board"
+description = "Each hit deeply wears that wedge's value for the leg; repeats stack."
+boss_script = ExtResource("2")
+tuning = {"reduction_percent": 0.22, "floor_fraction": 0.2}
+difficulty_tier = &"hard"

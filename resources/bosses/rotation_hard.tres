@@ -1,7 +1,7 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://55copnynptm1"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/rotation_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://c1y24gkvybaak" path="res://scripts/bosses/rotation_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +9,8 @@ boss_id = &"rotation_hard"
 display_name = "Rotation"
 description = "The board rotates 90-135° each turn."
 boss_script = ExtResource("2")
-tuning = {"min_rotation_deg": 90.0, "max_rotation_deg": 135.0}
+tuning = {
+"max_rotation_deg": 135.0,
+"min_rotation_deg": 90.0
+}
 difficulty_tier = &"hard"

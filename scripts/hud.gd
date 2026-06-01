@@ -299,13 +299,6 @@ func _ready() -> void:
 	_legendary_tooltip.visible = false
 	_legendary_tooltip.add_theme_font_size_override("font_size", 13)
 	_legendary_tooltip.add_theme_color_override("font_color", legendary_tint_color)
-	_legendary_tooltip.anchor_top = 1.0
-	_legendary_tooltip.anchor_bottom = 1.0
-	_legendary_tooltip.offset_left = _legendary_panel.offset_left
-	_legendary_tooltip.offset_right = _legendary_panel.offset_right
-	_legendary_tooltip.offset_top = _legendary_panel.offset_top - 22.0
-	_legendary_tooltip.offset_bottom = _legendary_panel.offset_top
-	_legendary_tooltip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(_legendary_tooltip)
 
 	# Start with all buttons and optional labels hidden
@@ -1361,6 +1354,8 @@ func _on_legendary_hover(wrapper: Control) -> void:
 	var reward: RuleModifierReward = wrapper.get_meta("reward") as RuleModifierReward
 	if reward:
 		_legendary_tooltip.text = "%s — %s" % [reward.display_name, reward.description]
+		var icon_rect: Rect2 = wrapper.get_global_rect()
+		_legendary_tooltip.position = Vector2(icon_rect.position.x, icon_rect.position.y - 20.0)
 		_legendary_tooltip.visible = true
 
 

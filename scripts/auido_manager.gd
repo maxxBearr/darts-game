@@ -124,13 +124,13 @@ func transition_to_menu_music() -> void:
 func on_turn_ended(turn_number: int) -> void:
 	var delta: float
 	if turn_number ==1:
-		delta = -0.038
+		delta = -0.06
 	if turn_number ==2:
-		delta = -0.048
+		delta = -0.07
 	elif turn_number == 3:
-		delta = -0.058
-	elif turn_number ==4:
 		delta = -0.08
+	elif turn_number ==4:
+		delta = -0.09
 	_tween_game_pitch(game_music.pitch_scale + delta)
 
 

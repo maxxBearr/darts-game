@@ -1,13 +1,16 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://c87223ie7n6b2"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/void_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://puk0bv7ht64q" path="res://scripts/bosses/void_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
 boss_id = &"void_medium"
-display_name = "The Void"
-description = "12 random wedges become voids each turn."
+description = "10 wedges become voids each turn; 1-2 rings drift per wedge."
 boss_script = ExtResource("2")
-tuning = {"void_count": 12}
+tuning = {
+"drift_max": 2,
+"drift_min": 1,
+"void_count": 10
+}
 difficulty_tier = &"medium"

@@ -25,6 +25,15 @@ func on_turn_start(_game_state: Dictionary) -> void:
 	pass
 
 
+## Called immediately after a dart has landed and been scored, once per throw.
+## Reactive (build-counter) bosses mutate the board here in response to where the
+## player hit. The landing dart's own score is already computed from pre-mutation
+## state, so changes made here only affect subsequent darts.
+## _result is the scored throw dictionary (wedge_index, ring_name, is_bull, etc.).
+func on_dart_landed(_result: Dictionary, _game_state: Dictionary) -> void:
+	pass
+
+
 ## Called when the boss leg ends (win or loss). Clean up any mutations.
 func on_leg_end(_game_state: Dictionary) -> void:
 	pass

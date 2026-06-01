@@ -9,6 +9,8 @@ boss_id = &"void_easy"
 description = "6 random wedges become voids each turn."
 boss_script = ExtResource("2")
 tuning = {
+"drift_max": 0,
+"drift_min": 0,
 "void_count": 6
 }
 title_color = Color(0.429917, 0.1995306, 0.9999998, 1)

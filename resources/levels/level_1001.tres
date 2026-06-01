@@ -4,13 +4,11 @@
 [ext_resource type="Script" uid="uid://dh4dl6dm316ok" path="res://scripts/unlock_conditions/level_cleared_condition.gd" id="2"]
 [ext_resource type="Resource" uid="uid://d4em8vnlu2oj8" path="res://resources/bosses/void_easy.tres" id="3"]
 [ext_resource type="Resource" uid="uid://ddk42n30lfafj" path="res://resources/bosses/prism_easy.tres" id="4"]
-[ext_resource type="Resource" uid="uid://c44tps7yvoc4b" path="res://resources/bosses/two_darts.tres" id="5"]
-[ext_resource type="Resource" uid="uid://cbmqhqnoxn472" path="res://resources/bosses/recession_easy.tres" id="6"]
-[ext_resource type="Resource" path="res://resources/bosses/void_medium.tres" id="7"]
-[ext_resource type="Resource" path="res://resources/bosses/prism_medium.tres" id="8"]
-[ext_resource type="Resource" path="res://resources/bosses/recession_medium.tres" id="9"]
-[ext_resource type="Resource" path="res://resources/bosses/rotation_medium.tres" id="10"]
-[ext_resource type="Resource" path="res://resources/bosses/narrow_double_medium.tres" id="11"]
+[ext_resource type="Resource" path="res://resources/bosses/drunkard_medium.tres" id="5"]
+[ext_resource type="Resource" path="res://resources/bosses/weak_board_easy.tres" id="6"]
+[ext_resource type="Resource" uid="uid://c87223ie7n6b2" path="res://resources/bosses/void_medium.tres" id="7"]
+[ext_resource type="Resource" uid="uid://dsoyhksjd6wrj" path="res://resources/bosses/prism_medium.tres" id="8"]
+[ext_resource type="Resource" path="res://resources/bosses/weak_board_medium.tres" id="9"]
 
 [sub_resource type="Resource" id="unlock_501"]
 script = ExtResource("2")
@@ -22,6 +20,6 @@ metadata/_custom_type_script = ExtResource("2")
 script = ExtResource("1")
 max_score_target = 1001
 boss_count = 2
-boss_pool = Array[Resource]([ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8"), ExtResource("9"), ExtResource("10"), ExtResource("11")])
+boss_pool = Array[Resource]([ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8"), ExtResource("9")])
 display_name = "1001"
 unlock_condition = SubResource("unlock_501")

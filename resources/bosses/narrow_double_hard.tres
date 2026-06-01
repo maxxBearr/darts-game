@@ -1,7 +1,7 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://fc5fm3e8klkd"]
 
-[ext_resource type="Script" path="res://scripts/bosses/boss_definition.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/bosses/narrow_double_ring_boss.gd" id="2"]
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://drqqvipiqx1eg" path="res://scripts/bosses/narrow_double_ring_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +9,7 @@ boss_id = &"narrow_double_hard"
 display_name = "Narrow Double Ring"
 description = "The double ring is narrowed by 75%."
 boss_script = ExtResource("2")
-tuning = {"width_scale": 0.25}
+tuning = {
+"width_scale": 0.25
+}
 difficulty_tier = &"hard"

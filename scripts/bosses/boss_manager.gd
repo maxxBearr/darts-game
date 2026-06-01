@@ -54,6 +54,12 @@ func on_turn_start(game_state: Dictionary) -> void:
 		_active_boss.on_turn_start(game_state)
 
 
+## Forward a landed dart to the active boss (reactive per-hit effects).
+func on_dart_landed(result: Dictionary, game_state: Dictionary) -> void:
+	if _active_boss != null:
+		_active_boss.on_dart_landed(result, game_state)
+
+
 ## End the current boss leg. Increments completion counter on win.
 func end_boss_leg(game_state: Dictionary, player_won: bool) -> void:
 	if _active_boss == null:
@@ -81,16 +87,10 @@ func get_active_boss_definition() -> BossDefinition:
 	return _active_boss_definition
 
 
-## Get recession info for a hit wedge. Returns empty dict if not recession-affected.
-func get_recession_data(wedge_index: int) -> Dictionary:
-	if _active_boss == null or not (_active_boss is RecessionBoss):
+## Get Weak Board reduction info for a hit wedge, for the floating-score display.
+## Returns empty dict if no Weak Board boss is active or the wedge is unaffected.
+func get_weak_board_data(wedge_index: int) -> Dictionary:
+	if _active_boss == null or not (_active_boss is WeakBoardBoss):
 		return {}
-	var rb: RecessionBoss = _active_boss as RecessionBoss
-	if not rb._affected_wedge_indices.has(wedge_index):
-		return {}
-	if wedge_index < 0 or wedge_index >= rb._original_wedge_values.size():
-		return {}
-	return {
-		"percent": rb.reduction_percent,
-		"original_face_value": rb._original_wedge_values[wedge_index],
-	}
+	var wb: WeakBoardBoss = _active_boss as WeakBoardBoss
+	return wb.get_reduction_for_wedge(wedge_index)

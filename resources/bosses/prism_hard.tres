@@ -1,15 +1,16 @@
-[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://ddk42n30lfafj"]
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://c5dqtpthd3fnl"]
 
 [ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
 [ext_resource type="Script" uid="uid://dj8cvk1ufyqet" path="res://scripts/bosses/prism_boss.gd" id="2"]
 
 [resource]
 script = ExtResource("1")
-boss_id = &"prism_easy"
+boss_id = &"prism_hard"
 display_name = "Prism"
-description = "Each hit recolors the whole wedge you land on for the leg."
+description = "Hits recolor the whole hit wedge and both neighbor wedges entirely."
 boss_script = ExtResource("2")
 tuning = {
-"splash": "wedge"
+"splash": "three_wedges"
 }
+difficulty_tier = &"hard"
 background_tint = Color(0, 0.67058825, 0, 0.6901961)

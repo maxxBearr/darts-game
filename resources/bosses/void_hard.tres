@@ -6,9 +6,11 @@
 [resource]
 script = ExtResource("1")
 boss_id = &"void_hard"
-description = "18 random wedges become voids each turn."
+description = "14 wedges become voids each turn; 2-3 rings drift per wedge."
 boss_script = ExtResource("2")
 tuning = {
-"void_count": 18
+"drift_max": 3,
+"drift_min": 2,
+"void_count": 14
 }
 difficulty_tier = &"hard"

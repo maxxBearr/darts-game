@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="BossDefinition" format=3 uid="uid://c6vs5ysaaei2v"]
+
+[ext_resource type="Script" uid="uid://igdw43aochr7" path="res://scripts/bosses/boss_definition.gd" id="1"]
+[ext_resource type="Script" uid="uid://cxoakgc07ar3h" path="res://scripts/bosses/drunkard_boss.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+boss_id = &"drunkard_medium"
+display_name = "The Drunkard"
+description = "Your aim wanders harder, and the release meters won't shrink."
+boss_script = ExtResource("2")
+tuning = {
+"floor_base": 130.0,
+"floor_scale": 90.0,
+"freq": 3.0,
+"perp_amp": 22.0,
+"warp_amp": 0.18
+}
+difficulty_tier = &"medium"
