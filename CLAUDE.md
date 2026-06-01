@@ -1,45 +1,70 @@
-# Spec: Throw Anticipation Animation
+# Spec: Rules Tutorial — Multi-Dart Checkout Drills + Mechanics Hand-off
 
-Adds a pre-impact "fly-in" to the dart throw. The intent is to inject anticipation into the moment between the RNG resolving the landing point and the scoring juice firing, and to make the accuracy miss *legible* as motion: the dart visibly travels from where you aimed to where it actually landed.
-
-Shipped 2026-06-01 (manual implementation in this session). This section documents the design so future work doesn't undo the reasoning.
+Status: **Designed 2026-06-01, not yet implemented.** Two additive extensions to the existing onboarding, agreed in a design session. Neither touches the mechanics-tutorial throw loop or the existing one-dart drill.
 
 ## Problem
 
-When a throw resolves, `throw_mechanic` samples the final landing point (gaussian + accuracy-ellipse math) and emits `throw_completed(hit_pos)`. The old `_on_throw_completed` then did everything on a single frame: dropped the marker (`_place_dart`), played the thunk, popped the floating score, and fired `flash_segment` (which drives the shader shockwave). No travel, no build-up — the juiciest moment of the game had zero anticipation, and the accuracy system (how far off you landed from your aim) was invisible after the fact.
+Two gaps in the current onboarding:
+
+1. **The rules slideshow under-drills checkouts.** It teaches x01 scoring and the doubles rule, then validates with a *single* one-dart drill (32 → D16, in `rules_slideshow.gd::_build_slides`). The core mental loop of x01 — subtract, keep a double in reach, finish on a double — only really clicks across *multi-dart* finishes. One single-dart check doesn't exercise it.
+2. **The mechanics tutorial and the rules slideshow are disconnected.** A new player finishes the throw tutorial (`tutorial_controller.gd::_t3_complete` → "Finish" → `tutorial_finished.emit`) and is dropped back to the menu with no nudge toward learning the rules, even though that's the natural next step.
 
 ## Design
 
-A **pure pre-step**. The entire existing impact flow is unchanged; the animation is bolted on in front of it. Sequence: **fly-in/shrink → impact → all the normal stuff**.
+Two additions, both additive; existing flows unchanged.
 
-- **Start anchor = aim center → land point.** The flying dart spawns large, centered on the aim point the player locked (`throw_mechanic.get_resolve_center()` = the accuracy-ellipse center), then shrinks to normal marker size while drifting onto the actual RNG landing point. The drift vector *is* the accuracy miss made visible — this was the deliberate choice over a pure in-place zoom (which would lose the accuracy story) or a fixed off-board "hand" anchor (literal flight, but a long travel path occludes the board and the drift no longer maps to accuracy).
-- **The shrink reads as the dart flying away from the player** (big = close, small = stuck in the distant board). A faint→opaque fade-in reinforces the far-to-near read.
-- **Easing is EASE_IN (accelerate)** so arrival lands like a sudden thunk — the anticipation payoff. Build slow, snap on contact.
-- **Nothing about the impact changed.** Per Max: "basically everything after the dart impact is the same. this just adds a step before the dart impact." All scoring juice (marker, thunk, shockwave, floating score, remaining-score countdown, game logic) fires together at arrival exactly as it did before.
+### 1. Mechanics → Rules hand-off (explicit choice)
 
-**Seamless hand-off:** the transient flyer is the same visual as the real marker (`dart_marker.gd`, same colors and `dart_size`). It ends at `hit_position` at exactly final marker size, at which point it is freed and `_resolve_throw_impact()` places the real marker on the same spot — no pop. The `throw_mechanic` stops drawing its frozen marker/ellipse the instant it resolves (DONE state draws nothing), so there's no double-marker during the flight. The declared-target highlight stays lit through the fly-in, which reinforces the aim-vs-land read.
+At mechanics-tutorial completion (`_t3_complete`), offer an **explicit two-way choice**: "Learn the rules" vs "Play / back to menu". (Per Max — explicit choice, *not* an auto-flow that opens rules on its own.) Choosing rules launches the existing rules slideshow **as a continuation**; on close it routes back to the original destination (`start_screen` / `assembly`) instead of sitting on top of a menu that isn't there yet. Rules launched from the menu button is byte-identical to today.
 
-## Implementation (as shipped)
+The routing subtlety: today `slideshow_closed` → `_on_rules_closed` just clears highlights (the menu is underneath). As a continuation, the slideshow must know it was opened from the tutorial and, on close, drive `_on_tutorial_finished(destination)`. Add a `launched_from_tutorial` flag + destination on the slideshow.
 
-- `scripts/throw_mechanic.gd` — added `get_resolve_center() -> Vector2`, returning `Vector2(_horizontal_x, _locked_release_y + accuracy_skew_v)`, the same point used as the ellipse center in `_resolve_throw`. Valid immediately after a resolve.
+### 2. Two more checkout drills — 55 (two darts) then 83 (three darts)
+
+After the existing one-dart drill, add two interactive checkout drills with escalating remaining: **55**, then **83**. Difficulty escalates as 1 → 2 → 3 darts of mental math.
+
+**Not throw-mechanic throws.** Clicking a board segment **auto-scores it** exactly like the existing 32 drill — no aim/meters/RNG. The only new thing vs. the existing drill is that these are *multi-dart*: a running remaining counts down across clicks until a legal finish. (Optional cosmetic polish, deferred: drop a mini dart marker + play the thunk on each click. Scoring stays click→auto-score regardless.)
+
+**Rules enforced** (the same ones slides 7–8 teach):
+- Each click subtracts the segment's value: face value × ring multiplier (Inner/Outer Single ×1, Triple ×3, Double ×2), outer bull = 25, double bull = 50.
+- Intermediate darts can be anything; **only the dart that reaches 0 must be a double** (incl. double bull).
+- **Bust** = drops below 0, leaves exactly 1, or reaches 0 on a non-double.
+
+**Decisions locked in the design session (Max):**
+- **Any legal checkout is accepted** — not a memorized path. The drill validates the *rules*, not a specific sequence. (55 and 83 each have many valid outs; this is truer to the game and makes Undo meaningful.)
+- **No dart-count cap** — soft framing ("finish from 83"). A clever shorter out is accepted and rewarded — note 83 is checkout-able in *two* darts (T17, D16), and that's a valid win, not a violation. 55 and 83 kept as written.
+- **Bust → show the bust, explain which rule broke, then reset remaining to the drill's start.** Independently, an **Undo** button steps back the last (non-busting) dart for players who just want to rethink. So: Undo = manual one-step back; bust = automatic reset with explanation.
+- **Next gates on a legal finish** (reaching exactly 0 on a double), same gating pattern as the existing drill.
+
+New drill-slide UI: a remaining-score readout ("Remaining: 55"), the thrown-dart list/markers, an Undo button. Reset is implicit on bust.
+
+## Implementation plan
+
+- `scripts/rules_slideshow.gd`:
+  - New slide `type: "checkout_drill"` with fields: `start_score`, body copy, bust/win feedback strings. The existing `type: "drill"` path is untouched.
+  - Segment → points value function (face × ring multiplier, plus 25 / 50 bull). Reuse `_get_mini_board_segment` for click→(wedge, ring).
+  - Running state: `_checkout_remaining: int`, `_checkout_darts: Array[Dictionary]` (each `{wedge_index, ring_name, value}`). Click handler branches to checkout logic when the current slide is a `checkout_drill`.
+  - Bust detection (below 0 / leaves 1 / zero-on-non-double) → feedback + reset to `start_score`. Win (zero-on-double) → enable Next. Undo pops the last dart and re-adds its value.
+  - Render: remaining readout + thrown-dart markers on the mini board (reuse the feedback-highlight draw path). Undo button in the drill container.
+  - Insert two `checkout_drill` slide entries (55, then 83) after the existing 32 drill, before the "That's the Basics" closer.
+  - Static-type everything; exported colors/sizes for the new readout + markers per project conventions.
+- `scripts/tutorial_callout.gd`:
+  - Add an **optional secondary action button** (e.g. `set_secondary_action(text: String, show: bool)` + a `secondary_pressed` signal), hidden by default. Purely additive — every existing beat that doesn't call it is byte-identical. Chosen over a dedicated choice widget (more code, new style to match for a one-off) and over repurposing the Skip button (Skip already means "skip tutorial" with its own signal/styling — overloading it is confusing).
+- `scripts/tutorial_controller.gd`:
+  - `_t3_complete` presents the two-way choice via the callout's primary + secondary buttons. **Primary = "Learn the rules"** (gets the emphasis — it's the step we're nudging toward); **secondary = "Play / back to menu"**. "Learn the rules" emits a new signal (e.g. `request_rules`) that asks `main.gd` to open the slideshow as a continuation; "Play / back to menu" runs the existing finish path (`tutorial_finished.emit(destination)`).
 - `scripts/main.gd`:
-  - New `@export_group("Throw Anticipation")`: `throw_anticipation_enabled` (bool, default true — off = instant land, original behavior), `anticipation_start_scale` (default 3.0×), `anticipation_start_alpha` (default 0.45; 1.0 disables the fade-in), `anticipation_duration` (default 0.3s).
-  - `play_throw_anticipation(hit_position, outer_color, inner_color, on_landed)` is the **shared, public** fly-in used by every throw path. It spawns the transient flyer (in the caller's marker colors, for a seamless hand-off) and runs a parallel tween (position + scale + modulate alpha) chained to `_on_anticipation_landed`, which frees the flyer and invokes `on_landed` — a zero-arg Callable (each caller binds its `hit_position`). When `throw_anticipation_enabled` is false, `on_landed` fires immediately.
-  - Normal throw: `_on_throw_completed` calls `play_throw_anticipation(..., _resolve_throw_impact.bind(hit_position))`. The former body of `_on_throw_completed` (everything from `clear_declared_target` onward) moved verbatim into `_resolve_throw_impact(hit_position)`.
-  - Shop throw: `_on_shop_throw_completed` calls `play_throw_anticipation(..., _resolve_shop_impact.bind(hit_position))`; its former body moved into `_resolve_shop_impact`.
-- `scripts/tutorial_controller.gd` — `_on_tutorial_throw_completed` routes through `get_parent().play_throw_anticipation(...)` (guarded by `has_method`), passing the tutorial's yellow marker colors and `_resolve_tutorial_throw.bind(hit_position)`; its former body (place marker + advance beat) moved into `_resolve_tutorial_throw`.
-- The fly-in is universal: normal, shop, and tutorial throws all play it (and all honor the single `throw_anticipation_enabled` flag on `main.gd`).
+  - Open `rules_slideshow` flagged as tutorial-continuation (carry the destination). On `slideshow_closed`, if flagged, call `_on_tutorial_finished(destination)` instead of only clearing highlights. Menu-launched path unchanged.
 
 ## Acceptance
-- Anticipation on: throw resolves → large dart flies in from aim center, shrinking/drifting to the landing point → on arrival, marker + thunk + shockwave + score all fire as before. No double marker, no pop.
-- Anticipation off (`throw_anticipation_enabled = false`): every path lands instantly, byte-identical to old behavior.
-- Applies to ALL throws — normal, shop, and tutorial — each with a seamless color-matched hand-off to its own marker.
-- Drift direction/magnitude matches the actual accuracy miss (start = locked aim, end = RNG sample).
+- Existing 32 one-dart drill unchanged; two new drills (55, 83) play after it, before the closer.
+- Any legal checkout wins; intermediate darts unrestricted; the finishing dart must be a double (or double bull).
+- A busting dart names the broken rule and resets the drill; Undo steps back exactly one dart.
+- No dart-count cap — a legal shorter finish (e.g. 83 in two via T17, D16) is accepted.
+- Mechanics-tutorial completion offers "Learn the rules" vs "Play / back to menu"; choosing rules opens the slideshow and returns to the correct destination on close. Menu-launched rules is unchanged.
 
-## Deferred / easy follow-ups
-- Scale **overshoot** at the end (tween to ~0.9× then settle to 1.0) for a squash-on-impact pop.
-- A faint motion-trail / streak behind the flyer.
-Both are additive and don't touch the impact flow.
+## Deferred / polish
+- Cosmetic mini dart marker + thunk per click (scoring stays click→auto-score).
+- Ellipse-reference copy pass in `rules_slideshow.gd` (pre-existing deferred item, unrelated).
 
 ---
 

@@ -109,6 +109,26 @@ signal slideshow_closed
 ## Normalized radius for number placement (between RING_DOUBLE and surround edge).
 @export var mini_number_radius: float = 0.90
 
+@export_group("Checkout Drill")
+
+## Font size for the remaining-score readout during checkout drills.
+@export var checkout_remaining_font_size: int = 18
+
+## Color of the remaining-score readout.
+@export var checkout_remaining_color: Color = Color(1.0, 0.95, 0.85)
+
+## Font size for the thrown-dart summary text.
+@export var checkout_dart_font_size: int = 13
+
+## Color of the thrown-dart summary text.
+@export var checkout_dart_color: Color = Color(0.75, 0.75, 0.7)
+
+## Fill color for dart markers placed on the mini board during checkout drills.
+@export var checkout_marker_color: Color = Color(0.9, 0.85, 0.2, 0.35)
+
+## Border color for checkout dart marker segments.
+@export var checkout_marker_border_color: Color = Color(1.0, 0.95, 0.7, 0.6)
+
 @export_group("")
 
 ## Ring radius thresholds (same as dartboard.gd for geometry sync).
@@ -153,6 +173,24 @@ var _drill_feedback_highlight: Dictionary = {}
 ## Currently hovered segment on the mini board during drill {wedge_index, ring_name}, or empty.
 var _drill_hover_segment: Dictionary = {}
 
+## Whether the current slide is a multi-dart checkout drill (vs single-segment drill).
+var _checkout_drill_active: bool = false
+
+## Current remaining score in the active checkout drill.
+var _checkout_remaining: int = 0
+
+## Starting score for the active checkout drill (used for bust reset).
+var _checkout_start_score: int = 0
+
+## Darts thrown in the active checkout drill: [{wedge_index, ring_name, value}, ...].
+var _checkout_darts: Array[Dictionary] = []
+
+## Whether the slideshow was opened as a continuation from the mechanics tutorial.
+var launched_from_tutorial: bool = false
+
+## Where to route on close when launched_from_tutorial is true.
+var tutorial_destination: String = ""
+
 # UI references
 var _scrim: ColorRect
 var _panel: Panel
@@ -167,6 +205,10 @@ var _drill_container: VBoxContainer
 var _drill_feedback: Label
 var _drill_answered_correctly: bool = false
 var _mini_board: Control
+var _checkout_container: VBoxContainer
+var _checkout_remaining_label: Label
+var _checkout_darts_label: Label
+var _checkout_undo_button: Button
 
 
 func _ready() -> void:
@@ -176,12 +218,25 @@ func _ready() -> void:
 	visible = false
 
 
-## Show the slideshow starting from slide 0.
+## Show the slideshow starting from slide 0 (normal menu-launched path).
 func show_slideshow() -> void:
+	launched_from_tutorial = false
+	tutorial_destination = ""
+	_show_slideshow_internal()
+
+
+## Show the slideshow as a continuation from the mechanics tutorial.
+## On close, routes back through the tutorial finish flow instead of staying on the menu.
+func show_slideshow_from_tutorial(destination: String) -> void:
+	launched_from_tutorial = true
+	tutorial_destination = destination
+	_show_slideshow_internal()
+
+
+func _show_slideshow_internal() -> void:
 	_current_slide = 0
 	_drill_answered_correctly = false
 	visible = true
-	# Defensive cleanup — clear any stale highlights on the main board
 	if dartboard != null:
 		dartboard.clear_tutorial_highlight()
 	_display_current_slide()
@@ -256,6 +311,28 @@ func _build_slides() -> void:
 			"correct_ring_name": "Double",
 			"correct_text": "Correct! Double 16 = 32. That's a checkout.",
 			"wrong_text": "Not quite — you need a double that equals 32. Try again!",
+			"highlight": [],
+		},
+		{
+			"type": "checkout_drill",
+			"title": "Checkout: 55",
+			"body": "Now finish from [b]55[/b]. Click darts on the board to subtract — your last dart must land on a double.",
+			"start_score": 55,
+			"bust_below_zero": "Went below zero — bust! Remaining resets.",
+			"bust_left_one": "Left 1 remaining — no double sums to 1. Bust!",
+			"bust_non_double": "Hit zero on a non-double — the finishing dart must be a double. Bust!",
+			"win_text": "Checkout! You finished from 55.",
+			"highlight": [],
+		},
+		{
+			"type": "checkout_drill",
+			"title": "Checkout: 83",
+			"body": "Now try [b]83[/b]. More room to work — find a path to zero on a double.",
+			"start_score": 83,
+			"bust_below_zero": "Went below zero — bust! Remaining resets.",
+			"bust_left_one": "Left 1 remaining — no double sums to 1. Bust!",
+			"bust_non_double": "Hit zero on a non-double — the finishing dart must be a double. Bust!",
+			"win_text": "Checkout! You finished from 83.",
 			"highlight": [],
 		},
 		{
@@ -334,6 +411,36 @@ func _build_ui() -> void:
 	_drill_feedback.visible = false
 	text_col.add_child(_drill_feedback)
 
+	# Checkout drill UI (remaining readout, dart list, undo button)
+	_checkout_container = VBoxContainer.new()
+	_checkout_container.add_theme_constant_override("separation", 4)
+	_checkout_container.visible = false
+	text_col.add_child(_checkout_container)
+
+	_checkout_remaining_label = Label.new()
+	_checkout_remaining_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_checkout_remaining_label.add_theme_font_size_override("font_size", checkout_remaining_font_size)
+	_checkout_remaining_label.add_theme_color_override("font_color", checkout_remaining_color)
+	_checkout_container.add_child(_checkout_remaining_label)
+
+	var checkout_row: HBoxContainer = HBoxContainer.new()
+	checkout_row.add_theme_constant_override("separation", 8)
+	_checkout_container.add_child(checkout_row)
+
+	_checkout_darts_label = Label.new()
+	_checkout_darts_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_checkout_darts_label.add_theme_font_size_override("font_size", checkout_dart_font_size)
+	_checkout_darts_label.add_theme_color_override("font_color", checkout_dart_color)
+	_checkout_darts_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	checkout_row.add_child(_checkout_darts_label)
+
+	_checkout_undo_button = Button.new()
+	_checkout_undo_button.text = "Undo"
+	_checkout_undo_button.add_theme_font_size_override("font_size", 12)
+	_checkout_undo_button.custom_minimum_size = Vector2(60.0, 24.0)
+	_checkout_undo_button.pressed.connect(_on_checkout_undo)
+	checkout_row.add_child(_checkout_undo_button)
+
 	# Nav row
 	var nav_row: HBoxContainer = HBoxContainer.new()
 	nav_row.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -410,8 +517,9 @@ func _display_current_slide() -> void:
 	_prev_button.visible = _current_slide > 0
 	var is_last: bool = _current_slide == _slides.size() - 1
 	var is_drill: bool = slide["type"] == "drill"
+	var is_checkout: bool = slide["type"] == "checkout_drill"
 
-	if is_drill:
+	if is_drill or is_checkout:
 		_next_button.visible = not is_last
 		_next_button.disabled = not _drill_answered_correctly
 	else:
@@ -421,13 +529,18 @@ func _display_current_slide() -> void:
 	_close_button.visible = is_last
 	_slide_counter.text = "%d / %d" % [_current_slide + 1, _slides.size()]
 
-	# Drill UI — board click mode instead of text buttons
+	# Reset drill/checkout state
 	_drill_feedback.visible = false
 	_drill_answered_correctly = false
 	_drill_feedback_highlight = {}
 	_drill_hover_segment = {}
 	_drill_click_active = false
 	_drill_correct_segment = {}
+	_checkout_drill_active = false
+	_checkout_darts.clear()
+	_checkout_remaining = 0
+	_checkout_start_score = 0
+	_checkout_container.visible = false
 	_mini_board.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	if is_drill:
@@ -436,6 +549,14 @@ func _display_current_slide() -> void:
 			"wedge_index": slide.get("correct_wedge_index", 0),
 			"ring_name": slide.get("correct_ring_name", "Double"),
 		}
+		_mini_board.mouse_filter = Control.MOUSE_FILTER_STOP
+	elif is_checkout:
+		_drill_click_active = true
+		_checkout_drill_active = true
+		_checkout_start_score = slide.get("start_score", 0)
+		_checkout_remaining = _checkout_start_score
+		_checkout_container.visible = true
+		_update_checkout_display()
 		_mini_board.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	# Update mini board highlights
@@ -521,12 +642,20 @@ func _draw_mini_board() -> void:
 		var fb_wedge: int = _drill_feedback_highlight["wedge_index"]
 		var fb_ring: String = _drill_feedback_highlight["ring_name"]
 		var fb_color: Color = _drill_feedback_highlight["color"]
-		if RING_BOUNDS.has(fb_ring):
+		if fb_ring == "Double Bull":
+			_mini_board.draw_circle(center, r * RING_DOUBLE_BULL, fb_color)
+		elif fb_ring == "Single Bull":
+			_mini_board.draw_circle(center, r * RING_SINGLE_BULL, fb_color)
+		elif RING_BOUNDS.has(fb_ring):
 			var bounds: Array = RING_BOUNDS[fb_ring]
 			var start_deg: float = fb_wedge * 18.0 - 9.0
 			var end_deg: float = start_deg + 18.0
 			_draw_mini_segment(center, start_deg, end_deg, r * bounds[1], r * bounds[0], fb_color)
 			_draw_mini_segment_border(center, start_deg, end_deg, r * bounds[1], r * bounds[0])
+
+	# Draw checkout dart markers on the mini board
+	if _checkout_drill_active:
+		_draw_checkout_markers(center, r)
 
 
 func _draw_mini_highlights(center: Vector2, r: float) -> void:
@@ -653,24 +782,10 @@ func _on_mini_board_input(event: InputEvent) -> void:
 	if hit.is_empty():
 		return
 
-	var is_correct: bool = hit["wedge_index"] == _drill_correct_segment["wedge_index"] and hit["ring_name"] == _drill_correct_segment["ring_name"]
-	var slide: Dictionary = _slides[_current_slide]
-
-	if is_correct:
-		_drill_answered_correctly = true
-		_drill_feedback.text = slide.get("correct_text", "Correct!")
-		_drill_feedback.add_theme_color_override("font_color", drill_correct_color)
-		_drill_feedback.visible = true
-		_next_button.disabled = false
-		_drill_feedback_highlight = {"wedge_index": hit["wedge_index"], "ring_name": hit["ring_name"], "color": Color(0.15, 0.7, 0.25, 0.5)}
-		_drill_hover_segment = {}
+	if _checkout_drill_active:
+		_on_checkout_click(hit)
 	else:
-		_drill_feedback.text = slide.get("wrong_text", "Not quite — try again!")
-		_drill_feedback.add_theme_color_override("font_color", drill_wrong_color)
-		_drill_feedback.visible = true
-		_drill_feedback_highlight = {"wedge_index": hit["wedge_index"], "ring_name": hit["ring_name"], "color": Color(0.7, 0.15, 0.15, 0.5)}
-
-	_mini_board.queue_redraw()
+		_on_single_drill_click(hit)
 
 
 ## Determine which segment a local click position falls on in the mini board.
@@ -709,6 +824,172 @@ func _get_mini_board_segment(local_pos: Vector2) -> Dictionary:
 	var wedge_index: int = int(angle_deg / 18.0) % 20
 
 	return {"wedge_index": wedge_index, "ring_name": ring_name}
+
+
+# ── Single-segment drill click (existing 32 drill) ──────────────────────────
+
+func _on_single_drill_click(hit: Dictionary) -> void:
+	var is_correct: bool = hit["wedge_index"] == _drill_correct_segment["wedge_index"] and hit["ring_name"] == _drill_correct_segment["ring_name"]
+	var slide: Dictionary = _slides[_current_slide]
+
+	if is_correct:
+		_drill_answered_correctly = true
+		_drill_feedback.text = slide.get("correct_text", "Correct!")
+		_drill_feedback.add_theme_color_override("font_color", drill_correct_color)
+		_drill_feedback.visible = true
+		_next_button.disabled = false
+		_drill_feedback_highlight = {"wedge_index": hit["wedge_index"], "ring_name": hit["ring_name"], "color": Color(0.15, 0.7, 0.25, 0.5)}
+		_drill_hover_segment = {}
+	else:
+		_drill_feedback.text = slide.get("wrong_text", "Not quite — try again!")
+		_drill_feedback.add_theme_color_override("font_color", drill_wrong_color)
+		_drill_feedback.visible = true
+		_drill_feedback_highlight = {"wedge_index": hit["wedge_index"], "ring_name": hit["ring_name"], "color": Color(0.7, 0.15, 0.15, 0.5)}
+
+	_mini_board.queue_redraw()
+
+
+# ── Checkout drill logic ─────────────────────────────────────────────────────
+
+func _get_segment_value(segment: Dictionary) -> int:
+	var ring: String = segment.get("ring_name", "")
+	if ring == "Double Bull":
+		return 50
+	if ring == "Single Bull":
+		return 25
+	var wedge_idx: int = segment.get("wedge_index", -1)
+	if wedge_idx < 0 or wedge_idx >= WEDGE_ORDER.size():
+		return 0
+	var face: int = WEDGE_ORDER[wedge_idx]
+	match ring:
+		"Inner Single", "Outer Single":
+			return face
+		"Double":
+			return face * 2
+		"Triple":
+			return face * 3
+	return 0
+
+
+func _is_double(segment: Dictionary) -> bool:
+	var ring: String = segment.get("ring_name", "")
+	return ring == "Double" or ring == "Double Bull"
+
+
+func _get_segment_display_name(segment: Dictionary) -> String:
+	var ring: String = segment.get("ring_name", "")
+	if ring == "Double Bull":
+		return "D Bull"
+	if ring == "Single Bull":
+		return "S Bull"
+	var wedge_idx: int = segment.get("wedge_index", -1)
+	if wedge_idx < 0 or wedge_idx >= WEDGE_ORDER.size():
+		return "?"
+	var face: int = WEDGE_ORDER[wedge_idx]
+	match ring:
+		"Inner Single", "Outer Single":
+			return "S%d" % face
+		"Double":
+			return "D%d" % face
+		"Triple":
+			return "T%d" % face
+	return "?"
+
+
+func _on_checkout_click(hit: Dictionary) -> void:
+	var value: int = _get_segment_value(hit)
+	var new_remaining: int = _checkout_remaining - value
+	var slide: Dictionary = _slides[_current_slide]
+
+	if new_remaining < 0:
+		_drill_feedback.text = slide.get("bust_below_zero", "Below zero — bust!")
+		_drill_feedback.add_theme_color_override("font_color", drill_wrong_color)
+		_drill_feedback.visible = true
+		_drill_feedback_highlight = {"wedge_index": hit.get("wedge_index", -1), "ring_name": hit.get("ring_name", ""), "color": Color(0.7, 0.15, 0.15, 0.5)}
+		_reset_checkout()
+		_mini_board.queue_redraw()
+		return
+
+	if new_remaining == 1:
+		_drill_feedback.text = slide.get("bust_left_one", "Left 1 — bust!")
+		_drill_feedback.add_theme_color_override("font_color", drill_wrong_color)
+		_drill_feedback.visible = true
+		_drill_feedback_highlight = {"wedge_index": hit.get("wedge_index", -1), "ring_name": hit.get("ring_name", ""), "color": Color(0.7, 0.15, 0.15, 0.5)}
+		_reset_checkout()
+		_mini_board.queue_redraw()
+		return
+
+	if new_remaining == 0 and not _is_double(hit):
+		_drill_feedback.text = slide.get("bust_non_double", "Zero on a non-double — bust!")
+		_drill_feedback.add_theme_color_override("font_color", drill_wrong_color)
+		_drill_feedback.visible = true
+		_drill_feedback_highlight = {"wedge_index": hit.get("wedge_index", -1), "ring_name": hit.get("ring_name", ""), "color": Color(0.7, 0.15, 0.15, 0.5)}
+		_reset_checkout()
+		_mini_board.queue_redraw()
+		return
+
+	# Valid dart
+	_checkout_darts.append({
+		"wedge_index": hit.get("wedge_index", -1),
+		"ring_name": hit.get("ring_name", ""),
+		"value": value,
+	})
+	_checkout_remaining = new_remaining
+	_drill_feedback.visible = false
+	_drill_feedback_highlight = {}
+
+	if new_remaining == 0:
+		_drill_answered_correctly = true
+		_drill_feedback.text = slide.get("win_text", "Checkout!")
+		_drill_feedback.add_theme_color_override("font_color", drill_correct_color)
+		_drill_feedback.visible = true
+		_next_button.disabled = false
+		_drill_hover_segment = {}
+
+	_update_checkout_display()
+	_mini_board.queue_redraw()
+
+
+func _on_checkout_undo() -> void:
+	if _checkout_darts.is_empty() or _drill_answered_correctly:
+		return
+	var last_dart: Dictionary = _checkout_darts.pop_back()
+	_checkout_remaining += last_dart["value"]
+	_drill_feedback.visible = false
+	_drill_feedback_highlight = {}
+	_update_checkout_display()
+	_mini_board.queue_redraw()
+
+
+func _reset_checkout() -> void:
+	_checkout_darts.clear()
+	_checkout_remaining = _checkout_start_score
+	_update_checkout_display()
+
+
+func _update_checkout_display() -> void:
+	_checkout_remaining_label.text = "Remaining: %d" % _checkout_remaining
+	var parts: Array[String] = []
+	for dart: Dictionary in _checkout_darts:
+		parts.append("%s (%d)" % [_get_segment_display_name(dart), dart["value"]])
+	_checkout_darts_label.text = ", ".join(parts) if parts.size() > 0 else ""
+	_checkout_undo_button.disabled = _checkout_darts.is_empty()
+
+
+func _draw_checkout_markers(center: Vector2, r: float) -> void:
+	for dart: Dictionary in _checkout_darts:
+		var ring: String = dart.get("ring_name", "")
+		var wedge_idx: int = dart.get("wedge_index", -1)
+		if ring == "Double Bull":
+			_mini_board.draw_circle(center, r * RING_DOUBLE_BULL, checkout_marker_color)
+		elif ring == "Single Bull":
+			_mini_board.draw_circle(center, r * RING_SINGLE_BULL, checkout_marker_color)
+		elif RING_BOUNDS.has(ring) and wedge_idx >= 0:
+			var bounds: Array = RING_BOUNDS[ring]
+			var start_deg: float = wedge_idx * 18.0 - 9.0
+			var end_deg: float = start_deg + 18.0
+			_draw_mini_segment(center, start_deg, end_deg, r * bounds[1], r * bounds[0], checkout_marker_color)
+			_draw_mini_segment_border(center, start_deg, end_deg, r * bounds[1], r * bounds[0])
 
 
 # ── Drill logic (legacy text buttons — kept for future multi-option drills) ──
@@ -751,6 +1032,8 @@ func _on_drill_answer(index: int) -> void:
 
 func _go_next() -> void:
 	if _current_slide < _slides.size() - 1:
+		if _next_button.disabled:
+			return
 		_current_slide += 1
 		_display_current_slide()
 

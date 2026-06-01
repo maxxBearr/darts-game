@@ -1500,6 +1500,7 @@ func _setup_tutorial_system() -> void:
 	tutorial_controller.ghost_dart_layer = ghost_dart_layer
 	tutorial_controller.hud = hud
 	tutorial_controller.tutorial_finished.connect(_on_tutorial_finished)
+	tutorial_controller.request_rules.connect(_on_tutorial_request_rules)
 	add_child(tutorial_controller)
 
 	# Start screen — lives in the HUD canvas layer
@@ -1671,6 +1672,15 @@ func _on_tutorial_finished(destination: String) -> void:
 		_show_start_screen()
 
 
+## Called when the tutorial requests opening the rules slideshow as a continuation.
+func _on_tutorial_request_rules(destination: String) -> void:
+	_in_tutorial = false
+	_clear_darts()
+	_hide_exit_tutorial_button()
+	dartboard.clear_declared_target()
+	rules_slideshow.show_slideshow_from_tutorial(destination)
+
+
 ## Called when "Rules of Darts" is pressed.
 func _on_show_rules() -> void:
 	rules_slideshow.show_slideshow()
@@ -1679,6 +1689,11 @@ func _on_show_rules() -> void:
 ## Called when the rules slideshow is closed.
 func _on_rules_closed() -> void:
 	dartboard.clear_tutorial_highlight()
+	if rules_slideshow.launched_from_tutorial:
+		var dest: String = rules_slideshow.tutorial_destination
+		rules_slideshow.launched_from_tutorial = false
+		rules_slideshow.tutorial_destination = ""
+		_on_tutorial_finished(dest)
 
 
 ## Called when the welcome modal "No thanks" is chosen.

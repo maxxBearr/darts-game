@@ -9,6 +9,7 @@ extends Node
 ## restore to pre-tutorial values when the tutorial ends or is skipped.
 
 signal tutorial_finished(destination: String)
+signal request_rules(destination: String)
 
 enum TutorialMode { FULL, STATS_ONLY }
 
@@ -266,6 +267,8 @@ func start_mechanics_tutorial(source: String, mode: TutorialMode = TutorialMode.
 			callout.next_pressed.connect(_on_next_pressed)
 		if not callout.skip_pressed.is_connected(_on_skip):
 			callout.skip_pressed.connect(_on_skip)
+		if not callout.secondary_pressed.is_connected(_on_secondary_pressed):
+			callout.secondary_pressed.connect(_on_secondary_pressed)
 
 	if throw_mechanic != null:
 		throw_mechanic.set_tutorial_visual_boost(true)
@@ -325,11 +328,14 @@ func stop_tutorial() -> void:
 
 	if callout != null:
 		callout.hide_callout()
+		callout.set_secondary_action("", false)
 		callout.show_skip_button = true
 		if callout.next_pressed.is_connected(_on_next_pressed):
 			callout.next_pressed.disconnect(_on_next_pressed)
 		if callout.skip_pressed.is_connected(_on_skip):
 			callout.skip_pressed.disconnect(_on_skip)
+		if callout.secondary_pressed.is_connected(_on_secondary_pressed):
+			callout.secondary_pressed.disconnect(_on_secondary_pressed)
 
 	if ghost_dart_layer != null:
 		ghost_dart_layer.clear_scatter()
@@ -372,6 +378,9 @@ func _on_next_pressed() -> void:
 		# Throw 3: UNDERSTAND (intro reached via Next from transition)
 		"t3_intro":
 			_t3_intro()
+		# Rules hand-off
+		"request_rules":
+			_request_rules()
 		# Finish
 		"finish":
 			_finish()
@@ -750,11 +759,12 @@ func _on_throw_3_completed() -> void:
 func _t3_complete() -> void:
 	_hide_skip_stats_button()
 	callout.show_callout(tutorial_strings["t3_complete"], callout_position)
-	callout.set_next_text("Finish")
+	callout.set_next_text("Learn the rules")
 	callout.set_next_visible(true)
+	callout.set_secondary_action("Play", true)
 	callout.show_skip_button = false
 	_waiting_for_next = true
-	_set_beat_after_next("finish")
+	_set_beat_after_next("request_rules")
 
 
 # ── Finish / Skip ────────────────────────────────────────────────────
@@ -773,6 +783,19 @@ func _on_skip() -> void:
 		tutorial_finished.emit("assembly")
 	else:
 		tutorial_finished.emit("start_screen")
+
+
+func _on_secondary_pressed() -> void:
+	if not _waiting_for_next:
+		return
+	_waiting_for_next = false
+	_finish()
+
+
+func _request_rules() -> void:
+	var dest: String = "assembly" if entry_source == "assembly" else "start_screen"
+	stop_tutorial()
+	request_rules.emit(dest)
 
 
 # ── Skip Stats Walkthrough button (Phase 3) ──────────────────────────

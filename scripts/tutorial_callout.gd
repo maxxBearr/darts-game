@@ -6,6 +6,7 @@ extends Control
 
 signal next_pressed
 signal skip_pressed
+signal secondary_pressed
 
 ## Background color of the callout panel.
 @export var panel_color: Color = Color(0.08, 0.08, 0.12, 0.92)
@@ -55,6 +56,7 @@ signal skip_pressed
 var _body_label: RichTextLabel
 var _next_button: Button
 var _skip_button: Button
+var _secondary_button: Button
 var _panel: Panel
 var _arrow_target: Vector2 = Vector2.ZERO
 var _show_arrow: bool = false
@@ -77,6 +79,7 @@ func show_callout(text: String, anchor_pos: Vector2 = Vector2.ZERO, arrow_target
 	_arrow_target = arrow_target
 	_next_button.visible = show_next_button
 	_skip_button.visible = show_skip_button
+	_secondary_button.visible = false
 	visible = true
 	queue_redraw()
 
@@ -103,6 +106,13 @@ func set_next_visible(show: bool) -> void:
 func set_next_text(text: String) -> void:
 	if _next_button != null:
 		_next_button.text = text
+
+
+## Show or hide the secondary action button with the given label.
+func set_secondary_action(text: String, show: bool) -> void:
+	if _secondary_button != null:
+		_secondary_button.text = text
+		_secondary_button.visible = show
 
 
 func _build_ui() -> void:
@@ -155,6 +165,15 @@ func _build_ui() -> void:
 	_next_button.custom_minimum_size = Vector2(80.0, 32.0)
 	_next_button.pressed.connect(func() -> void: next_pressed.emit())
 	button_row.add_child(_next_button)
+
+	# Secondary action button (hidden by default — used for tutorial hand-off choice)
+	_secondary_button = Button.new()
+	_secondary_button.add_theme_font_size_override("font_size", button_font_size)
+	_secondary_button.custom_minimum_size = Vector2(80.0, 32.0)
+	_secondary_button.modulate = Color(0.7, 0.7, 0.7)
+	_secondary_button.pressed.connect(func() -> void: secondary_pressed.emit())
+	_secondary_button.visible = false
+	button_row.add_child(_secondary_button)
 
 	# Skip button (top-right of the panel)
 	_skip_button = Button.new()
