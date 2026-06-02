@@ -859,14 +859,19 @@ func _show_stat_preview(upgrade: Dictionary) -> void:
 	if scale == "direct":
 		preview_stats[property] = minf(preview_stats[property] + float(value), 100.0)
 	elif scale == "speed":
-		var internal_boost: float = float(value) * (4.0 / 40.0)
+		# Speed values are display units (0-100); convert to internal 1.0-5.0 (inverse of
+		# _speed_to_display: 1 display point = 4/100 internal). Must match _apply_upgrade.
+		var internal_boost: float = float(value) * (4.0 / 100.0)
 		preview_stats[property] = minf(preview_stats[property] + internal_boost, 5.0)
 
-	# Apply tradeoff penalty
+	# Apply tradeoff penalty. Must match _apply_upgrade in main.gd: scale speed penalties from
+	# display to internal units, and floor the sibling axis at 1.0.
 	if upgrade["tradeoff"]:
 		var penalty_prop: String = upgrade["penalty_property"]
-		var penalty_amount: int = upgrade["penalty_amount"]
-		preview_stats[penalty_prop] = preview_stats[penalty_prop] - float(penalty_amount)
+		var penalty_delta: float = float(upgrade["penalty_amount"])
+		if scale == "speed":
+			penalty_delta *= (4.0 / 100.0)
+		preview_stats[penalty_prop] = maxf(preview_stats[penalty_prop] - penalty_delta, 1.0)
 
 	# Update bars with preview coloring
 	for key: String in STAT_KEYS:
@@ -1061,8 +1066,13 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 	else:
 		text = "Target: %s%d = %d" % [prefix, face_value, total_score]
 
-	# Append bust warning or streak info
-	if would_bust:
+	# A voided segment scores nothing — flag it so the player isn't blindsided.
+	var is_void: bool = result.get("is_void", false)
+
+	# Append void/bust warning or streak info
+	if is_void:
+		text += " | VOID"
+	elif would_bust:
 		text += " | !! BUST"
 	else:
 		for line: String in streak_lines:
@@ -1071,8 +1081,10 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 	hover_tooltip.text = text
 	hover_tooltip.visible = true
 
-	# Color: red for bust, gold for checkout, white otherwise
-	if would_bust:
+	# Color: purple for void, red for bust, gold for checkout, white otherwise
+	if is_void:
+		hover_tooltip.modulate = Color(0.7, 0.45, 0.95)
+	elif would_bust:
 		hover_tooltip.modulate = Color(1.0, 0.3, 0.25)
 	elif is_checkout:
 		hover_tooltip.modulate = Color(1.0, 0.85, 0.2)

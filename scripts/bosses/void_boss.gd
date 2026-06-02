@@ -116,10 +116,23 @@ func on_turn_start(game_state: Dictionary) -> void:
 				partial_rings.append({"wedge": w, "ring": r})
 
 	# 5. Apply: whole-void wedges score 0; partial wedges keep their value (only the
-	#    drifted rings score 0, handled in Dartboard.calculate_score).
+	#    drifted rings score 0, handled in Dartboard.calculate_score and, for the
+	#    solver/checkout/tooltip, via smm.voided_rings).
 	for idx: int in whole_void_wedges:
 		smm.effective_wedge_values[idx] = 0
 	_zeroed_wedges = whole_void_wedges.duplicate()
+
+	# Publish the steady-state void set to the scoring manager so its solver, checkout
+	# segments, and hover tooltip agree with live scoring. Whole-void wedges (already
+	# zeroed above) are included for completeness; drifted partial rings live only here.
+	var voided: Dictionary = {}
+	for idx: int in whole_void_wedges:
+		for r: String in RINGS:
+			voided["%d:%s" % [idx, r]] = true
+	for entry: Dictionary in partial_rings:
+		voided["%d:%s" % [entry["wedge"], entry["ring"]]] = true
+	smm.voided_rings = voided
+
 	smm._bump_state_version()
 
 	dartboard.effective_wedge_values = smm.effective_wedge_values
@@ -132,6 +145,7 @@ func on_leg_end(game_state: Dictionary) -> void:
 	var smm: Node = game_state["scoring_modifier_manager"]
 	var dartboard: Node2D = game_state["dartboard"]
 	_restore_wedge_values(smm)
+	smm.voided_rings = {}
 	dartboard.effective_wedge_values = smm.effective_wedge_values
 	dartboard.clear_boss_overlays()
 	_zeroed_wedges.clear()

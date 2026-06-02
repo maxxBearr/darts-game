@@ -283,6 +283,25 @@ var _drunk_perp_amp: float = 0.0
 ## Enforced minimum meter half-length: base px plus extra scaled by (100 − range stat).
 var _drunk_floor_base: float = 0.0
 var _drunk_floor_scale: float = 0.0
+
+## How much the player's Range stat trims the enforced floor back toward their natural
+## (un-floored) meter length. 0 = hard floor (old behavior); 1 = floor fully removed at
+## max range. Lets a maxed-accuracy player keep some of their investment instead of being
+## flattened to a fixed minimum. Kept modest so the floor still bites.
+const DRUNK_FLOOR_RANGE_EASE: float = 0.35
+
+## How much of the floor-induced pixel-speed inflation is cancelled by slowing the bounce
+## rate. The marker's pixel speed = bounce_rate × meter length, so the floor stretching the
+## meter would silently undo Speed Control; this claws part of it back. 0 = none, 1 = pixel
+## speed fully tracks the natural meter again.
+const DRUNK_SPEED_COMPENSATION: float = 0.5
+
+## Extra Speed-Control bite under the Drunkard. The bounce rate is multiplied by this on
+## top of its normal effect, scaled by how much Speed Control is invested: a maxed stat
+## slows the Drunkard meter to this fraction, a minimum stat leaves it unchanged. Lower =
+## maxed Speed Control slows the meter more. This is what makes the stat meaningfully
+## counter the Drunkard rather than being drowned out by the meter-length floor.
+const DRUNK_SPEED_STAT_SLOW: float = 0.4
 ## The vertical-release squiggle's X offset, locked when the player commits the
 ## vertical meter. The horizontal phase (and the final landing) are shifted by this,
 ## so the dart respects the curve the player rode on the vertical arm too. 0 = no drunk.
@@ -337,19 +356,33 @@ func _apply_drunk_floor(natural_half: float, range_stat: float) -> float:
 	if not _drunk_active:
 		return natural_half
 	var floor_half: float = _drunk_floor_base + _drunk_floor_scale * (100.0 - range_stat) / 99.0
+	# Range investment trims the floor toward the player's natural meter (more trim the
+	# higher the range), so maxed accuracy isn't simply flattened to the fixed minimum.
+	var range_norm: float = clampf((range_stat - 1.0) / 99.0, 0.0, 1.0)
+	floor_half = lerpf(floor_half, natural_half, DRUNK_FLOOR_RANGE_EASE * range_norm)
 	return maxf(natural_half, floor_half)
+
+
+## Natural (un-floored) aim half-width from the horizontal_range stat (1-100).
+func _natural_aim_half_width() -> float:
+	var normalized: float = clampf((horizontal_range - 1.0) / 99.0, 0.0, 1.0)
+	return lerpf(max_aim_half_width, min_aim_half_width, normalized)
+
+
+## Natural (un-floored) aim half-height from the vertical_range stat (1-100).
+func _natural_aim_half_height() -> float:
+	var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
+	return lerpf(max_aim_half_height, min_aim_half_height, normalized)
 
 
 ## Compute the aim crosshair half-width in pixels from the horizontal_range stat (1-100).
 func _get_aim_half_width() -> float:
-	var normalized: float = clampf((horizontal_range - 1.0) / 99.0, 0.0, 1.0)
-	return _apply_drunk_floor(lerpf(max_aim_half_width, min_aim_half_width, normalized), horizontal_range)
+	return _apply_drunk_floor(_natural_aim_half_width(), horizontal_range)
 
 
 ## Compute the aim crosshair half-height in pixels from the vertical_range stat (1-100).
 func _get_aim_half_height() -> float:
-	var normalized: float = clampf((vertical_range - 1.0) / 99.0, 0.0, 1.0)
-	return _apply_drunk_floor(lerpf(max_aim_half_height, min_aim_half_height, normalized), vertical_range)
+	return _apply_drunk_floor(_natural_aim_half_height(), vertical_range)
 
 
 ## Compute the vertical accuracy half-height in pixels (1-100 stat).
@@ -364,14 +397,34 @@ func _get_horizontal_accuracy_half() -> float:
 	return lerpf(max_horizontal_accuracy_half, min_horizontal_accuracy_half, normalized)
 
 
+## Combined Drunkard slowdown applied to the bounce rate. Two stacking effects, both 1.0
+## (no change) when not drunk:
+##   • Speed-Control bite — the more Speed Control invested, the slower the meter, scaled
+##     toward DRUNK_SPEED_STAT_SLOW at max stat. This is the dominant lever.
+##   • Length compensation — cancels part of the pixel-speed inflation from the meter-length
+##     floor, so a long floored meter doesn't read as fast (DRUNK_SPEED_COMPENSATION).
+func _drunk_bounce_factor(speed_stat: float, natural_half: float, floored_half: float) -> float:
+	if not _drunk_active:
+		return 1.0
+	var speed_norm: float = clampf((clampf(speed_stat, 1.0, 5.0) - 1.0) / 4.0, 0.0, 1.0)
+	var stat_factor: float = lerpf(1.0, DRUNK_SPEED_STAT_SLOW, speed_norm)
+	var stretch_factor: float = 1.0
+	if natural_half > 0.001 and floored_half > natural_half:
+		var stretch: float = floored_half / natural_half
+		stretch_factor = lerpf(1.0, 1.0 / stretch, DRUNK_SPEED_COMPENSATION)
+	return stat_factor * stretch_factor
+
+
 ## Compute the vertical marker bounce speed from vertical_speed stat.
 func _get_vertical_bounce_speed() -> float:
-	return (6.0 - clampf(vertical_speed, 1.0, 5.0)) * 2.5
+	var base_speed: float = (6.0 - clampf(vertical_speed, 1.0, 5.0)) * 2.5
+	return base_speed * _drunk_bounce_factor(vertical_speed, _natural_aim_half_height(), _get_aim_half_height())
 
 
 ## Compute the horizontal marker bounce speed from horizontal_speed stat.
 func _get_horizontal_bounce_speed() -> float:
-	return (6.0 - clampf(horizontal_speed, 1.0, 5.0)) * 2.5
+	var base_speed: float = (6.0 - clampf(horizontal_speed, 1.0, 5.0)) * 2.5
+	return base_speed * _drunk_bounce_factor(horizontal_speed, _natural_aim_half_width(), _get_aim_half_width())
 
 
 ## Compute normalized distance from an arbitrary point to the target centroid.

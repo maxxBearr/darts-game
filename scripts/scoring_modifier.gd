@@ -55,6 +55,34 @@ func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.NONE
 
 
+## Receive the wedge the player picked during a PICK_WEDGE flow.
+## ON_ACQUIRE modifiers consume the choice via apply_to_board() instead; PER_DART
+## PICK_WEDGE modifiers (e.g. FlipSignModifier) override this to store the target,
+## since the manager never calls apply_to_board() for them. No-op by default.
+func apply_picked_wedge(_wedge_index: int) -> void:
+	pass
+
+
+## Notify a modifier that two wedges swapped board positions. Position-tied per-dart
+## state (e.g. a sign flip) must travel with the wedge through the swap, exactly like
+## the wedge's value and colors do. Override in subclasses that pin to a position.
+func on_wedges_swapped(_idx_a: int, _idx_b: int) -> void:
+	pass
+
+
+## Header text shown while the player picks a wedge for this modifier.
+## Override in PICK_WEDGE subclasses for type-specific phrasing.
+func get_pick_wedge_header() -> String:
+	return "Pick a wedge"
+
+
+## Confirmation prompt shown when hovering a wedge during a PICK_WEDGE pick.
+## current_value is the hovered wedge's current effective face value.
+## Override in PICK_WEDGE subclasses for type-specific phrasing.
+func get_pick_wedge_prompt(current_value: int) -> String:
+	return "Pick wedge %d? Click to confirm, Escape to cancel" % current_value
+
+
 ## Get the current streak count for display purposes.
 ## Override in streak modifier subclasses. Returns 0 for non-streak modifiers.
 func get_streak_count() -> int:

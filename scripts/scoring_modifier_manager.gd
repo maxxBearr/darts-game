@@ -26,6 +26,14 @@ var effective_wedge_colors: Array[Dictionary] = []
 ## but only PER_DART modifiers are called during process_score().
 var active_modifiers: Array[Resource] = []
 
+## Segments voided by a boss this turn, keyed "<wedge_index>:<RingName>" (e.g.
+## "3:Double"). A voided segment scores 0 no matter what modifiers would do to it.
+## The Void boss sets this each turn; whole-void wedges (value zeroed) are included
+## too so the solver, checkout segments, and hover tooltip all agree with live
+## scoring. Empty in normal play. Drifted (partial) ring voids live ONLY here — the
+## wedge keeps its value — which is why the solver must consult this, not just values.
+var voided_rings: Dictionary = {}
+
 ## Maximum number of streak modifier slots. Default 3 (one per category).
 var max_streak_slots: int = 3
 
@@ -118,6 +126,10 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 	# Initialize the modifications tracking array — modifiers append to this
 	result["modifications"] = []
 
+	# Mark boss-voided segments up front (synthesized results from the solver/tooltip
+	# don't carry is_void; live results from calculate_score already do).
+	_mark_void(result)
+
 	# Build context dictionary for modifiers that need history or board state
 	var context: Dictionary = {
 		"history_turn": hit_history_turn,
@@ -128,10 +140,22 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 		"is_preview": is_preview,
 	}
 
-	# Run through all enabled PER_DART modifiers in acquisition order
+	# Run through all enabled PER_DART modifiers in acquisition order.
+	# FlipSignModifier is held back for a final pass (see _apply_flip_pass).
 	for modifier: Resource in active_modifiers:
 		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.enabled:
+			if modifier is FlipSignModifier:
+				continue
 			result = modifier.apply(result, context)
+
+	# Flip sign is the dead-last step so it composes cleanly with everything else.
+	result = _apply_flip_pass(result, context)
+
+	# A voided segment scores 0 regardless of what any modifier did to it — modifiers
+	# recompute total_score from face×multiplier, which would otherwise resurrect the
+	# void. This is the last word on the score.
+	if result.get("is_void", false):
+		result["total_score"] = 0
 
 	# Only record to history if this is a real throw, not a hover preview
 	if not is_preview:
@@ -228,6 +252,11 @@ func add_modifier(modifier: Resource, config: Dictionary, explicit_replacement: 
 	# If this is an ON_ACQUIRE modifier, apply its board-state changes now
 	if modifier.timing == ScoringEnums.ModifierTiming.ON_ACQUIRE:
 		modifier.apply_to_board(effective_wedge_values, effective_wedge_colors, config)
+		# A swap relocates a wedge's value and colors between two slots. Position-tied
+		# per-dart state (sign flips) must travel with it, so notify other modifiers.
+		# Keyed on the config shape, not the class, so any swap-style mutation works.
+		if config.has("wedge_index_1") and config.has("wedge_index_2"):
+			_notify_wedges_swapped(config["wedge_index_1"], config["wedge_index_2"])
 		_bump_state_version()
 
 	UnlockManager.on_item_acquired({
@@ -238,6 +267,14 @@ func add_modifier(modifier: Resource, config: Dictionary, explicit_replacement: 
 		UnlockManager.on_slots_state_changed(_build_slots_context())
 
 	return replaced
+
+
+## Tell every active modifier that two wedges swapped board positions, so any
+## position-tied per-dart state (e.g. FlipSignModifier targets) follows its wedge.
+func _notify_wedges_swapped(idx_a: int, idx_b: int) -> void:
+	for m: Resource in active_modifiers:
+		if m is ScoringModifier:
+			(m as ScoringModifier).on_wedges_swapped(idx_a, idx_b)
 
 
 ## Count currently active RELIC-kind modifiers. Used by RelicCountCondition
@@ -320,6 +357,7 @@ func reset_for_run() -> void:
 	hit_history_leg.clear()
 	hit_history_run.clear()
 	active_modifiers.clear()
+	voided_rings.clear()
 	_init_default_board_state()
 	_bump_state_version()
 
@@ -357,6 +395,8 @@ func speculative_score(raw_result: Dictionary) -> Dictionary:
 	var result: Dictionary = raw_result.duplicate()
 	result["modifications"] = []
 
+	_mark_void(result)
+
 	var context: Dictionary = {
 		"history_turn": hit_history_turn,
 		"history_leg": hit_history_leg,
@@ -368,9 +408,59 @@ func speculative_score(raw_result: Dictionary) -> Dictionary:
 
 	for modifier: Resource in active_modifiers:
 		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.enabled:
+			if modifier is FlipSignModifier:
+				continue
 			result = modifier.apply(result, context)
 
+	result = _apply_flip_pass(result, context)
+
+	if result.get("is_void", false):
+		result["total_score"] = 0
+
 	return result
+
+
+## Flag a result as voided if its wedge+ring is in the boss void set. Synthesized
+## results (solver, checkout segments, hover preview) don't carry is_void, so this is
+## how those paths learn about drifted ring voids that aren't reflected in wedge values.
+func _mark_void(result: Dictionary) -> void:
+	if result.get("is_void", false):
+		return
+	var wi: int = result.get("wedge_index", -1)
+	if wi < 0:
+		return
+	if voided_rings.has("%d:%s" % [wi, result.get("ring_name", "")]):
+		result["is_void"] = true
+
+
+## Whether a given board segment is voided this turn. Used by the hover tooltip so the
+## player can see a zone is dead before committing a dart.
+func is_segment_voided(wedge_index: int, ring_name: String) -> bool:
+	if wedge_index < 0:
+		return false
+	return voided_rings.has("%d:%s" % [wedge_index, ring_name])
+
+
+## Apply all enabled FlipSignModifiers as the final scoring step. Held back from the
+## main PER_DART loop so the sign flip always runs after every other modifier,
+## regardless of acquisition order.
+func _apply_flip_pass(result: Dictionary, context: Dictionary) -> Dictionary:
+	for modifier: Resource in active_modifiers:
+		if modifier is FlipSignModifier and modifier.enabled:
+			result = modifier.apply(result, context)
+	return result
+
+
+## Board positions (0-19) currently flipped by a FlipSignModifier. Used by the HUD
+## to draw a "+" suffix on those wedge numbers.
+func get_flipped_wedge_indices() -> Array[int]:
+	var indices: Array[int] = []
+	for modifier: Resource in active_modifiers:
+		if modifier is FlipSignModifier and modifier.enabled:
+			var idx: int = (modifier as FlipSignModifier).target_wedge_index
+			if idx >= 0 and not indices.has(idx):
+				indices.append(idx)
+	return indices
 
 
 ## Build a synthetic score result for a candidate target (used by the solver).

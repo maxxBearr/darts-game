@@ -137,6 +137,10 @@ var effective_wedge_values: Array[int] = []
 ## When empty, derives colors from wedge index (standard board colors).
 var effective_wedge_colors: Array[Dictionary] = []
 
+## Board positions (0-19) flipped by a FlipSignModifier. Set by ScoringModifierManager.
+## Flipped wedges draw a "+" suffix on their number (they add instead of subtract).
+var flipped_wedges: Array[int] = []
+
 ## Rotation offset in degrees applied to all wedge angles (rendering + hit detection).
 ## Set by the Rotation boss. 0.0 = normal orientation.
 var board_rotation_offset: float = 0.0
@@ -635,6 +639,9 @@ func _draw() -> void:
 			is_modified = effective_value != WEDGE_ORDER[wedge_idx]
 
 		var number_text: String = str(effective_value)
+		# Flipped wedges score upward — mark them with a "+" suffix.
+		if flipped_wedges.has(wedge_idx):
+			number_text += "+"
 		# Calculate text offset for centering
 		var text_width: float = font.get_string_size(number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size).x
 		var draw_pos: Vector2 = Vector2(pos.x - text_width / 2.0, pos.y + number_font_size / 2.0)

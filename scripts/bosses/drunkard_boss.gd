@@ -7,7 +7,11 @@ extends Boss
 ##   2. Enforced minimum meter length — floors the meter half-length to a base plus extra
 ##      scaled by (100 − range stat) per axis. This claws back the most from a maxed-
 ##      accuracy player (whose meters would otherwise be tiny) and barely touches a
-##      low-stat one — self-balancing — and ensures the wobble has room to bite.
+##      low-stat one — self-balancing — and ensures the wobble has room to bite. The floor
+##      is partly eased by Range so investment still matters (DRUNK_FLOOR_RANGE_EASE), and
+##      the bounce rate is partly compensated for the stretch so the longer meter doesn't
+##      silently inflate marker pixel-speed past the player's Speed Control
+##      (DRUNK_SPEED_COMPENSATION) — both live in ThrowMechanic.
 ##
 ## Counters maxed accuracy stats. Hooks ThrowMechanic via set_drunk_distortion().
 ##

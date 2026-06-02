@@ -1,6 +1,6 @@
-[gd_resource type="Resource" script_class="GlassCannonReward" format=3]
+[gd_resource type="Resource" script_class="GlassCannonReward" format=3 uid="uid://dhltyfptggc8b"]
 
-[ext_resource type="Script" path="res://scripts/rewards/glass_cannon_reward.gd" id="1"]
+[ext_resource type="Script" uid="uid://p0h1xg7qyl61" path="res://scripts/rewards/glass_cannon_reward.gd" id="1"]
 
 [resource]
 script = ExtResource("1")
@@ -8,3 +8,4 @@ reward_id = &"glass_cannon"
 display_name = "Glass Cannon"
 description = "Any dart at exactly 0 wins. But any bust ends the run."
 is_trade = true
+excludes = Array[StringName]([&"mirror_zone"])

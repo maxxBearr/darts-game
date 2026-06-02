@@ -78,35 +78,47 @@ var _current_level: LevelDefinition = null
 ## Whether the game is currently in tutorial sandbox mode.
 var _in_tutorial: bool = false
 
-# Upgrade type definitions — 4 pure buffs, 2 tradeoffs (consistency stats penalize each other)
+# Upgrade type definitions — Phase 1 ("Accuracy as Shape, Not Climb"): all six are sibling-axis
+# trades (V <-> H), never flat buffs. Each picks concentrates a conserved scatter budget instead
+# of climbing it, so the throw-anticipation drift never vanishes. Penalty magnitude is
+# rarity-scaled and lives in the rarity tables below (a rare buys a better exchange rate, not a
+# bigger raw number), so penalty_amount is no longer a field on the type def.
 const UPGRADE_TYPES: Array[Dictionary] = [
 	{
 		"name": "Horizontal Range",
 		"property": "horizontal_range",
 		"scale": "direct",
-		"tradeoff": false,
-		"description": "Narrows the horizontal aiming band",
+		"tradeoff": true,
+		"penalty_property": "vertical_range",
+		"penalty_name": "Vertical Range",
+		"description": "Narrows the horizontal aiming band, but widens the vertical",
 	},
 	{
 		"name": "Vertical Range",
 		"property": "vertical_range",
 		"scale": "direct",
-		"tradeoff": false,
-		"description": "Shrinks the vertical positioning window",
+		"tradeoff": true,
+		"penalty_property": "horizontal_range",
+		"penalty_name": "Horizontal Range",
+		"description": "Shrinks the vertical positioning window, but widens the horizontal",
 	},
 	{
 		"name": "V Speed Control",
 		"property": "vertical_speed",
 		"scale": "speed",
-		"tradeoff": false,
-		"description": "Slows the vertical release marker",
+		"tradeoff": true,
+		"penalty_property": "horizontal_speed",
+		"penalty_name": "H Speed Control",
+		"description": "Slows the vertical release marker, but speeds the horizontal",
 	},
 	{
 		"name": "H Speed Control",
 		"property": "horizontal_speed",
 		"scale": "speed",
-		"tradeoff": false,
-		"description": "Slows the horizontal release marker",
+		"tradeoff": true,
+		"penalty_property": "vertical_speed",
+		"penalty_name": "V Speed Control",
+		"description": "Slows the horizontal release marker, but speeds the vertical",
 	},
 	{
 		"name": "Vertical Accuracy",
@@ -115,7 +127,6 @@ const UPGRADE_TYPES: Array[Dictionary] = [
 		"tradeoff": true,
 		"penalty_property": "horizontal_accuracy",
 		"penalty_name": "Horizontal Accuracy",
-		"penalty_amount": 3,
 		"description": "Tightens vertical variance, but widens horizontal",
 	},
 	{
@@ -125,30 +136,38 @@ const UPGRADE_TYPES: Array[Dictionary] = [
 		"tradeoff": true,
 		"penalty_property": "vertical_accuracy",
 		"penalty_name": "Vertical Accuracy",
-		"penalty_amount": 3,
 		"description": "Tightens horizontal variance, but widens vertical",
 	},
 ]
 
-# Rarity tiers for standard (direct 1-100) stats
+# Rarity tiers for all trades. Phase 1 model: the raw gain is ~flat across rarities; rarity buys
+# a smaller sibling-axis "penalty" (a better exchange rate), not a bigger number. Net gain per
+# rarity lands on the spec ladder: Common net ~0 (pure reshape), Uncommon net ~+2, Rare net ~+4.
+# (net = avg gain - penalty). These are first-pass numbers meant to be felt and retuned in
+# playtest, not final balance.
+
+# Range stats (direct 1-100): gain 6-8 (avg 7), penalty 7/5/3 -> net ~0/+2/+4.
 const STANDARD_RARITY_TABLE: Array[Dictionary] = [
-	{"name": "Common", "min_value": 5, "max_value": 8, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
-	{"name": "Uncommon", "min_value": 9, "max_value": 12, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
-	{"name": "Rare", "min_value": 13, "max_value": 15, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
+	{"name": "Common", "min_value": 6, "max_value": 8, "penalty": 7, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+	{"name": "Uncommon", "min_value": 6, "max_value": 8, "penalty": 5, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+	{"name": "Rare", "min_value": 6, "max_value": 8, "penalty": 3, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
 ]
 
-# Rarity tiers for speed stats (1.0-5.0 internal scale)
+# Speed stats. Values are in DISPLAY units — the same 0-100 space the stat bars show via
+# _speed_to_display — so a "+N" on a speed card moves the bar by N, exactly like accuracy/range.
+# Converted to the 1.0-5.0 internal scale at apply-time via x(4/100) (1 display point = 0.04
+# internal). gain 8-10 (avg 9), penalty 9/7/5 -> net ~0/+2/+4, matching the accuracy ladder.
 const SPEED_RARITY_TABLE: Array[Dictionary] = [
-	{"name": "Common", "min_value": 2, "max_value": 4, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
-	{"name": "Uncommon", "min_value": 5, "max_value": 7, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
-	{"name": "Rare", "min_value": 8, "max_value": 10, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
+	{"name": "Common", "min_value": 8, "max_value": 10, "penalty": 9, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+	{"name": "Uncommon", "min_value": 8, "max_value": 10, "penalty": 7, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+	{"name": "Rare", "min_value": 8, "max_value": 10, "penalty": 5, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
 ]
 
-# Rarity tiers for consistency stats (tradeoff upgrades — higher values to offset the penalty)
+# Accuracy stats (direct 1-100): gain 8-10 (avg 9), penalty 9/7/5 -> net ~0/+2/+4.
 const CONSISTENCY_RARITY_TABLE: Array[Dictionary] = [
-	{"name": "Common", "min_value": 8, "max_value": 12, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
-	{"name": "Uncommon", "min_value": 13, "max_value": 16, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
-	{"name": "Rare", "min_value": 17, "max_value": 20, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
+	{"name": "Common", "min_value": 8, "max_value": 10, "penalty": 9, "weight": 65, "color": Color(0.6, 0.6, 0.6)},
+	{"name": "Uncommon", "min_value": 8, "max_value": 10, "penalty": 7, "weight": 25, "color": Color(0.3, 0.5, 1.0)},
+	{"name": "Rare", "min_value": 8, "max_value": 10, "penalty": 5, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
 ]
 
 # Flow state — tracks what the game is waiting for between throws
@@ -205,6 +224,11 @@ var _streak_replace_config: Dictionary = {}
 
 ## First selected wedge in PICK_TWO_WEDGES flow (-1 = none).
 var _picker_selected_wedge: int = -1
+
+## How many wedges remain to be flipped in the Mirror-Zone relic picker flow.
+## > 0 means the relic_flip_picker phase is active. The flow grants one
+## FlipSignModifier per pick and only continues to shop/next-leg once it hits 0.
+var _relic_flips_remaining: int = 0
 
 # Cumulative score for the current turn (resets each turn)
 var _turn_score: int = 0
@@ -371,6 +395,12 @@ func _process(_delta: float) -> void:
 		var mouse_pos: Vector2 = get_global_mouse_position()
 		var wedge_idx: int = dartboard.update_picker_hover(mouse_pos)
 		_update_picker_prompt(wedge_idx)
+		return
+
+	# Relic-flip picker hover — highlight the wedge under the cursor. The prompt is
+	# static (no _pending_modifier to inspect), so just update the highlight.
+	if _leg_phase == "relic_flip_picker" and dartboard.picker_mode:
+		dartboard.update_picker_hover(get_global_mouse_position())
 		return
 
 	# Segment picker mode hover — update single-ring highlight under cursor
@@ -688,11 +718,17 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 
 	# Update remaining score display — for trigger animations on normal hits,
 	# defer the update so it counts down in sync with each trigger impact.
+	# A flipped wedge scores negative (remaining climbs UP), which the multiplier
+	# countdown can't represent, so flips never defer — they snap to the true value.
 	var _has_trigger_anim: bool = false
+	var _is_flip_hit: bool = false
 	for _mod: Dictionary in result.get("modifications", []):
 		if _mod["field"] == "multiplier":
 			_has_trigger_anim = true
-			break
+		elif _mod["field"] == "flip":
+			_is_flip_hit = true
+	if _is_flip_hit:
+		_has_trigger_anim = false
 	var _defer_remaining: bool = _has_trigger_anim and not response["is_leg_won"]
 	if not _defer_remaining:
 		if response["is_bust"]:
@@ -1051,6 +1087,19 @@ func _on_reward_selected(index: int) -> void:
 	_current_rewards.clear()
 	_boss_leg_just_cleared = false
 
+	# Some relics (Mirror Zone) require the player to pick wedges to flip before
+	# continuing. Drop into the relic-flip picker; it resumes via _continue_after_reward.
+	var flips: int = reward.wedge_flips_granted()
+	if flips > 0:
+		_start_relic_flip_picker(flips)
+		return
+
+	_continue_after_reward()
+
+
+## Resume the post-reward flow (enter shop or show the next-leg button). Shared by
+## the normal reward path and the relic-flip picker once all flips are placed.
+func _continue_after_reward() -> void:
 	if shop_after_boss:
 		_leg_phase = "shop_enter"
 		var saved: int = _saved_darts_accumulator
@@ -1059,6 +1108,44 @@ func _on_reward_selected(index: int) -> void:
 		_leg_phase = ""
 		hud.score_label.text = ""
 		hud.next_leg_button.visible = true
+
+
+## Begin the Mirror-Zone relic's wedge-flip picker. The player must pick `count`
+## wedges to flip — there is no cancel (the relic can't exist without its flips).
+func _start_relic_flip_picker(count: int) -> void:
+	_relic_flips_remaining = count
+	_leg_phase = "relic_flip_picker"
+	_picker_selected_wedge = -1
+	dartboard.set_picker_mode(true)
+	_update_relic_flip_picker_prompt()
+
+
+func _update_relic_flip_picker_prompt() -> void:
+	hud.show_picker_header("Mirror Zone — flip your wedges")
+	hud.show_picker_prompt("Pick a wedge to flip (%d left)" % _relic_flips_remaining)
+
+
+## Place one flipped wedge during the relic picker. Advances to the next pick or
+## resumes the post-reward flow once all flips are placed.
+func _complete_relic_flip(wedge_idx: int) -> void:
+	# Don't let the player spend both flips on the same wedge — the relic flips two.
+	if scoring_modifier_manager.get_flipped_wedge_indices().has(wedge_idx):
+		hud.show_picker_prompt("That wedge is already flipped — pick another (%d left)" % _relic_flips_remaining)
+		return
+	var flip: FlipSignModifier = FlipSignModifier.new()
+	flip.target_wedge_index = wedge_idx
+	var value: int = scoring_modifier_manager.get_effective_value(wedge_idx)
+	flip.modifier_name = "Flipped Wedge (%d)" % value
+	flip.description = "Wedge %d's scoring now adds to the score" % value
+	add_scoring_modifier(flip, {"wedge_index": wedge_idx})
+	_relic_flips_remaining -= 1
+	if _relic_flips_remaining > 0:
+		_update_relic_flip_picker_prompt()
+		return
+	dartboard.set_picker_mode(false)
+	hud.hide_picker()
+	_leg_phase = ""
+	_continue_after_reward()
 
 
 ## Reset all run state (shared by all post-game-over paths).
@@ -1080,6 +1167,7 @@ func _reset_run_state() -> void:
 	x01_game.max_turns = 5
 	x01_game.allow_triple_checkout = false
 	x01_game.glass_cannon_active = false
+	x01_game.bust_ends_turn = true
 	scoring_modifier_manager.max_streak_slots = 3
 	scoring_modifier_manager.allow_triple_checkout = false
 	scoring_modifier_manager.glass_cannon_active = false
@@ -1390,7 +1478,7 @@ func _generate_shop_accuracy_pick(rarity: ScoringEnums.Rarity, forbidden_keys: A
 		"tradeoff": upgrade_type["tradeoff"],
 		"penalty_property": upgrade_type.get("penalty_property", ""),
 		"penalty_name": upgrade_type.get("penalty_name", ""),
-		"penalty_amount": upgrade_type.get("penalty_amount", 0),
+		"penalty_amount": rarity_entry.get("penalty", 0),
 	}
 
 	return {"type": "upgrade", "data": upgrade}
@@ -1423,7 +1511,7 @@ func _on_shop_pick_selected(index: int) -> void:
 		_leg_phase = "wedge_picker"
 		_picker_selected_wedge = -1
 		dartboard.set_picker_mode(true)
-		hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		hud.show_picker_header(modifier.get_pick_wedge_header())
 		hud.show_picker_prompt("Hover over a wedge and click to select")
 		return
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
@@ -1888,7 +1976,7 @@ func _on_modifier_selected(index: int) -> void:
 		_leg_phase = "wedge_picker"
 		_picker_selected_wedge = -1
 		dartboard.set_picker_mode(true)
-		hud.show_picker_header("Add +%d to a wedge" % modifier.bonus_value)
+		hud.show_picker_header(modifier.get_pick_wedge_header())
 		hud.show_picker_prompt("Hover over a wedge and click to select")
 	elif modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
 		_pending_modifier = modifier
@@ -2072,7 +2160,7 @@ func _generate_upgrades() -> Array[Dictionary]:
 			"tradeoff": upgrade_type["tradeoff"],
 			"penalty_property": upgrade_type.get("penalty_property", ""),
 			"penalty_name": upgrade_type.get("penalty_name", ""),
-			"penalty_amount": upgrade_type.get("penalty_amount", 0),
+			"penalty_amount": rarity.get("penalty", 0),
 		})
 
 	return upgrades
@@ -2086,15 +2174,23 @@ func _apply_upgrade(upgrade: Dictionary) -> void:
 		var new_value: float = minf(current + float(upgrade["value"]), 100.0)
 		throw_mechanic.set(upgrade["property"], new_value)
 	elif upgrade["scale"] == "speed":
-		var internal_boost: float = float(upgrade["value"]) * (4.0 / 40.0)
+		# Speed card values are in display units (0-100); convert to the 1.0-5.0 internal scale.
+		# This is the inverse of hud._speed_to_display: 1 display point = 4/100 internal.
+		var internal_boost: float = float(upgrade["value"]) * (4.0 / 100.0)
 		var current: float = throw_mechanic.get(upgrade["property"])
 		var new_value: float = minf(current + internal_boost, 5.0)
 		throw_mechanic.set(upgrade["property"], new_value)
 
-	# Apply tradeoff penalty if applicable
+	# Apply tradeoff penalty if applicable. Speed penalties use the same display->internal scaling
+	# as the speed boost above, or the penalty would be on a different scale than the stat. Floor at
+	# 1.0 (the documented worst) so a hard specialization saturates the sibling axis instead of
+	# going negative — the mirror of the boost clamping at 100.0 / 5.0.
 	if upgrade["tradeoff"]:
 		var penalty_current: float = throw_mechanic.get(upgrade["penalty_property"])
-		var new_penalty_value: float = penalty_current - float(upgrade["penalty_amount"])
+		var penalty_delta: float = float(upgrade["penalty_amount"])
+		if upgrade["scale"] == "speed":
+			penalty_delta *= (4.0 / 100.0)
+		var new_penalty_value: float = maxf(penalty_current - penalty_delta, 1.0)
 		throw_mechanic.set(upgrade["penalty_property"], new_penalty_value)
 
 
@@ -2359,6 +2455,7 @@ func _is_checkout_segment(result: Dictionary) -> bool:
 func _sync_board_state() -> void:
 	dartboard.effective_wedge_values = scoring_modifier_manager.effective_wedge_values
 	dartboard.effective_wedge_colors = scoring_modifier_manager.effective_wedge_colors
+	dartboard.flipped_wedges = scoring_modifier_manager.get_flipped_wedge_indices()
 	dartboard.queue_redraw()
 
 
@@ -2475,6 +2572,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cancel_picker()
 		return
 
+	# Mirror-Zone relic: pick wedges to flip. No cancel — the relic always grants
+	# its flips, so Escape is swallowed and only a wedge click advances.
+	if _leg_phase == "relic_flip_picker":
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			var flip_idx: int = dartboard.get_wedge_at_position(get_global_mouse_position())
+			if flip_idx < 0:
+				return
+			get_viewport().set_input_as_handled()
+			_complete_relic_flip(flip_idx)
+		elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+		return
+
 	if _leg_phase != "wedge_picker":
 		return
 
@@ -2495,6 +2605,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _complete_pick_wedge(wedge_idx: int) -> void:
+	_pending_modifier.apply_picked_wedge(wedge_idx)
 	add_scoring_modifier(_pending_modifier, {"wedge_index": wedge_idx})
 	_finish_picker()
 
@@ -2585,8 +2696,7 @@ func _update_picker_prompt(wedge_idx: int) -> void:
 
 	if _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_WEDGE:
 		var current_val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
-		var new_val: int = current_val + _pending_modifier.bonus_value
-		hud.show_picker_prompt("Make %d into %d? Click to confirm, Escape to cancel" % [current_val, new_val])
+		hud.show_picker_prompt(_pending_modifier.get_pick_wedge_prompt(current_val))
 	elif _pending_modifier.config_type == ScoringEnums.ConfigType.PICK_TWO_WEDGES:
 		if _picker_selected_wedge < 0:
 			var val: int = scoring_modifier_manager.get_effective_value(wedge_idx)
@@ -2639,11 +2749,16 @@ func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_
 
 	var modifications: Array = result.get("modifications", [])
 	var multiplier_mods: Array[Dictionary] = []
+	var is_flip: bool = false
 	for mod: Dictionary in modifications:
 		if mod["field"] == "multiplier":
 			multiplier_mods.append(mod)
+		elif mod["field"] == "flip":
+			is_flip = true
 
-	if multiplier_mods.is_empty():
+	# Flipped wedges score negative; the multiplier countdown animation assumes a
+	# positive subtract, so show flips with the simple float (final value shown directly).
+	if multiplier_mods.is_empty() or is_flip:
 		return _spawn_simple_floating_score(hit_position, result, recession_data, is_leg_won)
 	else:
 		return _spawn_trigger_animation(hit_position, result, multiplier_mods, recession_data, is_leg_won, remaining_info)
@@ -2888,8 +3003,11 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 			tween.tween_callback(_on_trigger_impact_with_source.bind(trigger_lbl, main_label, source_ref, final_total, scale_bump, global_trigger_idx, local_j, snap_remaining, is_bust_anim))
 			if snap_remaining >= 0:
 				tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
-			elif is_bust_anim:
-				if snap_remaining + face_value >= 0:
+			else:
+				# Going below zero: a bust in vanilla, but a legal remainder under the
+				# Mirror-Zone relic. Either way keep the counter live; only paint it as a
+				# bust when it actually is one.
+				if is_bust_anim and snap_remaining + face_value >= 0:
 					tween.tween_callback(hud.set_remaining_bust.bind(true))
 				tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
 			var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))

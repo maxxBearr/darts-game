@@ -36,6 +36,14 @@ func apply_to_board(wedge_values: Array[int], _wedge_colors: Array[Dictionary], 
 	description = "+%d to wedge %d (now %d)" % [bonus_value, original_value, wedge_values[target_index]]
 
 
+func get_pick_wedge_header() -> String:
+	return "Add +%d to a wedge" % bonus_value
+
+
+func get_pick_wedge_prompt(current_value: int) -> String:
+	return "Make %d into %d? Click to confirm, Escape to cancel" % [current_value, current_value + bonus_value]
+
+
 static func get_pool_weight() -> int:
 	return 25
 

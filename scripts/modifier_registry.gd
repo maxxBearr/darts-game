@@ -13,6 +13,7 @@ const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
 const _ColorStreak = preload("res://scripts/modifiers/color_streak_modifier.gd")
 const _EvenStreak = preload("res://scripts/modifiers/even_streak_modifier.gd")
 const _OddStreak = preload("res://scripts/modifiers/odd_streak_modifier.gd")
+const _FlipSign = preload("res://scripts/modifiers/flip_sign_modifier.gd")
 
 ## Rarity weight shift applied to all modifier rolls during the current run.
 ## Set from main.gd based on LevelDefinition.rarity_weight_shift.
@@ -48,6 +49,7 @@ const MODIFIER_TYPES: Array = [
 	_ColorStreak,
 	_EvenStreak,
 	_OddStreak,
+	_FlipSign,
 ]
 
 

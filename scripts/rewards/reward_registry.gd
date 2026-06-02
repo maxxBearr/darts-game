@@ -12,6 +12,7 @@ static var ALL_REWARDS: Array[RuleModifierReward] = [
 	preload("res://resources/rewards/triple_outs.tres"),
 	preload("res://resources/rewards/glass_cannon.tres"),
 	preload("res://resources/rewards/all_in.tres"),
+	preload("res://resources/rewards/mirror_zone.tres"),
 ]
 
 

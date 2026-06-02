@@ -21,6 +21,11 @@ var allow_triple_checkout: bool = false
 ## When true, any dart at exactly 0 wins (any ring), but busts end the run.
 var glass_cannon_active: bool = false
 
+## When false (Mirror-Zone relic), a would-be-bust no longer reverts or ends the
+## turn — the player overshoots below 0 and keeps throwing. Negative remaining_score
+## becomes a legal state. Default true preserves vanilla bust behavior exactly.
+var bust_ends_turn: bool = true
+
 # Game state
 var current_leg: int = 1
 var target_score: int = 101
@@ -86,7 +91,11 @@ func process_throw(result: Dictionary) -> Dictionary:
 	var is_bust: bool = false
 	var bust_reason: String = ""
 
-	if not is_leg_won:
+	# When bust_ends_turn is false (Mirror-Zone relic), there is no bust at all:
+	# overshoot below 0, remainder 1, and 0-without-double all become normal
+	# remainders and the player keeps throwing. The turn only ends on a win or
+	# when darts run out.
+	if not is_leg_won and bust_ends_turn:
 		if new_remaining < 0:
 			is_bust = true
 			bust_reason = "Score would go below zero"

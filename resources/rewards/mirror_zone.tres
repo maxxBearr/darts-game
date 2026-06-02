@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="MirrorZoneReward" format=3 uid="uid://dxsl37gxnxcnf"]
+
+[ext_resource type="Script" uid="uid://bjfvkxtssy0nf" path="res://scripts/rewards/mirror_zone_reward.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+reward_id = &"mirror_zone"
+display_name = "Mirror Zone"
+description = "Busting no longer ends your turn. Flips two wedges."
+is_trade = true
+excludes = Array[StringName]([&"glass_cannon"])
