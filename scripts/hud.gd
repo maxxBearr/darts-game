@@ -509,16 +509,17 @@ func show_bailout(spent: int, banked_left: int, new_max_turns: int) -> void:
 	AuidoManager.play_bonus_hit(0)
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
 	var banner: Label = Label.new()
-	banner.text = "BANK BAILOUT  •  +1 TURN"
+	# "+1 Turn" drops to its own indented line so the banner never runs off screen.
+	banner.text = "Dart Bank Bailout\n    +1 Turn"
 	banner.add_theme_font_size_override("font_size", leg_won_font_size)
 	banner.add_theme_color_override("font_color", Color(0.4, 0.9, 1.0))
 	banner.add_theme_constant_override("outline_size", 6)
 	banner.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	banner.size = Vector2(560.0, 80.0)
-	banner.position = Vector2((viewport_size.x - 560.0) / 2.0, (viewport_size.y - 80.0) / 2.0 - 120.0)
-	banner.pivot_offset = Vector2(280.0, 40.0)
+	banner.size = Vector2(560.0, 140.0)
+	banner.position = Vector2((viewport_size.x - 560.0) / 2.0, (viewport_size.y - 140.0) / 2.0 - 120.0)
+	banner.pivot_offset = Vector2(280.0, 70.0)
 	banner.scale = Vector2(0.3, 0.3)
 	banner.modulate.a = 0.0
 	add_child(banner)

@@ -752,7 +752,7 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		hud.mark_turn_busted(response["current_turn"])
 		hud.hide_checkout_helper()
 		dartboard.clear_illumination()
-		if response["is_game_over"] and not _try_bailout(response):
+		if response["is_game_over"] and not _try_bailout(response, score_tween):
 			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
 			if score_tween != null and score_tween.is_valid():
@@ -783,7 +783,7 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		# Used all 3 darts without bust or win — hide helper until next turn
 		hud.hide_checkout_helper()
 		dartboard.clear_illumination()
-		if response["is_game_over"] and not _try_bailout(response):
+		if response["is_game_over"] and not _try_bailout(response, score_tween):
 			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
 			if score_tween != null and score_tween.is_valid():
@@ -1050,7 +1050,7 @@ func _on_next_leg() -> void:
 ## Bailout-turn leftovers refund naturally: raising max_turns grows the leg's dart
 ## budget by 3, so get_saved_darts() (max_turns*darts_per_turn - darts_used_in_leg)
 ## returns the unused bailout darts back to the bank on the eventual leg win.
-func _try_bailout(response: Dictionary) -> bool:
+func _try_bailout(response: Dictionary, score_tween: Tween) -> bool:
 	# Glass Cannon busts end the run immediately — never bail.
 	if response["is_bust"] and x01_game.glass_cannon_active:
 		return false
@@ -1059,11 +1059,17 @@ func _try_bailout(response: Dictionary) -> bool:
 
 	# Cost is one turn's worth of darts (darts_per_turn, not a hardcoded 3) so the
 	# refund stays exact when a relic changes the turn size: raising max_turns grows
-	# the budget by darts_per_turn, matching what we spend here.
+	# the budget by darts_per_turn, matching what we spend here. The bank/ceiling
+	# mutation happens now (the caller's branch depends on it), but the rescue banner
+	# and rail fly-in wait until the score trigger animations finish so they don't
+	# pop over the still-counting score.
 	var cost: int = x01_game.darts_per_turn
 	_banked_darts -= cost
 	x01_game.max_turns += 1
-	hud.show_bailout(cost, _banked_darts, x01_game.max_turns)
+	if score_tween != null and score_tween.is_valid():
+		score_tween.tween_callback(hud.show_bailout.bind(cost, _banked_darts, x01_game.max_turns))
+	else:
+		hud.show_bailout(cost, _banked_darts, x01_game.max_turns)
 	return true
 
 
