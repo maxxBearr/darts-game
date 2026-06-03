@@ -1,29 +1,36 @@
-# Spec: (none active)
+# Spec: Scoring Lives on the Board — READY FOR IMPLEMENTATION
 
-No spec is currently being designed or implemented. Two features shipped in the last cycle and
-were archived:
+**Full build spec: `specs/2026-06-03-scoring-on-the-board.md`** (read it before implementing). The
+scoring/items half of the mid-game rebalance. Honed from brainstorm to build spec with all decisions
+locked; ready for a Claude Code pass.
 
-- **Accuracy Upgrades as Shape** (Phase 1) — `specs/2026-06-02-accuracy-upgrades-as-shape.md`.
-  Stat upgrades became net-zero-by-rarity trades (redistribute, not climb). Commit `b95d4e2`.
-- **Darts as Currency — Phase A** (persistent bank + bailout + rail UI) —
-  `specs/2026-06-02-darts-currency-phase-a.md`. Commits `c15d980` / `3277639` / `754dbd7`.
+**Core model — two separated scaling axes:** an *additive* face-value baseline (hotspots + wedge values,
+item-driven, bounded) × an *earned multiplicative* ceiling (streaks become the one multiplier, gated by
+component capacity). Scaling is a *route you choose*, never "play long enough." Scoring math today is
+already a single additive multiplier per dart — the only pipeline change is streaks moving from additive to
+a `streak_factor` applied last.
 
-**Next direction: the mid-game progression rebalance** (move difficulty off big-number scaling
-onto efficiency + spatial play). Two parked brainstorms feed the next spec — to be fleshed out in
-a fresh session:
+**What ships this pass:**
 
-- `specs/future/map-pool-filtration.md` — map + reward-pool steering; **variable fronted darts**
-  as the difficulty axis (e.g. choose 351-for-9-darts vs 401-for-15). The acquisition-frequency
-  and routing half.
-- `specs/future/scoring-on-the-board.md` — **scoring lives on the board** (spatial hotspots +
-  categorical streaks; drop global conditional multipliers); components govern streak-slot
-  capacity; cut even/odd streak; board as contested territory with bosses. The scoring/items half.
+- **Pool migration:** drop the unslotted global bonuses (`ColorBonus`, `OddEvenBonus`) and all parity /
+  even-odd classes; **sideline `FlipSign`** (unlist, keep class + Mirror-Zone relic); raise `ColorStreak`
+  weight; reweight. Add a `family` tag (Scoring / Placement / Brush) — streaks excluded.
+- **Streaks → multiplicative:** the exponential lever; capacity per-category from components (shaft → wedge
+  slots, barrel → color slots) via an inspector-editable `streak_slot_grant` export; cut
+  `StreakSlotExtensionReward`; replace the global `max_streak_slots`.
+- **Hotspots (new headline item):** `HotspotModifier`, picked via the segment picker, **no-stack** (one
+  tier/ring, max +3), folds into the additive baseline. Checkout solver + target tooltip must read it *and*
+  the live streak factor.
+- **Visuals:** smoky hotspot shader with the value baked into the smoke (enhances ring color, doesn't
+  override) + source-located scoring flair (spatial points from the board, streak points from the dart).
+
+**Out of scope (Max-manual or deferred):** component **stat layouts + streak-grant values** (Max tunes in
+the inspector — Claude Code only adds the field + plumbing); **Tier-2 geometry items** (deferred behind the
+solver lift); **shop/pool steering** (tag only); the **map / fronted-darts** progression (separate later
+spec — `specs/future/map-pool-filtration.md`). Build order is in the spec's Sequencing section.
 
 Also still parked: **Darts as Currency Phase B** (typed shop rings) in
 `specs/future/darts-as-currency-economy.md` — needs the accuracy-into-shop-pool fork resolved.
-
-When the next feature is being designed, replace this section with its spec (see the Workflow
-Notes below).
 
 ---
 

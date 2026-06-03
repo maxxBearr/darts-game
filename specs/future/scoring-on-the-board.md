@@ -1,10 +1,13 @@
 ---
 Spec date: 2026-06-03
-Status: Brainstorm — idea capture, not designed, not scheduled. The "scoring lives on the board"
-  direction for fixing mid-game scaling and bookkeeping load. Sibling to the map / fronted-darts
-  workstream (the two halves of one difficulty-rebalance). Downstream of shipped
-  `specs/2026-06-02-accuracy-upgrades-as-shape.md` and darts-currency Phase A (CLAUDE.md /
-  `specs/future/darts-as-currency-economy.md`). Overlaps `specs/future/map-pool-filtration.md`.
+Status: SUPERSEDED 2026-06-03 by the build spec `specs/2026-06-03-scoring-on-the-board.md` (ready for
+  implementation). This file is the original brainstorm, kept for design-history context only — read the
+  build spec for current decisions. Key things the build spec changed/locked beyond this brainstorm:
+  streaks become the *multiplicative* lever (additive face-value baseline × earned streak factor);
+  the "global conditional" cut is concretely ColorBonus + OddEvenBonus; even/odd is cut as both bonus and
+  streak; thematic streak split LOCKED (shaft = wedge slots, barrel = color slots); three board-item
+  families (Scoring/Placement/Brush); hotspots no-stack (max +3/ring); FlipSign sidelined; tools-first
+  sequencing (this scoring infra before the map). Sibling to `specs/future/map-pool-filtration.md`.
 ---
 
 # Scoring Lives on the Board
