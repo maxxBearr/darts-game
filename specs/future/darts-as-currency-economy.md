@@ -1,10 +1,12 @@
 ---
 Spec date: 2026-06-02
-Status: Parked — vision capture, refined in design discussion 2026-06-02. Not scheduled.
-  Downstream of the active "Accuracy Upgrades as Shape" spec (CLAUDE.md) and entangled with
-  `specs/future/map-pool-filtration.md`. We are shipping + playtesting the accuracy rebalance
-  FIRST. Goal of this system: push the *current, map-less* version of the game as far as it goes
-  for variety and complexity before committing to a map.
+Status: Vision + Phase B reference. **Phase A (the resource layer — persistent bank, bailout,
+  rail UI) was promoted to the active spec in CLAUDE.md on 2026-06-02** and is ready to implement;
+  bailout rules decided there (bail until checkout or bank dry, automatic, need a full 3). This
+  file remains the full vision and the home of the not-yet-scheduled pieces: **typed shop rings
+  (Phase B)**, the legendary-item interactions, and onboarding. Entangled with
+  `specs/future/map-pool-filtration.md` (typed rings overlap its accuracy-pool fork). Goal of the
+  whole system: push the *map-less* game as far as it goes for variety and complexity.
 ---
 
 # Darts as Ammo + Currency (run-spanning resource economy)
@@ -120,13 +122,48 @@ Bailout interaction (as Max specified): if you miss with the last dart of your 5
 dart), spare darts auto-spend into a bailout turn (else you lose). Finish on the first dart of
 that bought 6th turn → the unused two return to the bank via existing save-darts logic.
 
-## Still to design (not just logic — this is why it's a full spec, not a tweak)
+## UI / presentation model (designed 2026-06-02)
 
-- **UI / presentation.** The bank needs a legible at-a-glance readout (banked darts → "= N turns",
-  current shop cost, what's insured). Keep decisions **chunky** — surfaced at legs and shops,
-  never demanding per-dart arithmetic — or the resource math competes with the throw for
-  attention, and the throw is the steak. Note the upside: a growing bank is a **tangible mastery
-  meter** (Balatro-money-style), a progress signal even on a losing run.
+Core principle: keep the resource **glanceable and chunky** (decisions at legs/shops, never
+per-dart arithmetic mid-throw), and let a growing bank be a **tangible mastery meter**
+(Balatro-money-style — a progress signal even on a losing run).
+
+**Replace the bottom-left revolving-three-darts element with a left-rail dart tally**, built from
+the existing dart-component PNG (no new art):
+
+- **5 sets of 3 dart icons** = the 15 fronted darts, grouped in threes so "3 darts = a turn" is
+  *spatial, never arithmetic*. Collapses the old "darts this turn" and "turns left" counters into
+  one array (count of bright sets = turns left; bright darts in the active set = darts left this
+  turn). **Relics reshape the grid and it self-explains:** +1 Dart/Turn → 5 sets of **4**; +1 Turn
+  → **6** sets of 3 — the player *sees* the turn widen or the run lengthen. Rail must flex to hold
+  18–20+ icons without breaking layout.
+- **Icon states — each encodes distinct info:** bright = available; **white outline box = active
+  turn**, with that set **slightly scaled up / "popped"** so darts-left-in-the-current-turn is
+  obvious (keep it subtle; must not reflow the neighboring sets); **dimmed/grey = spent**; **dimmed
+  + red-tinted = busted** (on a bust the turn's remaining darts go dimmed-red to show they were
+  forfeited — a built-in lesson in why busting costs you). Set completion plays a **cross-out slash
+  as a transition animation**, not a persistent fourth state. (Red is reserved for busts on purpose
+  — it's already overloaded as the deep-imbalance accuracy zone and a per-ring board color, so a
+  plain spent dart must NOT be red.)
+- **Saved-darts cache speaks the same language:** loose banked darts snap into **clusters of
+  three**, and each completed cluster lights a **bonus turn** — self-documenting, so no "(N bonus
+  turns)" parenthetical is strictly needed. Summarize past a threshold (a few clusters, then "+N")
+  so a 30+ hoard doesn't overflow the rail.
+
+**Beat sequence:**
+- **Leg start:** a *quick* tween of the 5 sets filling in (e.g. animating a visible ratio on the
+  rail) — fast, interruptible, not in the way of playing fast, not annoyingly redundant. The full
+  satisfying version is earned only when the fronted count differs from 15 (a darts/turn or
+  turn-count relic), where watching it build actually conveys information.
+- **Leg win:** unused darts **fly/tween into the saved cache**, completing clusters (the
+  mastery-meter reward beat) *then* the reward/upgrade pick happens. Consolidated to leg-win, not
+  dripped every time you check out a turn early, so it reads as a reward rather than ambient noise.
+  Pair with the existing turn-end pitch-tension audio (a rising-pitch count-up/trickle).
+- **During an active throw:** the rail stays calm — animations fire at beats, never during aim
+  (consistent with the hover-off-during-throw architecture rule).
+
+## Still to design
+
 - **Explainability / onboarding.** Darts-as-currency is a meaningful new mental model (ammo *and*
   money, banking, bailouts, typed rings). It needs to be taught — fold into the tutorial/help
   system; lean on the existing "experience before semantics" onboarding patterns.

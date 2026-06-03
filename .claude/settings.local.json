@@ -29,7 +29,14 @@
       "PowerShell(Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\(\\(Resolve-Path \"sprites\\\\point.png\"\\).Path\\); Write-Output \"point.png: $\\($img.Width\\)x$\\($img.Height\\)\"; $img.Dispose\\(\\))",
       "Bash(xargs grep -l \"next_leg_pressed\")",
       "Bash(Select-Object -First 30)",
-      "Bash(xargs grep -l \"boss_pool\\\\|boss_count\")"
+      "Bash(xargs grep -l \"boss_pool\\\\|boss_count\")",
+      "Bash(where godot *)",
+      "Bash(where godot.exe)",
+      "Read(//c/Program Files/**)",
+      "Bash(reg query *)",
+      "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; foreach \\($s in @\\(\"scripts/hud.gd\",\"scripts/dart_indicator.gd\",\"scripts/main.gd\"\\)\\) { \"=== $s ===\"; & $godot --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --check-only --script $s 2>&1 | Select-Object -First 20; \"exit=$LASTEXITCODE\" })",
+      "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; & $godot --headless --editor --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --quit-after 3 2>&1 | Select-String -Pattern \"hud.gd|main.gd|dart_indicator|SCRIPT ERROR|Parse Error|Compile Error|error\" | Select-Object -First 30; \"DONE exit=$LASTEXITCODE\")",
+      "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; & $godot --headless --editor --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --quit-after 3 2>&1 | Select-String -Pattern \"SCRIPT ERROR|Parse Error|Compile Error|hud.gd|main.gd\" | Select-Object -First 20; \"DONE exit=$LASTEXITCODE\")"
     ]
   }
 }

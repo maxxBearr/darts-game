@@ -1,100 +1,122 @@
-# Spec: Accuracy Upgrades as Shape, Not Climb
+# Spec: Darts as Currency — Phase A (Persistent Bank + Bailout + Rail UI)
 
-**Status: designing (2026-06-02). Phase 1 only — rebalance the existing upgrade pool. No
-map, no scarcity, no dart-economy changes yet (those are parked, see below).**
+**Status: ready to implement (2026-06-02).** Phase A is the *resource layer* of the darts-as-
+currency economy: make banked darts persist and grow across a run, let them rescue you from a
+lost leg, and show the whole thing on a dart-icon rail. **Typed shop rings are Phase B and are
+explicitly out of scope here** (they need a separate design fork — see the exclusion note). Full
+vision and rationale: `specs/future/darts-as-currency-economy.md`. The shipped accuracy rework
+this builds on is archived at `specs/2026-06-02-accuracy-upgrades-as-shape.md`.
 
-## The problem
+## Why this, why now
 
-By late game the accuracy stats max out, and when they do two things we care about die:
+The accuracy rework removed accuracy as a power-progression axis (it's reshape-only now). Banked
+darts + shop investment are the intended **replacement climb** — the run-spanning "I'm getting
+stronger" engine. This phase builds the resource itself so we can playtest its feel before
+layering the harder typed-shop work on top. It's a big chunk and needs real testing, so it ships
+alone.
 
-1. **The throw animation loses its suspense.** The fly-in (`specs/2026-06-01-throw-anticipation.md`)
-   is the soul of the game — its whole job is to make the accuracy miss *legible as motion*:
-   the dart drifts from where you aimed to where it actually landed, and the drift vector *is*
-   the miss. If accuracy can climb to near-zero scatter, the drift vanishes and the animation
-   becomes "dart appears on board." We are designing our best moment to delete itself over a run.
-2. **Dart components stop mattering.** Components mostly feed stats; once stats are capped, the
-   only component that still matters late is the flight. We *accept* components being an
-   early-to-mid foundation that hands off to relics for the late-game climb (that arc is fine and
-   intentional) — but they should shape the run while they're load-bearing, not get flattened.
+## Current state (confirmed in code 2026-06-02)
 
-These are two faces of one root cause: **accuracy is allowed to climb toward determinism.**
+- **Leg front is 15.** `x01_game.gd`: `@export var max_turns: int = 5`, `var darts_per_turn: int
+  = 3`. Set/reset in `main.gd` (`x01_game.max_turns = 5`, `darts_per_turn = 3`).
+- **Per-leg savings already computed.** `x01_game.gd:149` `get_saved_darts()` returns
+  `max(max_turns*darts_per_turn − darts_used_in_leg, 0)`. Busts already fold their wasted darts
+  into `darts_used_in_leg` (`x01_game.gd:120-123`) — so **busting already forfeits those darts
+  from savings.** (This is exactly what the rail's dimmed-red "busted darts" state should mirror.)
+- **Loss condition exists.** `x01_game.gd:129` `is_game_over = (is_turn_over and current_turn >=
+  max_turns and not is_leg_won) or (is_bust and glass_cannon_active)`. The branch Phase A
+  intercepts is the **first** half (out of turns, no checkout) — NOT the Glass Cannon half.
+  Handled in `main.gd:750` / `main.gd:781`: `if response["is_game_over"]: _run_over = true;
+  _show_game_over(...)`.
+- **Bank today is a per-shop-window accumulator, then wiped.** `main.gd` `_saved_darts_accumulator`
+  (declared ~263, comment "across the current 3-leg window") accrues `get_saved_darts()` each leg
+  (~873), seeds `_shop_darts_remaining` at `_start_shop` (~1231), and is **zeroed at `_end_shop`**
+  (~1555) and on run start (~1160). So unspent darts do NOT persist past a shop today.
+- **Throw-to-buy already exists.** Shop spends from `_shop_darts_remaining` via thrown darts
+  (`hud.gd` `enter_shop_mode`, "Thrown: 0 / N").
 
-## The current state (confirmed in `scripts/main.gd`)
+## The three deltas
 
-`UPGRADE_TYPES` is 6 entries: H/V Range and H/V Speed are **flat** (`tradeoff: false`); H/V
-Accuracy are trades (`tradeoff: true`) but with a **fixed `penalty_amount: 3`** against a gain
-of 8–20 from `CONSISTENCY_RARITY_TABLE` (common 8–12, uncommon 13–16, rare 17–20). So a common
-accuracy pick nets **+5–9**, a rare nets **+14–17**. That is a flat upgrade wearing a trade
-costume — and because the penalty hits the *sibling axis*, alternating V-pick / H-pick climbs
-both axes linearly. This is the determinism path. (Max identified this independently before we
-found it in code; his own most-successful runs beeline accuracy and ignore relics until 401+,
-which is the dominant-strategy symptom of exactly this.)
+### 1. Make the bank persistent
 
-## The design: total accuracy budget is conserved
+Today's accumulator resets each shop. Change it to a **persistent run-long reserve** that only
+ever goes down by spending (shop or bailout) and up by leg savings. Concretely: stop zeroing it at
+`_end_shop` — instead decrement it by what was actually spent in the shop, and keep the remainder.
+Leg savings continue to add via `get_saved_darts()`. Still reset to 0 on run start. Rename for
+clarity is welcome (`_banked_darts` rather than `_saved_darts_accumulator`), but keep the shop's
+existing read path working.
 
-Reframe every stat upgrade from *a number you climb* into *a shape you redistribute*. The total
-scatter budget stays ~flat across a run; picks only ever **concentrate** it — narrow one axis at
-the cost of widening the sibling axis. Because the budget is conserved, the scatter ellipse is
-**always nonzero**, so the throw-anticipation drift is preserved permanently. And the strategy
-becomes positional: a tall-thin zone (high V accuracy, low H) wants the top/bottom doubles where
-a thin-tall target gives the least room to miss; a wide-thin zone wants the side doubles. The
-live fly-in is what makes this legible — you watch the skew resolve.
+### 2. Bailout (decided rules — implement exactly)
 
-**The "pick two of three" rule** that governs all tuning: an upgrade may be *net-positive*,
-*same-axis-pool*, or *abundant* — never all three at once. Two of the three is the determinism
-trap.
+When a leg would end in `is_game_over` via the **out-of-turns branch** (not Glass Cannon) and the
+bank holds **≥ 3**, do NOT end the run. Instead:
 
-### Phase 1 changes (this spec)
+- **Grant a bailout turn funded from the bank** (spend 3, raise the effective turn ceiling by one
+  so the player throws another turn). Mechanically this is "let `max_turns` extend / add a turn"
+  for this leg, paid for from the bank.
+- **Repeat until the player checks out or the bank drops below 3** ("bail until checkout or bank
+  dry"). No fixed per-leg cap — the bank is the only limit.
+- **Automatic** — fire the instant they'd otherwise lose; no confirm prompt (declining is never
+  correct, since a lost leg ends the run). Give clear feedback: a bank cluster visibly flies in to
+  form the new turn (see UI).
+- **Need a full 3.** With 1–2 banked, no bailout is possible → the run ends, and the stranded 1–2
+  darts are lost with it.
+- **Bailout turns refund like any turn.** Unused darts from a bailout turn return to the bank via
+  the same `get_saved_darts()` path (check out on the first dart → the other two go back).
 
-1. **Accuracy trades become net-zero, scaling toward win-win by rarity.** Replace the fixed
-   `penalty_amount: 3` with a per-rarity penalty so net gain is roughly:
-   - Common: **net 0** (e.g. +9 / −9) — pure reshape, no climb.
-   - Uncommon: **net +1–2** (e.g. +10 / −8).
-   - Rare: **net +3–4** (e.g. +10 / −6 or −7).
+### 3. Rail UI (full design in the future spec; essentials here)
 
-   Rarity buys a *better exchange rate*, not a bigger raw number. (An alternative we may try if
-   net-positive rares still climb too fast: rarity instead buys *magnitude of reshape* — a rare
-   is +20 / −18, near-zero net but a dramatic specialization. Decide during playtest.)
-2. **Range and Speed upgrades stop being flat.** Convert the four `tradeoff: false` entries to
-   trades against their sibling axis (V-range ↔ H-range, V-speed ↔ H-speed) on the same net-zero
-   ladder, OR remove them. Leaving them flat just relocates the determinism problem onto range
-   and speed. Recommendation: convert, for one consistent model.
-3. **The scarce real climb is deferred, not removed.** A small number of rare, gated *flat*
-   accuracy boosts (a sought-after treasure) are the intended power vent — but they belong to the
-   map/scarcity work, not Phase 1. For now, all in-pool upgrades are trades.
+Replace the bottom-left revolving-three-darts element with a **left-rail dart tally** built from
+the existing dart-component PNG (no new art):
 
-### What Phase 1 deliberately does NOT do
-
-No map, no typed shops, no exposure/scarcity change, no dart-economy. We rebalance the upgrade
-pool **under the current every-other-leg cadence** and playtest the *feel* first. **Watch during
-playtest:** even net +3–4 rares, shown that often, will slowly climb — if rare-stacking
-recreates a soft accuracy-beeline, that's the signal to either pull rares toward net-zero or
-move accuracy behind the map's scarcity gate (Phase 2).
+- **5 sets of 3 icons** = the 15 fronted darts, grouped in threes so "3 = a turn" is spatial.
+  Collapses "darts this turn" + "turns left" into one array. Relics reshape it and it self-
+  explains (+1 Dart/Turn → sets of 4; +1 Turn → 6 sets). Must flex to hold 18–20+ icons.
+- **States:** bright = available; **white outline + slight scale-pop = active turn** (so
+  darts-left-this-turn reads at a glance, subtle, no neighbor reflow); **dimmed/grey = spent**;
+  **dimmed + red-tint = busted** (forfeited darts). Set completion plays a **cross-out slash as a
+  transition animation**, not a persistent state. Red is reserved for busts (it already means the
+  deep-imbalance accuracy zone and a per-ring board color — a plain spent dart must NOT be red).
+- **Saved cache speaks the same language:** banked darts snap into **clusters of three**; each
+  completed cluster lights a **bonus turn** (self-documenting; summarize past a threshold with
+  "+N" so a big hoard doesn't overflow).
+- **Beats:** leg start = quick, interruptible fill of the sets (full version only when the front
+  differs from 15 via a relic); leg win = unused darts fly into the cache completing clusters,
+  *then* the reward pick (pair with existing turn-end pitch-tension audio); during an active
+  throw = rail stays calm (consistent with hover-off-during-throw).
 
 ## Touch points
 
-- `scripts/main.gd` `UPGRADE_TYPES` — flip the four flat entries to trades; give accuracy entries
-  a rarity-scaled penalty instead of fixed `penalty_amount: 3`.
-- `scripts/main.gd` `CONSISTENCY_RARITY_TABLE` (+ likely `STANDARD_RARITY_TABLE` /
-  `SPEED_RARITY_TABLE` once range/speed are trades) — retune gains so net matches the ladder per
-  rarity. The penalty needs to become rarity-aware; today it's a flat field on the upgrade def.
-- `_show_accuracy_pick()` and the pick-presentation path — confirm the trade's penalty is shown
-  per-rarity (the UI already shows penalty name/amount; it must now read the rarity-scaled value).
-- `scripts/dart_build.gd` — components feed the same six stats; nothing changes here in Phase 1,
-  but note the green/orange/red balance bonuses still stack on top, so "net-zero" is net-zero
-  *before* balance-zone bonuses. Keep that in mind when tuning.
+- `scripts/x01_game.gd` — `is_game_over` (`:129`) and the turn-advance path; bailout extends the
+  turn ceiling for the leg. `get_saved_darts()` (`:149`) is reused for bailout-turn refunds.
+- `scripts/main.gd` — `_saved_darts_accumulator` → persistent bank (stop the `_end_shop` reset
+  ~1555; decrement-by-spend instead); the game-over interception at `:750`/`:781` (offer bailout
+  before `_run_over = true`); shop seed at `_start_shop` (~1231) reads the persistent bank.
+- `scripts/hud.gd` — the dart rail (`update_darts`, `update_turn`, `enter_shop_mode`, the
+  dart indicator / revolving-darts element) becomes the icon tally + saved-cache clusters.
+- Audio: reuse `AuidoManager` turn-end pitch tension for the bank trickle/count-up (note the
+  existing filename typo "auido").
 
-## Parked, downstream of this (do not build in Phase 1)
+## What Phase A does NOT do (and why)
 
-- **Map + scarcity + typed shops** — `specs/future/map-pool-filtration.md`. The vehicle for
-  making flat accuracy scarce and letting the player pre-choose a reward biome. Resolves that
-  spec's open fork (#2: does accuracy get promoted into the shoppable pool) — under this
-  direction, accuracy trades are poolable; rare flat boosts are the gated treasure.
-- **Component swap liquidity** — leaning harder on components requires mid-run ways to swap/alter
-  them (shop slots, minigame nodes). A dependency of the "components do the work" direction, not a
-  bonus.
-- **Darts as ammo + currency** — `specs/future/darts-as-currency-economy.md`. The "greens on the
-  plate" idea: a run-spanning resource economy. Captured in full there.
+- **No typed shop rings.** Making a ring grant an *accuracy* upgrade requires promoting accuracy
+  out of its own system (`UPGRADE_TYPES` / `_show_accuracy_pick`) into the shop reward pool — the
+  unresolved fork from `map-pool-filtration.md` (#2). That needs its own design pass. Phase A runs
+  against the **existing untyped shop**.
+- **No map, no boss-cadence change, no onboarding/tutorial work.** Teaching the new mental model
+  is real and tracked in the future spec's "Still to design," but it's after the mechanic feels
+  right.
+
+## Acceptance
+
+- Unspent darts persist across legs and across shops (no wipe at `_end_shop`); the bank only drops
+  by spending.
+- Running out of turns with ≥3 banked grants automatic bailout turns until checkout or bank < 3;
+  with < 3 banked, the run ends as before. Glass Cannon busts still end the run immediately.
+- Bailout-turn leftovers refund to the bank.
+- The rail shows fronted darts in 3-groups with the four states, the active set popped, busts
+  dimmed-red; the saved cache shows clusters/bonus-turns; leg-win trickles unused darts in.
+- Vanilla feel during a throw is unchanged (rail calm, no per-dart prompts).
 
 ---
 

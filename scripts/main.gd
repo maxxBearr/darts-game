@@ -259,8 +259,9 @@ var _start_modifier_pending: bool = false
 ## Total darts thrown across the entire run (for game over stats).
 var _run_total_darts: int = 0
 
-## Saved darts accumulated across the current 3-leg window.
-var _saved_darts_accumulator: int = 0
+## Persistent run-long dart bank. Grows by leg savings (get_saved_darts), only
+## ever shrinks by spending (shop purchases or bailout turns). Reset to 0 on run start.
+var _banked_darts: int = 0
 
 ## Whether the game is currently in the shop phase.
 var _in_shop: bool = false
@@ -538,6 +539,9 @@ func _start_new_throw() -> void:
 	if _in_shop:
 		# Shop throws skip scoring modifiers and leg HUD updates
 		hud.show_instruction("Move to aim, click to place zone")
+		# hide_score() above cleared the Leave Shop button — restore it so the player
+		# can bank the rest and leave at any time, not only once the darts run out.
+		hud.show_shop_leave_button(_shop_darts_remaining)
 		throw_mechanic.start_throw(dartboard.global_position, dartboard.board_radius)
 		return
 
@@ -745,9 +749,10 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		else:
 			hud.show_bust(response["bust_reason"])
 		hud.set_remaining_bust(true)
+		hud.mark_turn_busted(response["current_turn"])
 		hud.hide_checkout_helper()
 		dartboard.clear_illumination()
-		if response["is_game_over"]:
+		if response["is_game_over"] and not _try_bailout(response):
 			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
 			if score_tween != null and score_tween.is_valid():
@@ -778,7 +783,7 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		# Used all 3 darts without bust or win — hide helper until next turn
 		hud.hide_checkout_helper()
 		dartboard.clear_illumination()
-		if response["is_game_over"]:
+		if response["is_game_over"] and not _try_bailout(response):
 			_run_total_darts += x01_game.darts_used_in_leg
 			_run_over = true
 			if score_tween != null and score_tween.is_valid():
@@ -869,8 +874,11 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		_show_run_won()
 		return
 
-	# Accumulate saved darts for the shop window
-	_saved_darts_accumulator += x01_game.get_saved_darts()
+	# Accumulate this leg's unused darts into the persistent bank, trickling them
+	# into the rail's saved cache.
+	var leg_saved: int = x01_game.get_saved_darts()
+	_banked_darts += leg_saved
+	hud.bank_leg_savings(leg_saved, _banked_darts)
 
 	# Boss reward pick — show 3 rewards before normal upgrades/shop
 	if _boss_leg_just_cleared:
@@ -882,7 +890,7 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 	# Check if this is a shop leg (every Nth leg)
 	if response["current_leg"] % shop_cadence == 0:
 		_leg_phase = "shop_enter"
-		var saved: int = _saved_darts_accumulator
+		var saved: int = _banked_darts
 		hud.show_shop_entry(response["current_leg"], response["target_score"], response["current_turn"], saved)
 		return
 
@@ -973,7 +981,11 @@ func _on_next_leg() -> void:
 		_start_shop(response)
 		return
 
-	if _leg_phase == "shop_complete":
+	# "shop_complete" = ran the shop dry; "shop" = player chose to leave early. Both
+	# bank the unspent remainder via _end_shop. Cancel any pending auto-advance so a
+	# queued shop throw doesn't fire after we've left.
+	if _leg_phase == "shop_complete" or _leg_phase == "shop":
+		_awaiting_next_dart = false
 		var response: Dictionary = {
 			"current_leg": x01_game.current_leg,
 			"target_score": x01_game.target_score,
@@ -1022,6 +1034,37 @@ func _on_next_leg() -> void:
 		else:
 			_start_new_throw()
 	)
+
+
+## Bailout: rescue a would-be run-ending leg by spending banked darts.
+##
+## Fires automatically when the player runs out of turns without checking out
+## (the out-of-turns game-over branch) and the bank holds a full turn's worth
+## (>= 3). Spends 3 from the bank and raises the leg's turn ceiling by one so the
+## player throws another turn. Returns true if a bailout turn was granted (caller
+## then continues the leg instead of ending the run); false if the run should end.
+##
+## Glass Cannon busts never bail — they end the run immediately. With 1-2 banked,
+## no bailout is possible and the stranded darts are lost with the run.
+##
+## Bailout-turn leftovers refund naturally: raising max_turns grows the leg's dart
+## budget by 3, so get_saved_darts() (max_turns*darts_per_turn - darts_used_in_leg)
+## returns the unused bailout darts back to the bank on the eventual leg win.
+func _try_bailout(response: Dictionary) -> bool:
+	# Glass Cannon busts end the run immediately — never bail.
+	if response["is_bust"] and x01_game.glass_cannon_active:
+		return false
+	if _banked_darts < x01_game.darts_per_turn:
+		return false
+
+	# Cost is one turn's worth of darts (darts_per_turn, not a hardcoded 3) so the
+	# refund stays exact when a relic changes the turn size: raising max_turns grows
+	# the budget by darts_per_turn, matching what we spend here.
+	var cost: int = x01_game.darts_per_turn
+	_banked_darts -= cost
+	x01_game.max_turns += 1
+	hud.show_bailout(cost, _banked_darts, x01_game.max_turns)
+	return true
 
 
 ## Show the game over overlay with run stats.
@@ -1102,7 +1145,7 @@ func _on_reward_selected(index: int) -> void:
 func _continue_after_reward() -> void:
 	if shop_after_boss:
 		_leg_phase = "shop_enter"
-		var saved: int = _saved_darts_accumulator
+		var saved: int = _banked_darts
 		hud.show_shop_entry(x01_game.current_leg, x01_game.target_score, x01_game.current_turn, saved)
 	else:
 		_leg_phase = ""
@@ -1157,7 +1200,7 @@ func _reset_run_state() -> void:
 	_run_total_darts = 0
 	_leg_phase = ""
 	_in_shop = false
-	_saved_darts_accumulator = 0
+	_banked_darts = 0
 	_start_modifier_pending = false
 	_current_level = null
 	_active_rewards.clear()
@@ -1228,7 +1271,7 @@ func _on_new_run() -> void:
 ## Start the shop phase. Called instead of normal upgrade picks on shop legs.
 func _start_shop(response: Dictionary) -> void:
 	_in_shop = true
-	_shop_darts_remaining = _saved_darts_accumulator
+	_shop_darts_remaining = _banked_darts
 	_leg_phase = "shop"
 	AuidoManager.on_shop_entered()
 	UnlockManager.on_shop_opened()
@@ -1552,7 +1595,10 @@ func _end_shop_delayed() -> void:
 ## Finalize the shop and advance to the next leg with a slide transition.
 func _end_shop(response: Dictionary) -> void:
 	_in_shop = false
-	_saved_darts_accumulator = 0
+	# Persist the bank: keep whatever darts went unspent in the shop. The seed at
+	# _start_shop was _banked_darts, untouched during the shop, so the leftover
+	# (_shop_darts_remaining) is exactly bank-minus-spent.
+	_banked_darts = _shop_darts_remaining
 	_shop_lit_spots.clear()
 	_leg_phase = ""
 	AuidoManager.on_shop_exited()
@@ -2200,6 +2246,7 @@ func _update_all_hud() -> void:
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	hud.update_remaining(x01_game.remaining_score, x01_game.glass_cannon_active)
 	hud.update_darts(x01_game.darts_per_turn - x01_game.darts_this_turn, x01_game.current_turn == x01_game.max_turns, x01_game.darts_per_turn)
+	hud.update_bank(_banked_darts)
 	_update_stats_display()
 
 
@@ -2914,7 +2961,12 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 	var remaining_countdown: int = -1
 	var gc: bool = remaining_info.get("glass_cannon", false)
 	var is_bust_anim: bool = remaining_info.get("is_bust", false)
-	if not remaining_info.is_empty():
+	# A winning dart passes no remaining_info — the leg-won path owns the remaining
+	# display (it snaps to a golden 0). Without this flag the per-trigger loop below
+	# would tick the uninitialised counter (-1) down by face_value per trigger and
+	# write garbage to the remaining label (e.g. a 3-trigger D16 win → -1-16-16-16 = -49).
+	var do_countdown: bool = not remaining_info.is_empty()
+	if do_countdown:
 		var base_mult: int = int(multiplier_mods[0]["old_value"])
 		remaining_countdown = remaining_info["remaining_before"] - face_value * base_mult
 		if is_bust_anim and remaining_countdown <= 0:
@@ -3001,15 +3053,18 @@ func _spawn_trigger_animation(hit_position: Vector2, result: Dictionary, multipl
 			tween.tween_property(trigger_lbl, "modulate:a", 1.0, 0.1)
 			tween.tween_property(trigger_lbl, "position", main_label.position, 0.15).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 			tween.tween_callback(_on_trigger_impact_with_source.bind(trigger_lbl, main_label, source_ref, final_total, scale_bump, global_trigger_idx, local_j, snap_remaining, is_bust_anim))
-			if snap_remaining >= 0:
-				tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
-			else:
-				# Going below zero: a bust in vanilla, but a legal remainder under the
-				# Mirror-Zone relic. Either way keep the counter live; only paint it as a
-				# bust when it actually is one.
-				if is_bust_anim and snap_remaining + face_value >= 0:
-					tween.tween_callback(hud.set_remaining_bust.bind(true))
-				tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
+			# Only drive the remaining counter when we have real countdown info — a
+			# winning dart leaves this to the leg-won path (snaps to golden 0).
+			if do_countdown:
+				if snap_remaining >= 0:
+					tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
+				else:
+					# Going below zero: a bust in vanilla, but a legal remainder under the
+					# Mirror-Zone relic. Either way keep the counter live; only paint it as a
+					# bust when it actually is one.
+					if is_bust_anim and snap_remaining + face_value >= 0:
+						tween.tween_callback(hud.set_remaining_bust.bind(true))
+					tween.tween_callback(hud.update_remaining.bind(snap_remaining, gc))
 			var shake_offset: Vector2 = Vector2(randf_range(-4.0, 4.0), randf_range(-3.0, 3.0))
 			tween.tween_property(main_label, "position", main_label.position + shake_offset, 0.04)
 			tween.tween_property(main_label, "position", hit_position + Vector2(-10.0, -10.0), 0.04)

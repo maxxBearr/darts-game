@@ -359,6 +359,13 @@ func reset_for_run() -> void:
 	active_modifiers.clear()
 	voided_rings.clear()
 	_init_default_board_state()
+	# Drop the cached checkout-solver candidates and their derived caches. These are
+	# built from effective_wedge_values and only rebuilt when empty, so without this
+	# the solver (and the checkout helper) would keep suggesting the PREVIOUS run's
+	# modified wedges — e.g. proposing a "D22" on a fresh, unmodified board.
+	_solver_candidates.clear()
+	invalidate_preferred_remainders()
+	_last_sync_version = -1
 	_bump_state_version()
 
 

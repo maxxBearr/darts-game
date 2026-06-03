@@ -361,6 +361,22 @@ func update_turn(turn: int, max_turns: int) -> void:
 	else:
 		turn_label.text = "Turn %d/%d" % [turn, max_turns]
 		turn_label.modulate = Color(1.0, 1.0, 1.0)
+	dart_indicator.set_turn(turn, max_turns)
+
+
+## Mark the given turn's darts as busted (dim red) on the rail.
+func mark_turn_busted(turn_number: int) -> void:
+	dart_indicator.mark_turn_busted(turn_number)
+
+
+## Push the current banked-dart count to the rail's saved cache.
+func update_bank(banked: int) -> void:
+	dart_indicator.set_banked_darts(banked)
+
+
+## Leg-win beat: trickle this leg's unused darts into the saved cache.
+func bank_leg_savings(saved: int, new_bank: int) -> void:
+	dart_indicator.play_leg_win_trickle(saved, new_bank)
 
 
 ## Update the dart counter display and visual indicator.
@@ -484,6 +500,41 @@ func show_boss_background_tint(tint: Color) -> void:
 func show_bust(reason: String) -> void:
 	bust_label.text = "BUST! %s" % reason
 	bust_label.visible = true
+
+
+## Show the "BANK BAILOUT" rescue banner and fly a banked cluster into a new turn.
+## Fired automatically by main when the bank funds an extra turn at would-be game
+## over. spent = darts pulled from the bank; banked_left = bank after the spend.
+func show_bailout(spent: int, banked_left: int, new_max_turns: int) -> void:
+	AuidoManager.play_bonus_hit(0)
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var banner: Label = Label.new()
+	banner.text = "BANK BAILOUT  •  +1 TURN"
+	banner.add_theme_font_size_override("font_size", leg_won_font_size)
+	banner.add_theme_color_override("font_color", Color(0.4, 0.9, 1.0))
+	banner.add_theme_constant_override("outline_size", 6)
+	banner.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	banner.size = Vector2(560.0, 80.0)
+	banner.position = Vector2((viewport_size.x - 560.0) / 2.0, (viewport_size.y - 80.0) / 2.0 - 120.0)
+	banner.pivot_offset = Vector2(280.0, 40.0)
+	banner.scale = Vector2(0.3, 0.3)
+	banner.modulate.a = 0.0
+	add_child(banner)
+
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(banner, "scale", Vector2(1.0, 1.0), leg_won_scale_in_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.tween_property(banner, "modulate:a", 1.0, leg_won_scale_in_duration * 0.5)
+	tween.set_parallel(false)
+	tween.tween_interval(leg_won_hold_duration)
+	tween.tween_property(banner, "modulate:a", 0.0, leg_won_fade_out_duration)
+	tween.tween_callback(banner.queue_free)
+
+	# Rail: spend a banked cluster to form the granted turn (defined in the rail rewrite).
+	if dart_indicator.has_method("play_bailout_flyin"):
+		dart_indicator.play_bailout_flyin(spent, banked_left, new_max_turns)
 
 
 ## Show a centered "LEG WON!" banner that scales in and fades out.
@@ -1572,14 +1623,26 @@ func show_shop_entry(leg: int, target: int, turns_used: int, saved_darts: int) -
 ## Show the shop header with remaining dart count and update indicator.
 func show_shop_header(darts_remaining: int) -> void:
 	upgrade_container.visible = false
-	next_leg_button.visible = false
 	var thrown: int = _shop_total_darts - darts_remaining
 	dart_label.text = "Thrown: %d / %d" % [thrown, _shop_total_darts]
 	dart_indicator.set_darts_remaining(darts_remaining)
 	if darts_remaining > 0:
 		score_label.text = "SHOP — Throw at the lit spots!"
+		# Let the player bank the rest and leave whenever they want.
+		next_leg_button.text = "Leave Shop (%d saved)" % darts_remaining
+		next_leg_button.visible = true
 	else:
 		score_label.text = "SHOP — No darts left!"
+		next_leg_button.visible = false
+
+
+## Re-assert the "Leave Shop" button. show_shop_header sets it, but every shop throw
+## then runs _start_new_throw → hide_score → hide_all_buttons, which clears it. The
+## shop throw start calls this afterwards so the player can always bank-and-leave.
+func show_shop_leave_button(darts_remaining: int) -> void:
+	if darts_remaining > 0:
+		next_leg_button.text = "Leave Shop (%d saved)" % darts_remaining
+		next_leg_button.visible = true
 
 
 ## Show the zero-dart shop acknowledgment.
