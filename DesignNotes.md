@@ -8,6 +8,14 @@
 
 ## Status snapshot
 
+**Shipped 2026-06-03 (Darts as Currency — Phase A: persistent bank + bailout):**
+
+- **Spare darts became a persistent run-long bank with an automatic bailout** (`specs/2026-06-02-darts-currency-phase-a.md`; commits `c15d980`/`3277639`/`754dbd7`). The old per-shop-window `_saved_darts_accumulator` (wiped at `_end_shop`) is now `_banked_darts` (`main.gd:264`) — it grows by each leg's `get_saved_darts()`, only ever shrinks by spending (shop purchases or bailout), and resets to 0 only on run start; `_end_shop` now keeps the unspent shop remainder instead of zeroing it. **Bailout** (`_try_bailout()`, `main.gd:1053`, called from both game-over interceptions as `is_game_over and not _try_bailout(...)`): when a leg would end via the out-of-turns branch and the bank holds ≥ `darts_per_turn`, it spends a turn's worth, raises `max_turns` by one, and lets the player throw another turn — repeating until checkout or bank-below-3, automatically (no prompt; declining is never correct since a lost leg ends the run). Glass Cannon busts never bail (they still end the run immediately). Unused bailout-turn darts refund to the bank via the normal `get_saved_darts()` path. This is the intended **replacement climb** for the power-progression axis the accuracy reshape removed — the run-spanning resource the player banks and gambles. HUD feedback shipped (`hud.bank_leg_savings` leg-win trickle, `hud.show_bailout`) plus sound effects. **Phase B (typed shop rings) deferred** — needs the accuracy-into-shop-pool fork (`specs/future/darts-as-currency-economy.md`).
+
+**Shipped 2026-06-02 (Accuracy Upgrades as Shape — Phase 1):**
+
+- **Stat upgrades reworked from a climb into a reshape** (`specs/2026-06-02-accuracy-upgrades-as-shape.md`; commit `b95d4e2 dart components buff, accuracy upgrades debuff`). Fixes the determinism problem where maxed accuracy killed the throw-animation suspense (the fly-in's drift *is* the accuracy miss, so zero scatter = no animation) and flattened dart components. All six `UPGRADE_TYPES` are now `tradeoff: true` (the four formerly-flat range/speed entries converted to sibling-axis trades, matching the two accuracy ones); the old fixed `penalty_amount: 3` is gone — penalty is now **rarity-scaled** (a `penalty` field per rarity row), so net gain follows a near-zero ladder (gains ~6–10, penalties 9/7/5 by tier → ~net 0 Common, +1–3 Uncommon, +3–5 Rare). Rarity buys a better *exchange rate*, not a bigger raw number; total scatter budget stays roughly conserved so the ellipse is always nonzero and the animation keeps its suspense, and strategy becomes positional (shape your zone to fit your targets). Dart components were buffed to carry more of the build (the intended early-mid foundation lean). **Watch:** even net +3–5 rares shown every other leg will slowly climb — monitor for a rare-stacking soft-beeline. Phase 2 (scarce map-gated *flat* accuracy boosts as the real power vent) deferred to the map work. **The replacement climb that fills the removed power axis is the darts-currency bank (above).**
+
 **Shipped 2026-06-01 (Flipped Wedges + Mirror-Zone Boss Relic):**
 
 - **Archived to `specs/2026-06-01-flipped-wedges-mirror-zone-relic.md`.** Two coupled items that let the player score *upward*. **Item 1, the Flipped Wedge** — a flip-sign modifier that negates the *final* dart score on a chosen wedge (face → boosts → ring multiplier → per-dart relics, *then* `total = -abs(total)`). Because the negate is dead-last it composes cleanly with boosts and multipliers and has no ambiguous mid-pipeline sign, which is why it's a per-wedge flag the scoring manager consults last, **not** a `wedge_values[]` bake-in like `WedgeValueModifier`. Its standalone value is being the escape valve from "locked low" (stuck at 3 with non-toggleable multipliers) — already works in the current engine since a flipped hit yields `new_remaining > remaining_score`, a normal hit not a bust. This **resolves open-question #2, the locked-modifier lockout.** **Item 2, the Mirror-Zone Boss Relic** ("Busting no longer ends your turn. Flips two wedges.") — entire new footprint is *one behavior*: a would-be-bust below 0 doesn't revert to `score_at_turn_start` and doesn't end the turn; the player goes negative and keeps throwing. Winning from the upside-down needs **no new win logic** — the existing `is_leg_won = (new_remaining == 0 and is_double)` fires from below because only a flipped wedge (negative points) climbs you toward 0 (at -20, double on a flipped face-10 wedge → -20 points → `-20 - (-20) = 0` on a double → win). The relic *always grants the two flips* — structural, not flavor, since without a flipped wedge the negative zone is a soft-lock.
@@ -424,20 +432,16 @@ Parts appear in the shop at a voucher-like rate (less frequent than regular upgr
 
 ---
 
-## Stat Upgrade System (IMPLEMENTED)
+## Stat Upgrade System (IMPLEMENTED — reworked to trades 2026-06-02)
 
-Between legs, the player picks one of three randomized stat upgrades. Each upgrade boosts one of the six throw stats.
+Between legs, the player picks one of three randomized stat upgrades over the six throw stats. **As of 2026-06-02 every upgrade is a trade, not a flat climb** (`specs/2026-06-02-accuracy-upgrades-as-shape.md`): each boosts one stat and penalizes its sibling axis (H↔V within range / speed / accuracy). The intent is *reshape, not climb* — keep total accuracy roughly conserved so the throw animation never loses its suspense and dart components stay relevant.
 
-- Upgrades are rarity-weighted: Common (60%), Uncommon (30%), Rare (10%).
-- Common: +5 to +10. Uncommon: +8 to +15. Rare: +12 to +20.
-- The specific boost value is rolled per upgrade and shown to the player (e.g., "Uncommon — Aim Accuracy +11").
-- Upgrade buttons show rarity name, stat name, and boost value, tinted by rarity color.
-- Stats cap at 100 (or 5.0 for speed stats — speed uses a separate internal scaling formula).
-- After picking an upgrade, the "Next Leg" button appears.
-- Base stats are snapshotted at run start and restored on new run.
-- Duplicates within a single set of 3 are allowed.
-- Logic lives in `main.gd` currently; will migrate to a dedicated manager when items get complex.
-- **On shop legs (every third leg), this pick is replaced by the shop round** — see below. On non-shop legs the 2-of-3 (or 3-of-3 — TODO confirm against current code) pick continues unchanged.
+- All six `UPGRADE_TYPES` carry `tradeoff: true` and a `penalty_property` (the sibling axis). The old fixed `penalty_amount: 3` field is gone.
+- Rarity scales the **exchange rate**, not a bigger number. Per-rarity `penalty` lives on the rarity-table rows: gains ~6–10, penalties 9/7/5 (Common/Uncommon/Rare) → roughly net 0 / +1–3 / +3–5. Three tables: `STANDARD_RARITY_TABLE` (range), `SPEED_RARITY_TABLE`, `CONSISTENCY_RARITY_TABLE` (accuracy).
+- The pick UI shows rarity, stat, boost value, and the penalty stat/amount, tinted by rarity color.
+- Stats still cap at 100 (5.0 for speed). Base stats snapshot at run start, restored on new run. Duplicates within a set of 3 allowed. Logic lives in `main.gd`.
+- **On shop legs (every third leg), this pick is replaced by the shop round** — see below.
+- Deferred (Phase 2, with the map): scarce *flat* accuracy boosts as a gated treasure — the one place a real climb is allowed, kept rare so it can't reach determinism. See `specs/future/map-pool-filtration.md`.
 
 ---
 
@@ -453,7 +457,7 @@ Every third leg, the post-leg upgrade pick is replaced by a shop round. The shop
 
 Each leg has a finite dart budget: `total_darts_in_leg = max_turns * darts_per_turn` (currently 5 × 3 = 15). Each throw increments `used_darts`. On a bust, the remaining darts in the busted turn are counted as used (busting on dart 1 of a turn burns the full 3-dart turn). On leg win, `saved_darts = total_darts_in_leg - used_darts`.
 
-`shop_darts` is the sum of saved darts across the three legs preceding the shop. The accumulator resets to 0 once the shop concludes.
+**As of 2026-06-03 saved darts persist in a run-long bank** (`_banked_darts`, `specs/2026-06-02-darts-currency-phase-a.md`), replacing the old per-shop-window accumulator that wiped at `_end_shop`. The bank grows by each leg's `saved_darts`, only ever shrinks by spending (shop purchases or bailout turns), and resets to 0 only on run start. `shop_darts` seeds from the current bank; `_end_shop` keeps the unspent remainder rather than zeroing it. Saved darts also fund **bailout turns** (raise `max_turns` from the bank when a leg would otherwise end the run — see the archived Phase A spec).
 
 ### Board Setup
 
