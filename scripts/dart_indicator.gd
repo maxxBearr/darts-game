@@ -106,6 +106,8 @@ var _trickle_moved: float = 0.0
 var _trickle_base_bank: int = 0
 ## The active trickle tween, kept so a new leg can cancel it mid-flight.
 var _trickle_tween: Tween = null
+## How many move-to-saved ticks have played this trickle (one per dart crossing).
+var _trickle_sound_count: int = 0
 
 # --- Mode / shop ---
 var _mode: String = "leg"  # "leg" or "shop"
@@ -183,6 +185,9 @@ func set_banked_darts(count: int) -> void:
 func play_leg_win_trickle(saved: int, new_bank: int) -> void:
 	_banked_darts = maxi(new_bank, 0)
 	_cancel_trickle_tween()
+	# Fresh trickle: ticks start from base pitch and climb again.
+	_trickle_sound_count = 0
+	AuidoManager.reset_move_darts_pitch()
 	_trickle_cells = []
 	if saved <= 0 or not is_visible_in_tree():
 		_trickle_moved = 0.0
@@ -303,6 +308,12 @@ func _set_slash_progress(v: float, turn_number: int) -> void:
 
 
 func _set_trickle_moved(v: float) -> void:
+	# One move-to-saved tick per dart as it crosses into the cache (chaining,
+	# rising-pitch), fired off integer crossings of the animated value.
+	var moved_now: int = int(floor(v))
+	while _trickle_sound_count < moved_now:
+		AuidoManager.play_move_darts_to_saved()
+		_trickle_sound_count += 1
 	_trickle_moved = v
 	# Cache fills in lockstep with the front erasing.
 	_displayed_bank = float(_trickle_base_bank) + v
@@ -443,6 +454,11 @@ func _draw_rail() -> void:
 		var turn_number: int = t + 1
 		var y: float = tmarg + t * row_h
 
+		# Bounding box of the turn's still-in-hand darts, so the active set gets a
+		# SINGLE white outline rather than one box per dart (which doubled up the line
+		# between neighbouring active darts).
+		var active_rect: Rect2 = Rect2()
+		var has_active: bool = false
 		for d: int in range(_max_darts):
 			if erased.has(Vector2i(turn_number, d)):
 				continue
@@ -452,13 +468,17 @@ func _draw_rail() -> void:
 			var col: Color = _state_color(state)
 
 			if state == DartState.ACTIVE:
-				# Pop: grow the icon about its centre and ring it.
+				# Pop: grow the icon about its centre; the outline is drawn once below.
 				var grown: Vector2 = Vector2(iw, ih) * active_pop_scale
 				var prect: Rect2 = Rect2(rect.get_center() - grown * 0.5, grown)
 				_draw_dart(prect, col)
-				draw_rect(prect.grow(1.0), active_outline_color, false, active_outline_width)
+				active_rect = prect if not has_active else active_rect.merge(prect)
+				has_active = true
 			else:
 				_draw_dart(rect, col)
+
+		if has_active:
+			draw_rect(active_rect.grow(2.0), active_outline_color, false, active_outline_width)
 
 		# Set-completion slash (one-shot transition).
 		if _slash_progress.has(turn_number):

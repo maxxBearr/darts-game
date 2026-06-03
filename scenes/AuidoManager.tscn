@@ -12,6 +12,7 @@
 [ext_resource type="AudioStream" uid="uid://bhhk5muccjb0j" path="res://sounds/game_over.wav" id="9_w0x6a"]
 [ext_resource type="AudioStream" uid="uid://lr4lni6o14uo" path="res://sounds/backroundmusic2.mp3" id="10_2gc06"]
 [ext_resource type="AudioStream" uid="uid://bs6yo0dpqxpqd" path="res://sounds/power up.ogg" id="11_2gc06"]
+[ext_resource type="AudioStream" uid="uid://c12daynt4ex5f" path="res://sounds/moveDarts.wav" id="13_gl6e8"]
 
 [node name="AuidoManager" type="Node" unique_id=993361023]
 script = ExtResource("1_br6uc")
@@ -57,3 +58,7 @@ volume_db = 8.0
 
 [node name="bust_sound" type="AudioStreamPlayer" parent="." unique_id=965109075]
 stream = ExtResource("6_ilfjs")
+
+[node name="MoveDartsToSaved" type="AudioStreamPlayer" parent="." unique_id=405285190]
+stream = ExtResource("13_gl6e8")
+max_polyphony = 12

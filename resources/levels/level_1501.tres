@@ -5,7 +5,7 @@
 [ext_resource type="Resource" uid="uid://c87223ie7n6b2" path="res://resources/bosses/void_medium.tres" id="3"]
 [ext_resource type="Resource" uid="uid://dsoyhksjd6wrj" path="res://resources/bosses/prism_medium.tres" id="4"]
 [ext_resource type="Resource" path="res://resources/bosses/weak_board_medium.tres" id="5"]
-[ext_resource type="Resource" path="res://resources/bosses/drunkard_medium.tres" id="8"]
+[ext_resource type="Resource" uid="uid://c6vs5ysaaei2v" path="res://resources/bosses/drunkard_medium.tres" id="8"]
 
 [sub_resource type="Resource" id="unlock_1001"]
 script = ExtResource("2")

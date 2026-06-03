@@ -10,6 +10,7 @@ extends Node
 @onready var bust_sound: AudioStreamPlayer = $bust_sound
 @onready var menu_music: AudioStreamPlayer = $MenuMusic
 @onready var game_music: AudioStreamPlayer = $GameMusic
+@onready var move_darts_to_saved: AudioStreamPlayer = $MoveDartsToSaved
 
 const BONUS_BASE_PITCH: float = 0.9
 const BONUS_PITCH_STEP: float = 0.15
@@ -86,6 +87,23 @@ func play_source_label_slam(is_replacement: bool = false) -> void:
 
 func reset_slam_pitch() -> void:
 	_slam_pitch_accumulator = 0.0
+
+
+var _move_darts_pitch_accumulator: float = 0.0
+
+
+## Move-to-bank tick: played once per dart as the leg-win trickle moves each unused
+## dart into the saved cache. Pitch rises +0.01 per play within a trickle for a
+## chaining feel; the node's max_polyphony lets the ticks overlap. Call
+## reset_move_darts_pitch() at the start of each trickle so it climbs from base again.
+func play_move_darts_to_saved() -> void:
+	move_darts_to_saved.pitch_scale = 1.0 + _move_darts_pitch_accumulator
+	move_darts_to_saved.play()
+	_move_darts_pitch_accumulator += 0.01
+
+
+func reset_move_darts_pitch() -> void:
+	_move_darts_pitch_accumulator = 0.0
 
 
 func transition_to_game_music() -> void:
