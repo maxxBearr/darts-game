@@ -2,10 +2,11 @@ class_name RewardRegistry
 extends RefCounted
 ## Pool of all boss rewards. Handles filtering and random selection.
 
+# streak_slot_extension was removed: streak-slot capacity is now sourced solely from the
+# equipped components (per-category), so a run-wide +1 reward is moot.
 static var ALL_REWARDS: Array[RuleModifierReward] = [
 	preload("res://resources/rewards/extra_dart.tres"),
 	preload("res://resources/rewards/extra_turn.tres"),
-	preload("res://resources/rewards/streak_slot_extension.tres"),
 	preload("res://resources/rewards/lucky_eye.tres"),
 	preload("res://resources/rewards/pool_widener.tres"),
 	preload("res://resources/rewards/frequent_shopping.tres"),

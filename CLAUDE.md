@@ -1,36 +1,31 @@
-# Spec: Scoring Lives on the Board — READY FOR IMPLEMENTATION
+# Spec: (none active)
 
-**Full build spec: `specs/2026-06-03-scoring-on-the-board.md`** (read it before implementing). The
-scoring/items half of the mid-game rebalance. Honed from brainstorm to build spec with all decisions
-locked; ready for a Claude Code pass.
+**Board-scoring rework SHIPPED 2026-06-03** — `specs/2026-06-03-scoring-on-the-board.md` (Status: Shipped;
+built by Claude Code, debugged + visuals added in the design session). Two-axis scoring landed: an additive
+face-value baseline (ring + hotspot + wedge value) × an earned *multiplicative* streak factor that combines
+all active streaks into ONE factor (`1 + Σ`, not per-streak compounding). Per-category streak capacity from
+components (`DartComponent.streak_slot_grant`, base 1 wedge + 1 color) replaced the global `max_streak_slots`;
+`StreakSlotExtensionReward` removed. Pool migrated (global `ColorBonus`/`OddEvenBonus` + all parity/even-odd
+streaks dropped; `FlipSign` sidelined; `ColorStreak` weight raised; `family` tag Scoring/Placement/Brush
+added). `HotspotModifier` (no-stack, +1/+2/+3) live with solver + tooltip support. Visuals: hotspot smoke
+shader (toggle `use_hotspot_shader`, multi-tone per-wedge-color) + smokified "+N" label + streak pulse on
+board darts (grey→white + slow→fast by count).
 
-**Core model — two separated scaling axes:** an *additive* face-value baseline (hotspots + wedge values,
-item-driven, bounded) × an *earned multiplicative* ceiling (streaks become the one multiplier, gated by
-component capacity). Scaling is a *route you choose*, never "play long enough." Scoring math today is
-already a single additive multiplier per dart — the only pipeline change is streaks moving from additive to
-a `streak_factor` applied last.
+**Next direction: typed shop — make shop offers type/family-dependent.** The `family` tag on board items is
+the (already-shipped) groundwork; the next spec wires shop/pool steering so the player sees the item *type*
+before committing (e.g. one of each family, or biased rings), so they branch builds instead of always
+grabbing the locally-strongest item. Folds into the parked map work:
 
-**What ships this pass:**
+- `specs/future/map-pool-filtration.md` — map + reward-pool steering (the `family` tag was its prerequisite).
+- Overlaps **Darts as Currency Phase B (typed shop rings)** in
+  `specs/future/darts-as-currency-economy.md` — still needs the accuracy-into-shop-pool fork resolved.
 
-- **Pool migration:** drop the unslotted global bonuses (`ColorBonus`, `OddEvenBonus`) and all parity /
-  even-odd classes; **sideline `FlipSign`** (unlist, keep class + Mirror-Zone relic); raise `ColorStreak`
-  weight; reweight. Add a `family` tag (Scoring / Placement / Brush) — streaks excluded.
-- **Streaks → multiplicative:** the exponential lever; capacity per-category from components (shaft → wedge
-  slots, barrel → color slots) via an inspector-editable `streak_slot_grant` export; cut
-  `StreakSlotExtensionReward`; replace the global `max_streak_slots`.
-- **Hotspots (new headline item):** `HotspotModifier`, picked via the segment picker, **no-stack** (one
-  tier/ring, max +3), folds into the additive baseline. Checkout solver + target tooltip must read it *and*
-  the live streak factor.
-- **Visuals:** smoky hotspot shader with the value baked into the smoke (enhances ring color, doesn't
-  override) + source-located scoring flair (spatial points from the board, streak points from the dart).
+Also deferred from the board-scoring pass (pick up when relevant): **Tier-2 geometry** items (wedge resize,
+bigger bull) behind the checkout-solver lift; hotspot **"value-in-the-smoke"** (the shader's `use_glyph`
+path); the **map / fronted-darts** difficulty axis. Max-manual: component stat layouts + `streak_slot_grant`
+values (inspector).
 
-**Out of scope (Max-manual or deferred):** component **stat layouts + streak-grant values** (Max tunes in
-the inspector — Claude Code only adds the field + plumbing); **Tier-2 geometry items** (deferred behind the
-solver lift); **shop/pool steering** (tag only); the **map / fronted-darts** progression (separate later
-spec — `specs/future/map-pool-filtration.md`). Build order is in the spec's Sequencing section.
-
-Also still parked: **Darts as Currency Phase B** (typed shop rings) in
-`specs/future/darts-as-currency-economy.md` — needs the accuracy-into-shop-pool fork resolved.
+When the next feature is being designed, replace this section with its spec (see the Workflow Notes below).
 
 ---
 

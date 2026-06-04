@@ -26,6 +26,9 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.PER_DART
 	config_type = ScoringEnums.ConfigType.PICK_WEDGE
 	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
+	# Sidelined from the item pool this pass (still granted by the Mirror-Zone relic).
+	# Would belong to the Scoring family if it re-earns a pool slot.
+	family = ScoringEnums.Family.SCORING
 
 
 ## Negate the dart's total score when it lands on the flipped wedge. Bulls have no

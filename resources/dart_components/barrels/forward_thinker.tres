@@ -23,3 +23,4 @@ texture = ExtResource("2_iwm5d")
 v_range_bonus = 22.0
 v_speed_bonus = 4.0
 v_accuracy_bonus = 18.0
+streak_slot_grant = 1

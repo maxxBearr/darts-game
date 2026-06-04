@@ -19,6 +19,7 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
 	config_type = ScoringEnums.ConfigType.PICK_SEGMENT
 	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
+	family = ScoringEnums.Family.BRUSH
 
 
 func get_config_fingerprint() -> String:
@@ -27,6 +28,14 @@ func get_config_fingerprint() -> String:
 
 func get_brush_color_name() -> String:
 	return COLOR_NAMES.get(target_color, "?")
+
+
+func get_pick_segment_header() -> String:
+	return "Paint a segment %s" % get_brush_color_name()
+
+
+func get_pick_segment_prompt(ring_display: String, face_value: int, color_name: String) -> String:
+	return "Paint %s %d (%s)? Click to confirm, Escape to cancel" % [ring_display, face_value, color_name]
 
 
 func apply_to_board(_wedge_values: Array[int], wedge_colors: Array[Dictionary], config: Dictionary) -> void:

@@ -1,6 +1,6 @@
 ---
 Spec date: 2026-06-03
-Status: Ready for implementation (2026-06-03). Honed from the `specs/future/scoring-on-the-board.md` brainstorm into
+Status: SHIPPED 2026-06-03 (core), via Claude Code + this session's debug & visuals pass. Honed from the `specs/future/scoring-on-the-board.md` brainstorm into
   a build spec. Decisions locked this session with Max: thematic streak-slot split; **two separated
   scaling axes** — a bounded *additive* face-value baseline (hotspots + wedge values, item-driven) and an
   earned *multiplicative* ceiling (streaks become the one multiplier, gated by skill + component capacity);
@@ -8,7 +8,23 @@ Status: Ready for implementation (2026-06-03). Honed from the `specs/future/scor
   streaks as a separate axis; sideline FlipSign for now. Full item catalog (geometry defined but staged).
   Tools-first: prove this scoring infrastructure + visuals standalone, then do the map. Magnitudes are
   starting points, not gospel.
-Implementation: Not started. Intended as a branch-and-playtest pass, not a single Claude Code drop.
+Implementation: Shipped via Claude Code, then debugged & extended this session. AS-BUILT: streaks went
+  additive→multiplicative but combine into ONE factor (streak_factor = 1 + Σ contributions) applied last,
+  NOT per-streak compounding (that was the ×64 bug — fixed). Per-category streak capacity from components
+  (DartComponent.streak_slot_grant, base 1 wedge + 1 color) replaced the global max_streak_slots;
+  StreakSlotExtensionReward removed. Pool migration done (ColorBonus + OddEvenBonus + all parity/even-odd
+  streak classes dropped; FlipSign unlisted but class + Mirror-Zone relic kept; ColorStreak weight raised;
+  `family` tag Scoring/Placement/Brush added, streaks excluded). HotspotModifier live (no-stack, +1/+2/+3,
+  segment-picked; checkout solver + tooltip read it and the live streak factor). Visuals shipped: hotspot
+  smoke shader (toggle `use_hotspot_shader`, multi-tone per-wedge-color on alpha blend) + smokified "+N"
+  label + recurring streak pulse on dart markers (count ≥ 2, grey→white brightness + slow→fast speed ramp).
+  Also fixed two pre-existing bugs: Pool Widener (shop loop now reads `shop_pick_count`) and the post-leg
+  replace-streak warning (now uses `_get_replacement_text` like every other path).
+  DEFERRED: Tier-2 geometry; **shop/pool steering by family (the NEXT spec — typed shop)**; map/fronted-darts;
+  hotspot "value-in-the-smoke" (the shader's `use_glyph` path). MAX-MANUAL: component stat layouts +
+  streak_slot_grant values (inspector). CAVEATS: result.streak_count is repurposed as the combined
+  multiplier for the HUD readout; a debug bulk-grant path can exceed streak capacity (not reachable in
+  normal play).
 Supersedes: `specs/future/scoring-on-the-board.md` (brainstorm) once this ships. Pairs with the parked
   map / fronted-darts work (`specs/future/map-pool-filtration.md`) — see Sequencing.
 ---

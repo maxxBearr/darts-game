@@ -34,8 +34,22 @@ var active_modifiers: Array[Resource] = []
 ## wedge keeps its value — which is why the solver must consult this, not just values.
 var voided_rings: Dictionary = {}
 
-## Maximum number of streak modifier slots. Default 3 (one per category).
-var max_streak_slots: int = 3
+## Rings marked as hotspots, keyed "<wedge_index>:<RingName>" (display ring name, e.g.
+## "3:Triple") → flat multiplier bonus (an int, 1–3). Parallel to voided_rings so the
+## boss hooks, solver, and tooltip can all read/contest it. The per-dart scoring path
+## folds this bonus into the additive baseline multiplier (face × (ring + hotspot) ×
+## streak). No-stack: one tier per ring (see HotspotModifier + the segment picker guard).
+var hotspot_rings: Dictionary = {}
+
+## Per-category streak-slot capacity, keyed by ScoringEnums.StreakCategory → int.
+## Sourced from the equipped components on run start (shaft → WEDGE, barrel → COLOR)
+## via DartBuild.get_streak_capacity(). Base 1 each so a vanilla build can hold one of
+## each. get_streak_conflicts() enforces this per category. Replaces the old global
+## max_streak_slots int.
+var streak_capacity: Dictionary = {
+	ScoringEnums.StreakCategory.WEDGE: 1,
+	ScoringEnums.StreakCategory.COLOR: 1,
+}
 
 ## When true, triples count as valid checkout finishes for the solver.
 var allow_triple_checkout: bool = false:
@@ -140,16 +154,8 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 		"is_preview": is_preview,
 	}
 
-	# Run through all enabled PER_DART modifiers in acquisition order.
-	# FlipSignModifier is held back for a final pass (see _apply_flip_pass).
-	for modifier: Resource in active_modifiers:
-		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.enabled:
-			if modifier is FlipSignModifier:
-				continue
-			result = modifier.apply(result, context)
-
-	# Flip sign is the dead-last step so it composes cleanly with everything else.
-	result = _apply_flip_pass(result, context)
+	# Run the two-axis scoring pipeline (additive baseline → streak multiply → flip).
+	result = _score_through_modifiers(result, context)
 
 	# A voided segment scores 0 regardless of what any modifier did to it — modifiers
 	# recompute total_score from face×multiplier, which would otherwise resurrect the
@@ -176,36 +182,23 @@ func get_active_streak_modifiers() -> Array:
 	return result
 
 
-## Get all active streak modifiers of the same category that would be candidates
-## for replacement. Returns empty if there's a free slot (no conflict).
-## Base rule: 1 streak per category (3 base slots). Bonus slots (max_streak_slots - 3)
-## allow duplicates within a category.
+## Get all active streak modifiers of the same category that would be candidates for
+## replacement. Returns empty if that category still has a free slot (no conflict).
+## Capacity is per-category and sourced from components (shaft → WEDGE, barrel → COLOR)
+## via streak_capacity; base 1 each. When the category is already at capacity, every
+## same-category streak is a replacement candidate (the caller asks the player which to
+## drop when more than one).
 func get_streak_conflicts(new_modifier: ScoringModifier) -> Array:
 	if new_modifier.streak_category == ScoringEnums.StreakCategory.NONE:
 		return []
-	var active_streaks: Array = get_active_streak_modifiers()
 	var same_category: Array = []
-	for existing: Resource in active_streaks:
+	for existing: Resource in get_active_streak_modifiers():
 		if existing is ScoringModifier and existing.streak_category == new_modifier.streak_category:
 			same_category.append(existing)
-	if same_category.is_empty():
-		return []
-	var unique_categories: int = _count_unique_streak_categories(active_streaks)
-	var bonus_slots: int = max_streak_slots - 3
-	var bonus_used: int = active_streaks.size() - unique_categories
-	if bonus_used < bonus_slots:
+	var capacity: int = streak_capacity.get(new_modifier.streak_category, 1)
+	if same_category.size() < capacity:
 		return []
 	return same_category
-
-
-func _count_unique_streak_categories(streaks: Array) -> int:
-	var seen: Array[int] = []
-	for s: Resource in streaks:
-		if s is ScoringModifier:
-			var cat: int = (s as ScoringModifier).streak_category
-			if not seen.has(cat):
-				seen.append(cat)
-	return seen.size()
 
 
 ## Convenience: returns the single conflict if exactly one exists, or null.
@@ -216,6 +209,26 @@ func get_streak_conflict(new_modifier: ScoringModifier) -> ScoringModifier:
 	if conflicts.size() == 1:
 		return conflicts[0]
 	return null
+
+
+## Streak "membership level" for a board dart — drives the recurring streak pulse on dart markers.
+## Returns the highest active streak count (>= 2, where the multiplier actually kicks in) whose
+## continuation criteria this dart's spot matches, or 0 if the dart isn't part of a scoring streak.
+## target carries the fields would_continue_streak() reads: wedge_index, ring_name, segment_color,
+## is_bull.
+func get_streak_level_for(target: Dictionary) -> int:
+	var level: int = 0
+	for modifier: Resource in active_modifiers:
+		if not (modifier is ScoringModifier):
+			continue
+		var sm: ScoringModifier = modifier as ScoringModifier
+		if sm.streak_category == ScoringEnums.StreakCategory.NONE or not sm.enabled:
+			continue
+		if not sm.has_method("would_continue_streak"):
+			continue
+		if sm.would_continue_streak(target) and sm.get_streak_count() >= 2:
+			level = maxi(level, sm.get_streak_count())
+	return level
 
 
 ## Remove a specific modifier from the active list.
@@ -257,6 +270,10 @@ func add_modifier(modifier: Resource, config: Dictionary, explicit_replacement: 
 		# Keyed on the config shape, not the class, so any swap-style mutation works.
 		if config.has("wedge_index_1") and config.has("wedge_index_2"):
 			_notify_wedges_swapped(config["wedge_index_1"], config["wedge_index_2"])
+		# A hotspot writes board state the manager owns (parallel to voided_rings), not the
+		# wedge values/colors, so register it here from the modifier's stored choice.
+		if modifier is HotspotModifier:
+			_register_hotspot(modifier as HotspotModifier)
 		_bump_state_version()
 
 	UnlockManager.on_item_acquired({
@@ -296,10 +313,10 @@ func _build_slots_context() -> Dictionary:
 	for m: Resource in active_modifiers:
 		if m is ScoringModifier and m.streak_category != ScoringEnums.StreakCategory.NONE:
 			categories[m.streak_category] = true
+	# Parity streaks were cut, so the two live categories are WEDGE and COLOR.
 	var all_streak: bool = (
 		categories.has(ScoringEnums.StreakCategory.WEDGE)
 		and categories.has(ScoringEnums.StreakCategory.COLOR)
-		and categories.has(ScoringEnums.StreakCategory.PARITY)
 	)
 	return {
 		"all_streak_categories_filled": all_streak,
@@ -358,6 +375,12 @@ func reset_for_run() -> void:
 	hit_history_run.clear()
 	active_modifiers.clear()
 	voided_rings.clear()
+	hotspot_rings.clear()
+	# Reset to base per-category capacity; the build re-applies its grants on run start.
+	streak_capacity = {
+		ScoringEnums.StreakCategory.WEDGE: 1,
+		ScoringEnums.StreakCategory.COLOR: 1,
+	}
 	_init_default_board_state()
 	# Drop the cached checkout-solver candidates and their derived caches. These are
 	# built from effective_wedge_values and only rebuilt when empty, so without this
@@ -413,18 +436,145 @@ func speculative_score(raw_result: Dictionary) -> Dictionary:
 		"is_preview": false,
 	}
 
-	for modifier: Resource in active_modifiers:
-		if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.enabled:
-			if modifier is FlipSignModifier:
-				continue
-			result = modifier.apply(result, context)
-
-	result = _apply_flip_pass(result, context)
+	result = _score_through_modifiers(result, context)
 
 	if result.get("is_void", false):
 		result["total_score"] = 0
 
 	return result
+
+
+## The two-axis scoring pipeline, shared by process_score() and speculative_score().
+## Enforces apply-order per the scoring-on-the-board spec:
+##   1. Additive baseline — non-streak PER_DART modifiers fold bonuses into the multiplier.
+##   2. Hotspot fold-in — board-state hotspot bonus added into the same additive baseline.
+##   3. Streak multiply — streak modifiers apply their multiplicative factor LAST, so the
+##      earned exponential axis multiplies the whole (ring + hotspot) baseline.
+##   4. Flip pass — sign flips compose dead-last, after everything else.
+## dart_score = face × (ring + Σhotspot) × streak_factor.
+func _score_through_modifiers(result: Dictionary, context: Dictionary) -> Dictionary:
+	# 1. Additive pass — every non-streak PER_DART modifier (FlipSign held back).
+	for modifier: Resource in active_modifiers:
+		if modifier.timing != ScoringEnums.ModifierTiming.PER_DART or not modifier.enabled:
+			continue
+		if modifier is FlipSignModifier:
+			continue
+		if modifier is ScoringModifier and (modifier as ScoringModifier).streak_category != ScoringEnums.StreakCategory.NONE:
+			continue
+		result = modifier.apply(result, context)
+
+	# 2. Hotspot fold-in — additive, into the same baseline multiplier as a bonus.
+	_apply_hotspot_bonus(result)
+
+	# 3. Streak multiply — the SINGLE multiplicative axis. Combine every active streak's
+	#    contribution into ONE factor (streak_factor = 1 + Σ contributions) and apply it
+	#    ONCE, after the full additive baseline. Streaks are summed, never compounded: with
+	#    no streak continuing, total is 0 → factor 1 → no change; e.g. one wedge streak at
+	#    count 2 → factor 2 (×2), not 2ⁿ across n streaks. Each streak still runs its own
+	#    continue/break + state update inside streak_contribution().
+	var streak_total: int = 0
+	var top_streak: ScoringModifier = null
+	var top_contribution: int = 0
+	for modifier: Resource in active_modifiers:
+		if modifier.timing != ScoringEnums.ModifierTiming.PER_DART or not modifier.enabled:
+			continue
+		if not (modifier is ScoringModifier) or (modifier as ScoringModifier).streak_category == ScoringEnums.StreakCategory.NONE:
+			continue
+		var contribution: int = (modifier as ScoringModifier).streak_contribution(result, context)
+		streak_total += contribution
+		# Attribute the combined factor to the strongest contributor (for the floating-score icon).
+		if contribution > top_contribution:
+			top_contribution = contribution
+			top_streak = modifier as ScoringModifier
+	if streak_total > 0:
+		var streak_factor: int = 1 + streak_total
+		_apply_combined_streak_factor(result, streak_factor, top_streak)
+		result["streak_triggered"] = true
+		result["streak_name"] = top_streak.modifier_name if top_streak != null else "Streak"
+		# Report the dart's actual combined streak multiplier (matches the ×N in the HUD annotation).
+		result["streak_count"] = streak_factor
+
+	# 4. Flip sign is the dead-last step so it composes cleanly with everything else.
+	result = _apply_flip_pass(result, context)
+
+	return result
+
+
+## Apply the single combined streak factor to the dart exactly once. The increase is
+## emitted as stepwise +1 multiplier increments up to (multiplier × factor) so the
+## floating-score countdown animation still reads it; each step is attributed to the
+## top-contributing streak so its icon/name/color shows. factor is the already-combined
+## 1 + Σ contributions — this multiplies the post-additive-baseline multiplier.
+func _apply_combined_streak_factor(result: Dictionary, factor: int, source: ScoringModifier) -> void:
+	if factor <= 1:
+		return
+	var target_mult: int = result["multiplier"] * factor
+	while result["multiplier"] < target_mult:
+		var old_mult: int = result["multiplier"]
+		result["multiplier"] += 1
+		result["total_score"] = result["face_value"] * result["multiplier"]
+		_track_streak_modification(result, old_mult, result["multiplier"], source)
+
+
+## Record a single +1 streak multiplier step, attributed to a streak modifier so the
+## floating-score grammar shows its icon/name/color (mirrors ScoringModifier._track_modification).
+func _track_streak_modification(result: Dictionary, old_value: int, new_value: int, source: ScoringModifier) -> void:
+	if not result.has("modifications"):
+		result["modifications"] = []
+	var entry: Dictionary = {
+		"field": "multiplier",
+		"old_value": old_value,
+		"new_value": new_value,
+	}
+	if source != null:
+		entry["source_name"] = source.modifier_name
+		entry["source_description"] = source.description
+		entry["source_rarity_color"] = source.rarity_color
+		entry["source_modifier"] = source
+	else:
+		entry["source_name"] = "Streak"
+		entry["source_description"] = ""
+		entry["source_rarity_color"] = Color(0.9, 0.8, 0.2)
+		entry["source_modifier"] = null
+	result["modifications"].append(entry)
+
+
+## Fold a hotspot ring's flat multiplier bonus into the additive baseline. Mirrors how an
+## additive bonus modifier mutates the result: bumps the multiplier, recomputes total_score,
+## and records per-step modification entries (source "Hotspot") so the floating-score flair
+## can attribute the points to the board. Bulls (wedge_index < 0) carry no hotspot.
+func _apply_hotspot_bonus(result: Dictionary) -> void:
+	if hotspot_rings.is_empty():
+		return
+	var wedge_index: int = result.get("wedge_index", -1)
+	if wedge_index < 0:
+		return
+	var key: String = "%d:%s" % [wedge_index, result.get("ring_name", "")]
+	var bonus: int = hotspot_rings.get(key, 0)
+	if bonus <= 0:
+		return
+	for i: int in range(bonus):
+		var old_mult: int = result["multiplier"]
+		result["multiplier"] += 1
+		result["total_score"] = result["face_value"] * result["multiplier"]
+		_track_hotspot_modification(result, old_mult, result["multiplier"])
+
+
+## Record a single +1 hotspot multiplier step in the result's modifications array. The
+## hotspot is board state, not a ScoringModifier instance, so source_modifier is null —
+## the floating-score grammar reads source_name "Hotspot" to flair it from the board.
+func _track_hotspot_modification(result: Dictionary, old_value: int, new_value: int) -> void:
+	if not result.has("modifications"):
+		result["modifications"] = []
+	result["modifications"].append({
+		"source_name": "Hotspot",
+		"source_description": "Hot ring: +%d to the multiplier" % new_value,
+		"source_rarity_color": Color(1.0, 0.55, 0.1),
+		"source_modifier": null,
+		"field": "multiplier",
+		"old_value": old_value,
+		"new_value": new_value,
+	})
 
 
 ## Flag a result as voided if its wedge+ring is in the boss void set. Synthesized
@@ -446,6 +596,51 @@ func is_segment_voided(wedge_index: int, ring_name: String) -> bool:
 	if wedge_index < 0:
 		return false
 	return voided_rings.has("%d:%s" % [wedge_index, ring_name])
+
+
+## Register a hotspot from an acquired HotspotModifier's stored choice. The picker stores
+## the ring by its lowercase dict key (e.g. "triple"); hotspot_rings is keyed by display
+## name (e.g. "Triple") to match live scoring results and voided_rings. No-stack is
+## enforced upstream by the segment picker (see main._complete_pick_segment), so this is a
+## plain write; if a ring is somehow already hot we keep the higher tier rather than
+## downgrading.
+func _register_hotspot(modifier: HotspotModifier) -> void:
+	if modifier.applied_wedge_index < 0 or modifier.applied_ring_key == "":
+		return
+	var ring_name: String = _ring_key_to_name(modifier.applied_ring_key)
+	var key: String = "%d:%s" % [modifier.applied_wedge_index, ring_name]
+	hotspot_rings[key] = maxi(hotspot_rings.get(key, 0), modifier.hotspot_bonus)
+	invalidate_preferred_remainders()
+
+
+## Whether a segment already carries a hotspot. ring_key is the lowercase dict key from
+## the segment picker. Used to disallow stacking a second hotspot on the same ring.
+func is_segment_hotspotted(wedge_index: int, ring_key: String) -> bool:
+	if wedge_index < 0:
+		return false
+	return hotspot_rings.has("%d:%s" % [wedge_index, _ring_key_to_name(ring_key)])
+
+
+## Hotspot multiplier bonus on a segment (display ring name), or 0 if none. For the
+## dartboard indicator and tooltips.
+func get_hotspot_bonus(wedge_index: int, ring_name: String) -> int:
+	if wedge_index < 0:
+		return 0
+	return hotspot_rings.get("%d:%s" % [wedge_index, ring_name], 0)
+
+
+## Inverse of _ring_name_to_key: lowercase dict key ("triple") → display name ("Triple").
+static func _ring_key_to_name(ring_key: String) -> String:
+	match ring_key:
+		"inner_single":
+			return "Inner Single"
+		"triple":
+			return "Triple"
+		"outer_single":
+			return "Outer Single"
+		"double":
+			return "Double"
+	return ring_key
 
 
 ## Apply all enabled FlipSignModifiers as the final scoring step. Held back from the

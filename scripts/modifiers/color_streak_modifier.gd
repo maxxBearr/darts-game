@@ -1,15 +1,19 @@
 class_name ColorStreakModifier
 extends ScoringModifier
-## Awards cumulative multiplier bonus per consecutive hit on the target segment color.
-## First qualifying hit scores normally. Second consecutive gets +bonus_per_hit x.
-## Third gets +2*bonus_per_hit x. Etc.
+## The COLOR streak — the multiplicative scaling axis for hitting the same segment color
+## repeatedly (colors cluster by ring and are paintable). Capacity-gated by the barrel.
+## First qualifying hit scores normally (×1). Each further consecutive same-color hit
+## raises the multiplicative factor: factor = 1 + (count - 1) × streak_growth, applied to
+## the whole additive baseline (face × (ring + hotspot)) as the LAST scoring step.
 ## Each instance tracks a fixed target_color rolled at generation.
 
 ## Which SegmentColor this streak tracks.
 @export var target_color: ScoringEnums.SegmentColor = ScoringEnums.SegmentColor.RED
 
-## Multiplier added per consecutive same-color hit.
-@export var bonus_per_hit: int = 1
+## Streak growth slope (per consecutive hit) for the multiplicative factor. The headline
+## tuning dial: 1 = linear-in-count (×streak_count), the spec's recommended sweet spot;
+## higher values ramp faster.
+@export var streak_growth: int = 1
 
 ## Current number of consecutive target-color hits.
 var _streak_count: int = 0
@@ -34,7 +38,10 @@ func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.COLOR_CIRCLE
 
 
-func apply(result: Dictionary, context: Dictionary) -> Dictionary:
+## Report this color streak's contribution to the combined streak factor. Runs the
+## continue/break logic and updates state (only on real throws), but does NOT mutate the
+## score — the manager sums all streaks into one factor and applies it once.
+func streak_contribution(result: Dictionary, context: Dictionary) -> int:
 	var is_preview: bool = context.get("is_preview", false)
 	var segment_color: int = result.get("segment_color", -1)
 
@@ -42,7 +49,7 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 	if segment_color < 0:
 		if not is_preview:
 			_reset_streak()
-		return result
+		return 0
 
 	var effective_count: int = _streak_count
 	if segment_color == target_color:
@@ -54,19 +61,9 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 	if not is_preview:
 		_streak_count = effective_count
 
-	# Apply bonus: streak count - 1 extra multipliers scaled by bonus_per_hit
-	var bonus: int = effective_count - 1
-	if bonus > 0:
-		for i: int in range(bonus * bonus_per_hit):
-			var old_mult: int = result["multiplier"]
-			result["multiplier"] += 1
-			result["total_score"] = result["face_value"] * result["multiplier"]
-			_track_modification(result, "multiplier", old_mult, result["multiplier"])
-		result["streak_triggered"] = true
-		result["streak_name"] = modifier_name
-		result["streak_count"] = effective_count
-
-	return result
+	if effective_count <= 1:
+		return 0
+	return (effective_count - 1) * streak_growth
 
 
 func would_continue_streak(target: Dictionary) -> bool:
@@ -107,7 +104,9 @@ const COLOR_NAMES: Dictionary = {
 
 
 static func get_pool_weight() -> int:
-	return 4
+	# Raised off the old vestigial 4 — color streak is now a first-class scaling axis
+	# (the barrel-gated multiplicative lever), on par with the wedge streak.
+	return 15
 
 
 static func get_rarity_weights() -> Array[int]:
@@ -143,6 +142,6 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> ColorStreakModifier:
 	var color_name: String = COLOR_NAMES[mod.target_color]
 
 	mod.modifier_name = "%s Streak" % color_name
-	mod.description = "+%dx per consecutive %s hit (per %s)" % [mod.bonus_per_hit, color_name.to_lower(), scope_name]
+	mod.description = "×streak multiplier per consecutive %s hit (per %s)" % [color_name.to_lower(), scope_name]
 
 	return mod

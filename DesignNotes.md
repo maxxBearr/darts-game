@@ -1,12 +1,22 @@
 # Dart Roguelike — Design Notes
 
-*Canonical design doc. Last refreshed 2026-05-31 after the Color Brushes + Per-Ring Color pass shipped.*
+*Canonical design doc. Last refreshed 2026-06-03 after the Scoring-Lives-on-the-Board pass shipped.*
 
 *This document supersedes `ProjectOverview.txt`. When major design decisions happen, refresh this doc — either by hand or by asking Claude.ai for an updated writeup of its project memory.*
 
 ---
 
 ## Status snapshot
+
+**Shipped 2026-06-03 (Scoring Lives on the Board — board-centric scoring rework):**
+
+- **Scoring split into two separated axes, fixing the mid-game runaway** (`specs/2026-06-03-scoring-on-the-board.md`; built by Claude Code, debugged + visuals added in the design session). The old problem was *unbounded passive accumulation* — stack enough always-on bonuses and every dart is huge without thought (the bookkeeping-load "fake difficulty"). Fix: a **face-value axis** (additive, bounded, item-driven — ring multiplier + hotspot bonus + wedge-value adds, all folded into one multiplier exactly as before) × an **earned exponential axis** (streaks, the *only* multiplicative lever). **Streaks went additive→multiplicative**, but all active streaks **combine into ONE factor** (`streak_factor = 1 + Σ per-streak contributions`, each `(count−1)×growth`) applied **last** — NOT compounded per streak (per-streak multiply was the ×64 bug; fixed in `scoring_modifier.gd::streak_contribution()` + `scoring_modifier_manager.gd::_score_through_modifiers()`/`_apply_combined_streak_factor()`). A streakless great dart still tops ~140; a long maintained streak is the sanctioned (and resettable, capacity-gated) way past it. Pipeline order: additive non-streak modifiers → hotspot fold-in → single streak multiply → flip pass.
+- **Streak-slot capacity is now per-category and sourced from the dart components** (`DartComponent.streak_slot_grant` `@export`, inspector-editable; `DartBuild.get_streak_capacity()` routes shaft→WEDGE, barrel→COLOR, base 1 each; `ScoringModifierManager.streak_capacity` Dictionary enforced by `get_streak_conflicts()`). Replaces the old global `max_streak_slots`; **`StreakSlotExtensionReward` removed**. A skewed shaft that grants an extra wedge slot is now a real build choice. *(Component stat layouts + the actual grant values are Max's manual inspector domain.)*
+- **Pool migration.** Dropped the unslotted global conditionals **`ColorBonusModifier` + `OddEvenBonusModifier`** (redundant with streaks) and **all parity/even-odd streak classes** (even/odd is location-agnostic — the anti-spatial outlier — cut entirely). **`FlipSignModifier` sidelined** (unlisted from `MODIFIER_TYPES`, class + Mirror-Zone relic intact — it was an overscoring band-aid the structural fix obsoletes; revisit later). `ColorStreakModifier` weight raised off its vestigial 4. New **`family` field** (`ScoringEnums.Family` — SCORING / PLACEMENT / BRUSH; streaks excluded) tags every board item — the prerequisite for typed-shop steering (the next spec).
+- **Hotspots — the headline new item.** `HotspotModifier` (Scoring family, BOARD_MUTATION / ON_ACQUIRE / PICK_SEGMENT, modeled on BrushModifier): pick a ring, it gets +1/+2/+3 to the multiplier (common/uncommon/rare), folded into the additive baseline. **No-stack** (one tier per ring, max +3; a second hotspot goes on a different ring, which spreads board play; never a silent downgrade). Stored in `ScoringModifierManager.hotspot_rings` (parallel to `voided_rings`); the **checkout solver and target tooltip both read it and the live streak factor**. Tier-2 geometry (wedge resize, bigger bull) defined in the spec but **deferred** behind the solver lift. Wedge-value left uncapped (low magnitudes, and over-juicing a wedge hurts your own checkout — self-balancing).
+- **Visuals.** `shaders/hotspot.gdshader` — multi-tone smoke in each wedge's own color family (a dark↔light shade pair mixed by a second noise field) on **normal alpha blend** (additive died on light wedges), so it reads on every ring while gaps show the paint through. Gated by a dev toggle `Dartboard.use_hotspot_shader` (off = the original code-drawn orange `+N` outline) so it can be A/B'd. The `+N` label rides on top with `shaders/hotspot_label.gdshader` eroding its alpha with noise so the number drifts instead of looking pasted. **Streak pulse:** board darts whose spot is part of an active streak (count ≥ 2) emit a recurring shockwave-style pulse on the marker (`dart_marker.gd`), brightening **grey→white** and **speeding up (slow→fast)** with the streak count; membership via `ScoringModifierManager.get_streak_level_for()` + `would_continue_streak()`, refreshed each throw by `main._refresh_streak_pulses()`, cleared with the darts on turn/leg end.
+- **Two pre-existing bugs fixed in the same pass:** **Pool Widener** now works (`PoolWidenerReward` increments `shop_pick_count`, and the shop pick loop in `main.gd` now reads it instead of a hardcoded `range(2)`); the post-leg **replace-streak warning** now uses `_get_replacement_text()` like every other path (the old singular `get_streak_conflict()` returned null for 2+ same-category conflicts, so the warning vanished when a slot was full at capacity > 1).
+- **Deferred / next:** **typed shop** (make offers family-dependent — the next spec; `family` tag is the groundwork), folding into the parked map (`specs/future/map-pool-filtration.md`); Tier-2 geometry items; the hotspot "value-in-the-smoke" (`use_glyph`) path; the map / fronted-darts difficulty axis. **Caveats:** `result.streak_count` is repurposed as the combined multiplier for the HUD readout (not the literal streak length); a debug bulk-grant path can exceed streak capacity (not reachable in normal play).
 
 **Shipped 2026-06-03 (Darts as Currency — Phase A: persistent bank + bailout):**
 
@@ -228,6 +238,7 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 
 - Simple drawn circle with outer ring and dark inner center.
 - Color and size set by `main.gd` when instantiated.
+- Carries `hit_target` (its landing spot) and a `streak_level` (set by `main._refresh_streak_pulses()`). While part of an active streak (level ≥ 2) it draws a recurring shockwave-style pulse that brightens grey→white and speeds up slow→fast with the streak count (2026-06-03).
 
 ### `scoring_enums.gd` — Shared enums for the scoring system.
 
@@ -237,7 +248,8 @@ Range and accuracy stats are on a 1–100 scale (lerped between exported min/max
 - `ModifierKind { RELIC, BOARD_MUTATION }` — whether the modifier persists in the inventory (relic panel) or is a one-time board change with no panel presence. Drives `hud.gd::add_modifier_to_panel()` early-return.
 - `IconShape { NONE, COLOR_CIRCLE, EVEN_SQUARE, ODD_TRIANGLE, WEDGE_SECTOR }` — visual category for `ModifierIcon` shape dispatch. Only RELIC modifiers override it.
 - `StreakScope { NONE, WITHIN_TURN, WITHIN_LEG, WITHIN_RUN }` — how long streak history persists.
-- `StreakCategory { NONE, WEDGE, COLOR, PARITY }` — slot category for streak modifiers (one-per-category restriction).
+- `StreakCategory { NONE, WEDGE, COLOR, PARITY }` — slot category for streak modifiers. Capacity is now **per-category, sourced from components** (shaft→WEDGE, barrel→COLOR; see `DartBuild.get_streak_capacity()`), not the old one-per-category global. **PARITY is dead** as of the 2026-06-03 board-scoring pass — even/odd streaks were cut; the enum value remains only for safety, nothing populates it.
+- `Family { NONE, SCORING, PLACEMENT, BRUSH }` (2026-06-03) — player-facing board-item category for shop/pool steering; streaks stay NONE. Distinct from `ModifierKind` (which is about panel behavior).
 - `ConfigType { NONE, PICK_WEDGE, PICK_TWO_WEDGES }` — whether the player must configure the modifier.
 - `Rarity { COMMON, UNCOMMON, RARE }` — rarity tier for upgrades and modifiers.
 

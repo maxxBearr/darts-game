@@ -1,13 +1,18 @@
 class_name StreakBonusModifier
 extends ScoringModifier
-## Awards cumulative multiplier bonus per consecutive hit on the same wedge.
-## Any ring on the same numbered wedge counts (whole-wedge matching).
-## First qualifying hit scores normally. Second gets +bonus_per_hit x. Etc.
+## The WEDGE streak — the multiplicative scaling axis for hitting the same number
+## repeatedly (any ring on the same numbered wedge counts). Capacity-gated by the shaft.
+## First qualifying hit scores normally (×1). Each further consecutive same-wedge hit
+## raises the multiplicative factor: factor = 1 + (count - 1) × streak_growth, applied to
+## the whole additive baseline (face × (ring + hotspot)) as the LAST scoring step.
+## This is the one sanctioned way past the ~140 streakless baseline — earned, not
+## accumulated, and it resets on a miss.
 
-## Multiplier added per consecutive same-wedge hit. Default 2 because grouping
-## (consecutive same-wedge throws) is significantly harder than streaking
-## color or parity.
-@export var bonus_per_hit: int = 2
+## Streak growth slope (per consecutive hit) for the multiplicative factor. The headline
+## tuning dial: 1 = linear-in-count (×streak_count), the spec's recommended sweet spot;
+## higher values ramp faster. Kept on the wedge streak because grouping the same number
+## is the harder feat, so Max may tune it above the color streak.
+@export var streak_growth: int = 1
 
 var _streak_wedge_index: int = -1
 var _streak_count: int = 0
@@ -32,20 +37,23 @@ func get_icon_shape() -> ScoringEnums.IconShape:
 	return ScoringEnums.IconShape.WEDGE_SECTOR
 
 
-func apply(result: Dictionary, context: Dictionary) -> Dictionary:
+## Report this wedge streak's contribution to the combined streak factor. Runs the
+## continue/break logic and updates state (only on real throws), but does NOT mutate the
+## score — the manager sums all streaks into one factor and applies it once.
+func streak_contribution(result: Dictionary, context: Dictionary) -> int:
 	var is_preview: bool = context.get("is_preview", false)
 	var wedge_index: int = result.get("wedge_index", -1)
 
 	if wedge_index < 0 or result.get("is_bull", false):
 		if not is_preview:
 			_reset_streak()
-		return result
+		return 0
 
 	var ring_name: String = result.get("ring_name", "")
 	if ring_name == "Off Board":
 		if not is_preview:
 			_reset_streak()
-		return result
+		return 0
 
 	# Calculate what the streak would be without mutating state during preview
 	var effective_count: int = _streak_count
@@ -58,18 +66,9 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 		_streak_count = effective_count
 		_streak_wedge_index = wedge_index
 
-	var bonus: int = effective_count - 1
-	if bonus > 0:
-		for i: int in range(bonus * bonus_per_hit):
-			var old_mult: int = result["multiplier"]
-			result["multiplier"] += 1
-			result["total_score"] = result["face_value"] * result["multiplier"]
-			_track_modification(result, "multiplier", old_mult, result["multiplier"])
-		result["streak_triggered"] = true
-		result["streak_name"] = modifier_name
-		result["streak_count"] = effective_count
-
-	return result
+	if effective_count <= 1:
+		return 0
+	return (effective_count - 1) * streak_growth
 
 
 func would_continue_streak(target: Dictionary) -> bool:
@@ -135,6 +134,6 @@ static func generate(rarity_tier: ScoringEnums.Rarity) -> StreakBonusModifier:
 	var scope_name: String = SCOPE_NAMES[mod.streak_scope]
 
 	mod.modifier_name = "Wedge Streak"
-	mod.description = "+%dx per consecutive same-wedge hit (per %s)" % [mod.bonus_per_hit, scope_name]
+	mod.description = "×streak multiplier per consecutive same-wedge hit (per %s)" % scope_name
 
 	return mod

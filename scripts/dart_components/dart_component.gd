@@ -37,6 +37,12 @@ extends Resource
 @export var h_accuracy_bonus: float = 0.0
 @export var v_accuracy_bonus: float = 0.0
 
+## How many streak slots this component grants, on top of the base 1 per category.
+## On a SHAFT → wedge-streak slots (precision/repetition synergy). On a BARREL →
+## color-streak slots (the paintable scoring-engine axis). Ignored on FLIGHTS.
+## Keep this small (0–2) so it reads at a glance and doesn't overload the assembly pick.
+@export var streak_slot_grant: int = 0
+
 ## Optional throw modifier ability. When this component is equipped,
 ## this modifier is evaluated before each throw. Leave null for
 ## components with no conditional ability.
@@ -78,8 +84,24 @@ func get_tooltip_lines() -> Array[String]:
 		lines.append("H Accuracy: %+.0f" % h_accuracy_bonus)
 	if v_accuracy_bonus != 0.0:
 		lines.append("V Accuracy: %+.0f" % v_accuracy_bonus)
+	var streak_line: String = _streak_slot_tooltip_line()
+	if streak_line != "":
+		lines.append(streak_line)
 	lines.append("Weight: %+.2f" % weight)
 	return lines
+
+
+## Tooltip line describing this part's streak-slot grant, phrased by slot. Empty when
+## the grant is 0 or the part is a flight (flights don't grant streak capacity).
+func _streak_slot_tooltip_line() -> String:
+	if streak_slot_grant == 0:
+		return ""
+	match component_type:
+		ScoringEnums.ComponentSlot.SHAFT:
+			return "Wedge-streak slots: %+d" % streak_slot_grant
+		ScoringEnums.ComponentSlot.BARREL:
+			return "Color-streak slots: %+d" % streak_slot_grant
+	return ""
 
 
 ## Build BBCode tooltip with positive stats in green and negative in red-orange.
@@ -99,6 +121,9 @@ func get_bbcode_tooltip() -> String:
 			continue
 		var color_hex: String = "#8ad68a" if val > 0.0 else "#d6886a"
 		lines.append("[color=%s]%s: %+.0f[/color]" % [color_hex, entry[0], val])
+	var streak_line: String = _streak_slot_tooltip_line()
+	if streak_line != "":
+		lines.append("[color=#c79bff]%s[/color]" % streak_line)
 	var weight_color: String = "#aaaaaa"
 	lines.append("[color=%s]Weight: %+.2f[/color]" % [weight_color, weight])
 	return "\n".join(lines)

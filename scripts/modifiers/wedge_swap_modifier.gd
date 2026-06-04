@@ -9,6 +9,7 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
 	config_type = ScoringEnums.ConfigType.PICK_TWO_WEDGES
 	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
+	family = ScoringEnums.Family.PLACEMENT
 
 
 func get_config_fingerprint() -> String:
@@ -31,7 +32,9 @@ func apply_to_board(wedge_values: Array[int], wedge_colors: Array[Dictionary], c
 
 
 static func get_pool_weight() -> int:
-	return 10
+	# Raised from 10 in the pool reweight so the Placement family stays visible after the
+	# global/parity drops thinned the pool.
+	return 15
 
 
 static func get_rarity_weights() -> Array[int]:

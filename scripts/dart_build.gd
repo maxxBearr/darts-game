@@ -148,6 +148,23 @@ func get_total_stat_bonuses() -> Dictionary:
 	return bonuses
 
 
+## Per-category streak-slot capacity sourced from the equipped components.
+## Routes each part's streak_slot_grant by component_type: the SHAFT feeds WEDGE
+## capacity, the BARREL feeds COLOR capacity (flights contribute nothing). Base of
+## 1 each so a vanilla build can always hold one wedge streak and one color streak.
+## The manager reads this on run start to enforce per-category slot limits.
+func get_streak_capacity() -> Dictionary:
+	var capacity: Dictionary = {
+		ScoringEnums.StreakCategory.WEDGE: 1,
+		ScoringEnums.StreakCategory.COLOR: 1,
+	}
+	if equipped_shaft != null:
+		capacity[ScoringEnums.StreakCategory.WEDGE] += equipped_shaft.streak_slot_grant
+	if equipped_barrel != null:
+		capacity[ScoringEnums.StreakCategory.COLOR] += equipped_barrel.streak_slot_grant
+	return capacity
+
+
 ## Apply the build's stat bonuses to the throw mechanic.
 ## base_stats: the player's raw stat values before any component bonuses.
 func apply_to_throw_mechanic(throw_mech: Node2D, base_stats: Dictionary) -> void:

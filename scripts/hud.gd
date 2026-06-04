@@ -1669,7 +1669,10 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 			_preview_upgrades.append({})
 
 	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(mini(items.size(), 2)):
+	# Show one button per offered pick, up to the available buttons (3) so Pool Widener's
+	# extra shop pick (shop_pick_count > 2) surfaces instead of being silently dropped.
+	var shown: int = mini(items.size(), buttons.size())
+	for i: int in range(shown):
 		var item: Dictionary = items[i]
 		var button_text: String
 		var button_color: Color
@@ -1705,8 +1708,9 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 		buttons[i].mouse_entered.connect(_on_upgrade_hover.bind(i))
 		buttons[i].mouse_exited.connect(_on_upgrade_unhover)
 
-	# Hide the third button for 2-of-2 pick
-	buttons[2].visible = false
+	# Hide any unused buttons (e.g. the third button for a 2-of-2 pick).
+	for j: int in range(shown, buttons.size()):
+		buttons[j].visible = false
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 

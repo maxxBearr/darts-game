@@ -23,3 +23,4 @@ h_range_bonus = 17.0
 v_range_bonus = 17.0
 h_speed_bonus = 6.0
 v_speed_bonus = 6.0
+streak_slot_grant = 2

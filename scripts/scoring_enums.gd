@@ -54,12 +54,24 @@ const RING_ADJACENCY: Dictionary = {
 }
 
 ## Which streak slot category a streak modifier belongs to.
-## Only one streak modifier per category can be equipped at a time.
+## Capacity is per-category and sourced from the equipped components
+## (shaft → WEDGE slots, barrel → COLOR slots). See DartBuild.get_streak_capacity().
 enum StreakCategory {
 	NONE,    ## Not a streak modifier — no slot restriction
-	WEDGE,   ## Wedge-based streaks (same ring, adjacent, whole wedge)
-	COLOR,   ## Color-based streaks (consecutive same-color hits)
-	PARITY,  ## Even/odd-based streaks (consecutive same-parity hits)
+	WEDGE,   ## Wedge-based streaks (same ring, adjacent, whole wedge). Capacity from the shaft.
+	COLOR,   ## Color-based streaks (consecutive same-color hits). Capacity from the barrel.
+	PARITY,  ## RETIRED — even/odd streaks were cut (anti-spatial). Value kept for save-data safety; nothing populates it.
+}
+
+## Player-facing taxonomy for board-modifying items, used by the shop / reward pool
+## to steer offers (e.g. surface one of each). Distinct from ModifierKind, which is
+## about behavior (RELIC vs BOARD_MUTATION). Streaks are NOT a family — they live on
+## the separate multiplicative axis, acquired into component-gated slots.
+enum Family {
+	NONE,       ## Not a board item (streaks, legacy/sidelined modifiers).
+	SCORING,    ## Moves the face-value axis: Hotspot, Wedge Value.
+	PLACEMENT,  ## Moves things around: Wedge Swap (and deferred Tier-2 geometry edits).
+	BRUSH,      ## Recolor: Brush. Its own utility family because color drives color-streak builds.
 }
 
 ## Which slot a dart component fits in.

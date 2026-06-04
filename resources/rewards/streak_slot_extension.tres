@@ -1,9 +1,0 @@
-[gd_resource type="Resource" script_class="StreakSlotExtensionReward" format=3]
-
-[ext_resource type="Script" path="res://scripts/rewards/streak_slot_extension_reward.gd" id="1"]
-
-[resource]
-script = ExtResource("1")
-reward_id = &"streak_slot_extension"
-display_name = "Streak Slot Extension"
-description = "+1 additional streak slot."

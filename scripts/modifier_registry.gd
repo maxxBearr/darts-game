@@ -4,16 +4,12 @@ extends RefCounted
 ## Handles weighted random selection and rarity rolling to produce fully
 ## configured modifier instances ready for the player to acquire.
 
-const _ColorBonus = preload("res://scripts/modifiers/color_bonus_modifier.gd")
 const _WedgeValue = preload("res://scripts/modifiers/wedge_value_modifier.gd")
 const _StreakBonus = preload("res://scripts/modifiers/streak_bonus_modifier.gd")
 const _WedgeSwap = preload("res://scripts/modifiers/wedge_swap_modifier.gd")
-const _OddEvenBonus = preload("res://scripts/modifiers/odd_even_bonus_modifier.gd")
 const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
 const _ColorStreak = preload("res://scripts/modifiers/color_streak_modifier.gd")
-const _EvenStreak = preload("res://scripts/modifiers/even_streak_modifier.gd")
-const _OddStreak = preload("res://scripts/modifiers/odd_streak_modifier.gd")
-const _FlipSign = preload("res://scripts/modifiers/flip_sign_modifier.gd")
+const _Hotspot = preload("res://scripts/modifiers/hotspot_modifier.gd")
 
 ## Rarity weight shift applied to all modifier rolls during the current run.
 ## Set from main.gd based on LevelDefinition.rarity_weight_shift.
@@ -39,17 +35,21 @@ static func _shifted_weights(weights: Array[int]) -> Array[int]:
 	return result
 
 
+## The live item pool after the scoring-on-the-board migration. Three board-item
+## families (Scoring / Placement / Brush) plus the two streak axes:
+##   Scoring:   Hotspot, Wedge Value
+##   Placement: Wedge Swap
+##   Brush:     Brush (affinity-gated — weight 0 until the player owns a color)
+##   Streaks:   Wedge Streak (shaft-gated), Color Streak (barrel-gated)
+## Dropped from the pool: ColorBonus, OddEvenBonus, Even/Odd/Parity streaks (anti-spatial
+## globals/parity). Sidelined: FlipSign (class + Mirror-Zone relic kept, just unlisted).
 const MODIFIER_TYPES: Array = [
-	_ColorBonus,
+	_Hotspot,
 	_WedgeValue,
-	_StreakBonus,
 	_WedgeSwap,
-	_OddEvenBonus,
 	_Brush,
+	_StreakBonus,
 	_ColorStreak,
-	_EvenStreak,
-	_OddStreak,
-	_FlipSign,
 ]
 
 

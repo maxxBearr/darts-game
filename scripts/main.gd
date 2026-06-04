@@ -649,6 +649,15 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 
 	# Place a dart marker at the hit position
 	var dart_node: Node2D = _place_dart(hit_position)
+	# Tag the marker with its landing spot and refresh streak pulses (process_score above already
+	# advanced streak state, so an active streak's darts light up immediately).
+	dart_node.set("hit_target", {
+		"wedge_index": result.get("wedge_index", -1),
+		"ring_name": result.get("ring_name", ""),
+		"segment_color": result.get("segment_color", -1),
+		"is_bull": result.get("is_bull", false),
+	})
+	_refresh_streak_pulses()
 
 	# If the dart hit a voided wedge, tween it away into the void
 	var hit_wedge: int = result.get("wedge_index", -1)
@@ -1217,7 +1226,12 @@ func _reset_run_state() -> void:
 	x01_game.allow_triple_checkout = false
 	x01_game.glass_cannon_active = false
 	x01_game.bust_ends_turn = true
-	scoring_modifier_manager.max_streak_slots = 3
+	# Base per-category streak capacity; the equipped build re-applies its grants on run
+	# start (see _on_run_confirmed). reset_for_run() also resets this.
+	scoring_modifier_manager.streak_capacity = {
+		ScoringEnums.StreakCategory.WEDGE: 1,
+		ScoringEnums.StreakCategory.COLOR: 1,
+	}
 	scoring_modifier_manager.allow_triple_checkout = false
 	scoring_modifier_manager.glass_cannon_active = false
 	shop_cadence = _default_shop_cadence
@@ -1473,7 +1487,7 @@ func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 	var offered_mod_fingerprints: Array[String] = _get_owned_fingerprints()
 	var offered_accuracy_keys: Array[String] = []
 
-	for _i: int in range(2):
+	for _i: int in range(shop_pick_count):
 		# 50/50 chance of accuracy upgrade vs modifier (unless All In is active)
 		if not all_in_active and randi_range(0, 1) == 0:
 			var pick: Dictionary = _generate_shop_accuracy_pick(rarity, offered_accuracy_keys)
@@ -1903,6 +1917,9 @@ func _show_assembly() -> void:
 ## Called when the player confirms their dart build on the assembly screen.
 func _on_run_confirmed() -> void:
 	dart_build.apply_to_throw_mechanic(throw_mechanic, _raw_stats)
+	# Streak-slot capacity is sourced from the equipped components: shaft → wedge slots,
+	# barrel → color slots (base 1 each). This sets the build's scaling ceiling for the run.
+	scoring_modifier_manager.streak_capacity = dart_build.get_streak_capacity()
 	# Re-snapshot after applying build so upgrades are relative to the built dart
 	_snapshot_base_stats()
 	# Update dart indicator with equipped component visuals
@@ -1988,14 +2005,12 @@ func _on_upgrade_selected(index: int) -> void:
 	for mod: ScoringModifier in generated:
 		_current_modifiers.append(mod)
 
-	# Build replacement info for each modifier choice
+	# Build replacement info for each modifier choice. Use _get_replacement_text() (like every
+	# other call site) so the warning is correct at any capacity — including the multi-conflict
+	# "Choose streak to replace" case, which singular get_streak_conflict() returns null for.
 	var replacement_info: Array[String] = []
 	for mod: ScoringModifier in _current_modifiers:
-		var conflict: ScoringModifier = scoring_modifier_manager.get_streak_conflict(mod)
-		if conflict != null:
-			replacement_info.append("Replaces: %s" % conflict.modifier_name)
-		else:
-			replacement_info.append("")
+		replacement_info.append(_get_replacement_text(mod))
 	hud.show_modifier_choices_with_replacement(_current_modifiers, replacement_info)
 
 
@@ -2509,6 +2524,7 @@ func _sync_board_state() -> void:
 	dartboard.effective_wedge_values = scoring_modifier_manager.effective_wedge_values
 	dartboard.effective_wedge_colors = scoring_modifier_manager.effective_wedge_colors
 	dartboard.flipped_wedges = scoring_modifier_manager.get_flipped_wedge_indices()
+	dartboard.hotspot_rings = scoring_modifier_manager.hotspot_rings
 	dartboard.queue_redraw()
 
 
@@ -2526,6 +2542,18 @@ func _sync_board_and_solver() -> void:
 func _clear_darts() -> void:
 	for child: Node in dart_container.get_children():
 		child.queue_free()
+
+
+## Refresh the recurring streak pulse on every board dart marker. A marker pulses while its landing
+## spot is part of an active scoring streak (count >= 2), brightening grey -> white with the streak
+## length. Called after each throw resolves (streak state is current by then); markers are cleared
+## on turn/leg end, so broken-streak darts stop pulsing naturally.
+func _refresh_streak_pulses() -> void:
+	for child: Node in dart_container.get_children():
+		var tgt: Variant = child.get("hit_target")
+		if typeof(tgt) != TYPE_DICTIONARY or (tgt as Dictionary).is_empty():
+			continue
+		child.set("streak_level", scoring_modifier_manager.get_streak_level_for(tgt))
 
 
 ## Create a visual dart marker at the landing position.
@@ -2664,7 +2692,15 @@ func _complete_pick_wedge(wedge_idx: int) -> void:
 
 
 func _complete_pick_segment(seg: Dictionary) -> void:
-	dartboard.animate_color_transition()
+	# Hotspots don't stack: a ring already carrying a hotspot is rejected (never a silent
+	# downgrade). Keep the picker open so the player chooses a different ring.
+	if _pending_modifier is HotspotModifier and scoring_modifier_manager.is_segment_hotspotted(seg["wedge_index"], seg["ring_key"]):
+		var ring_display: String = RING_DISPLAY_NAMES.get(seg["ring_key"], seg["ring_key"])
+		hud.show_picker_prompt("%s is already a hotspot — pick a different ring" % ring_display)
+		return
+	# Brush recolors animate; a hotspot doesn't change ring color, so skip the recolor flash.
+	if not (_pending_modifier is HotspotModifier):
+		dartboard.animate_color_transition()
 	add_scoring_modifier(_pending_modifier, {"wedge_index": seg["wedge_index"], "ring_name": seg["ring_key"]})
 	_finish_picker()
 
@@ -2776,10 +2812,7 @@ const COLOR_DISPLAY_NAMES: Dictionary = {
 
 
 func _show_segment_picker_header(modifier: ScoringModifier) -> void:
-	if modifier.has_method("get_brush_color_name"):
-		hud.show_picker_header("Paint a segment %s" % modifier.get_brush_color_name())
-	else:
-		hud.show_picker_header("Pick a segment")
+	hud.show_picker_header(modifier.get_pick_segment_header())
 
 
 func _update_segment_picker_prompt(seg: Dictionary) -> void:
@@ -2788,11 +2821,15 @@ func _update_segment_picker_prompt(seg: Dictionary) -> void:
 		return
 	var wedge_idx: int = seg["wedge_index"]
 	var ring_key: String = seg["ring_key"]
-	var value: int = scoring_modifier_manager.get_effective_value(wedge_idx)
 	var ring_display: String = RING_DISPLAY_NAMES.get(ring_key, ring_key)
+	# A hotspot can't stack on an already-hot ring — surface that on hover instead of a prompt.
+	if _pending_modifier is HotspotModifier and scoring_modifier_manager.is_segment_hotspotted(wedge_idx, ring_key):
+		hud.show_picker_prompt("%s %d is already a hotspot — pick a different ring" % [ring_display, scoring_modifier_manager.get_effective_value(wedge_idx)])
+		return
+	var value: int = scoring_modifier_manager.get_effective_value(wedge_idx)
 	var current_color: ScoringEnums.SegmentColor = scoring_modifier_manager.get_effective_color(wedge_idx, ring_key)
 	var color_name: String = COLOR_DISPLAY_NAMES.get(current_color, "?")
-	hud.show_picker_prompt("Paint %s %d (%s)? Click to confirm, Escape to cancel" % [ring_display, value, color_name])
+	hud.show_picker_prompt(_pending_modifier.get_pick_segment_prompt(ring_display, value, color_name))
 
 
 func _spawn_floating_score(hit_position: Vector2, result: Dictionary, recession_data: Dictionary = {}, is_leg_won: bool = false, remaining_info: Dictionary = {}) -> Tween:

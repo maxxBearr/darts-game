@@ -21,6 +21,7 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.ON_ACQUIRE
 	config_type = ScoringEnums.ConfigType.PICK_WEDGE
 	kind = ScoringEnums.ModifierKind.BOARD_MUTATION
+	family = ScoringEnums.Family.SCORING
 
 
 ## Called with the player's wedge choice. Mutates the effective values array.

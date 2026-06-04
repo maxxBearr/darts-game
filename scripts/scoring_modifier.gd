@@ -33,6 +33,11 @@ extends Resource
 ## once and then leave only their effect on the board.
 @export var kind: ScoringEnums.ModifierKind = ScoringEnums.ModifierKind.RELIC
 
+## Player-facing item family (Scoring / Placement / Brush) for shop/reward steering.
+## NONE for streaks and any non-board item. Set in each board-item subclass's _init().
+## Shop steering is not wired yet (that's the map spec) — this just lands the tag.
+@export var family: ScoringEnums.Family = ScoringEnums.Family.NONE
+
 ## Whether this modifier is currently active. Only toggleable if unlocked.
 var enabled: bool = true
 
@@ -83,6 +88,19 @@ func get_pick_wedge_prompt(current_value: int) -> String:
 	return "Pick wedge %d? Click to confirm, Escape to cancel" % current_value
 
 
+## Header text shown while the player picks a segment (PICK_SEGMENT flow).
+## Override in PICK_SEGMENT subclasses (Brush, Hotspot) for type-specific phrasing.
+func get_pick_segment_header() -> String:
+	return "Pick a segment"
+
+
+## Confirmation prompt shown when hovering a segment during a PICK_SEGMENT pick.
+## ring_display is the human-readable ring name; face_value is the wedge's effective
+## value; color_name is the segment's current color. Override in PICK_SEGMENT subclasses.
+func get_pick_segment_prompt(ring_display: String, face_value: int, color_name: String) -> String:
+	return "Pick %s %d (%s)? Click to confirm, Escape to cancel" % [ring_display, face_value, color_name]
+
+
 ## Get the current streak count for display purposes.
 ## Override in streak modifier subclasses. Returns 0 for non-streak modifiers.
 func get_streak_count() -> int:
@@ -124,6 +142,21 @@ func apply(result: Dictionary, context: Dictionary) -> Dictionary:
 ## arrays in place. config contains player choices (e.g., {"wedge_index": 5}).
 func apply_to_board(wedge_values: Array[int], wedge_colors: Array[Dictionary], config: Dictionary) -> void:
 	pass
+
+
+## A streak modifier's contribution to the SINGLE combined streak factor for this dart.
+## Streaks are the one multiplicative axis: ALL active streaks are summed into ONE factor
+## (streak_factor = 1 + Σ contributions) and applied ONCE by the manager — never compounded
+## per-streak (which would explode as factor₁ × factor₂ × … × factorₙ).
+##
+## Override in streak subclasses to: run the continue/break logic, update internal streak
+## state ONLY when context.is_preview is false (exactly as the old apply() did), and return
+## this streak's additive contribution = (effective_count - 1) × growth, or 0 when the
+## streak isn't continuing or is at count <= 1. Non-streak modifiers contribute 0.
+##
+## This does NOT mutate result — it only reports. The manager applies the combined factor.
+func streak_contribution(_result: Dictionary, _context: Dictionary) -> int:
+	return 0
 
 
 ## Record a modification entry in the result's tracking array.

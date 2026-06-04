@@ -141,6 +141,53 @@ var effective_wedge_colors: Array[Dictionary] = []
 ## Flipped wedges draw a "+" suffix on their number (they add instead of subtract).
 var flipped_wedges: Array[int] = []
 
+## Hotspot rings, keyed "<wedge_index>:<RingName>" → flat multiplier bonus (int). Set by
+## ScoringModifierManager (mirrored via main._sync_board_state). Each hot ring draws a
+## persistent, high-contrast indicator with the value baked in — legible *through* recolor
+## and boss overlay (the art-direction "legibility through flash" rule). This is the
+## code-drawn baseline indicator; the smoky value-baked shader is layered on in-editor.
+## Assigning this (mirrored from the manager via main._sync_board_state) rebuilds the smoke
+## shader layer and redraws, so the code-drawn baseline and the shader layer stay in sync.
+var hotspot_rings: Dictionary = {}:
+	set(value):
+		hotspot_rings = value
+		_rebuild_hotspot_shader_layer()
+		queue_redraw()
+
+## Outline color for a hotspot ring's persistent indicator. High-contrast warm tone so it
+## reads over any painted ring color or boss overlay.
+@export var hotspot_indicator_color: Color = Color(1.0, 0.55, 0.1, 0.95)
+
+## Outline thickness for the hotspot ring indicator.
+@export var hotspot_indicator_thickness: float = 3.0
+
+## Font size for the value baked into the hotspot indicator (e.g. "+3").
+@export var hotspot_value_font_size: int = 20
+
+## DEV TOGGLE — A/B the hotspot look. When true, hot rings render the smoky shader
+## (shaders/hotspot.gdshader) as an additive child layer instead of the code-drawn orange
+## outline; the "+N" value label is kept on top in BOTH modes for legibility. Flip in the
+## inspector at runtime to compare; off = the original outline indicator. Lets you take a flier
+## on the shader and untoggle instantly if you don't like it or it needs debugging.
+@export var use_hotspot_shader: bool = false:
+	set(value):
+		use_hotspot_shader = value
+		_rebuild_hotspot_shader_layer()
+		queue_redraw()
+
+## Smoke tint for the hotspot shader. The shader leans this toward each ring's painted color so
+## the effect enhances the paint rather than overriding it.
+@export var hotspot_smoke_color: Color = Color(1.0, 0.55, 0.1, 1.0)
+
+## Preloaded hotspot smoke shader + the child layer hosting one additive Polygon2D and one
+## value label per hot ring (only populated while use_hotspot_shader is true).
+const _HOTSPOT_SHADER: Shader = preload("res://shaders/hotspot.gdshader")
+var _hotspot_shader_layer: Node2D = null
+
+## Shader that makes the "+N" value label drift like smoke (shared across all hotspot labels).
+const _HOTSPOT_LABEL_SHADER: Shader = preload("res://shaders/hotspot_label.gdshader")
+var _hotspot_label_material: ShaderMaterial = null
+
 ## Rotation offset in degrees applied to all wedge angles (rendering + hit detection).
 ## Set by the Rotation boss. 0.0 = normal orientation.
 var board_rotation_offset: float = 0.0
@@ -467,6 +514,14 @@ func _ready() -> void:
 	_shop_overlay.material = mat
 	add_child(_shop_overlay)
 
+	# Child layer for the optional hotspot smoke shader (one Polygon2D + label per hot ring).
+	# Built lazily from hotspot_rings; empty while the dev toggle is off.
+	_hotspot_shader_layer = Node2D.new()
+	add_child(_hotspot_shader_layer)
+	_hotspot_label_material = ShaderMaterial.new()
+	_hotspot_label_material.shader = _HOTSPOT_LABEL_SHADER
+	_rebuild_hotspot_shader_layer()
+
 	_shop_dissolve_overlay = Node2D.new()
 	_shop_dissolve_overlay.draw.connect(_draw_shop_dissolve_overlay)
 	var dissolve_shader: Shader = load("res://shaders/shop_spot_dissolve.gdshader")
@@ -652,6 +707,12 @@ func _draw() -> void:
 		elif is_modified:
 			text_color = modified_number_color
 		draw_string(font, draw_pos, number_text, HORIZONTAL_ALIGNMENT_CENTER, -1, number_font_size, text_color)
+
+	# Draw hotspot indicators on top of segments/numbers so they survive recolor + overlay.
+	# In shader mode the smoke + label live in _hotspot_shader_layer (child nodes), so skip the
+	# code-drawn outline here.
+	if not hotspot_rings.is_empty() and not use_hotspot_shader:
+		_draw_hotspot_indicators(font)
 
 	# Draw flash overlay on the hit segment (if active)
 	if _flash_alpha > 0.0:
@@ -1168,6 +1229,129 @@ func _draw_target_highlight() -> void:
 		if outer_norm > 0.0:
 			_draw_segment(start_deg, end_deg, outer_norm, inner_norm, target_highlight_color)
 			_draw_segment_border(start_deg, end_deg, outer_norm, inner_norm, target_highlight_border_color, hover_border_thickness)
+
+
+## Normalized (inner, outer) radii for a wedge ring by display name. Returns ZERO for an
+## unknown ring. Shared by the hotspot indicator; mirrors the mapping in _draw_target_highlight.
+func _ring_norms(ring_name: String) -> Vector2:
+	match ring_name:
+		"Inner Single":
+			return Vector2(RING_SINGLE_BULL_OUTER, RING_INNER_SINGLE_OUTER)
+		"Triple":
+			return Vector2(RING_INNER_SINGLE_OUTER, RING_TRIPLE_OUTER)
+		"Outer Single":
+			return Vector2(RING_TRIPLE_OUTER, _effective_double_inner())
+		"Double":
+			return Vector2(_effective_double_inner(), RING_DOUBLE_OUTER)
+	return Vector2.ZERO
+
+
+## Draw a persistent, high-contrast indicator on every hotspot ring with its bonus value
+## baked in (e.g. "+3"). Drawn on top of segment fills and numbers so the hot ring stays
+## legible through recolor and boss overlay. This is the code-drawn baseline; the smoky
+## value-in-the-smoke shader (an in-editor ShaderMaterial pass) layers over it later.
+func _draw_hotspot_indicators(font: Font) -> void:
+	for key: Variant in hotspot_rings:
+		var bonus: int = hotspot_rings[key]
+		if bonus <= 0:
+			continue
+		var parts: PackedStringArray = String(key).split(":")
+		if parts.size() != 2:
+			continue
+		var wedge_idx: int = int(parts[0])
+		if wedge_idx < 0 or wedge_idx >= 20:
+			continue
+		var norms: Vector2 = _ring_norms(parts[1])
+		if norms == Vector2.ZERO:
+			continue
+
+		var start_deg: float = _wedge_start_deg(wedge_idx)
+		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+
+		# Persistent outline so the hot ring's location reads at a glance.
+		_draw_segment_border(start_deg, end_deg, norms.y, norms.x, hotspot_indicator_color, hotspot_indicator_thickness)
+
+		# Value baked at the ring's mid-radius / mid-angle.
+		var mid_norm: float = (norms.x + norms.y) * 0.5
+		# start_deg (via _wedge_start_deg) already includes board_rotation_offset.
+		var mid_rad: float = deg_to_rad(start_deg + WEDGE_ANGLE_DEG * 0.5)
+		var direction: Vector2 = Vector2(sin(mid_rad), -cos(mid_rad))
+		var center: Vector2 = direction * board_radius * mid_norm
+		var label: String = "+%d" % bonus
+		var text_size: Vector2 = font.get_string_size(label, HORIZONTAL_ALIGNMENT_CENTER, -1, hotspot_value_font_size)
+		var text_pos: Vector2 = center - Vector2(text_size.x * 0.5, -text_size.y * 0.25)
+		# Dark backing pass for contrast over any ring color, then the warm value on top.
+		draw_string(font, text_pos + Vector2(1.0, 1.0), label, HORIZONTAL_ALIGNMENT_CENTER, -1, hotspot_value_font_size, Color(0.0, 0.0, 0.0, 0.8))
+		draw_string(font, text_pos, label, HORIZONTAL_ALIGNMENT_CENTER, -1, hotspot_value_font_size, hotspot_indicator_color)
+
+
+## Rebuild the optional smoke-shader layer from the current hotspot_rings. Clears and repopulates
+## one additive Polygon2D (the ring-slice smoke, shaders/hotspot.gdshader) plus a "+N" value label
+## per hot ring. No-op (layer left empty) when the dev toggle is off, so _draw_hotspot_indicators'
+## code-drawn outline takes over. Called on hotspot_rings change, toggle change, and _ready.
+func _rebuild_hotspot_shader_layer() -> void:
+	if _hotspot_shader_layer == null:
+		return
+	for child: Node in _hotspot_shader_layer.get_children():
+		child.queue_free()
+	if not use_hotspot_shader or hotspot_rings.is_empty():
+		return
+
+	for key: Variant in hotspot_rings:
+		var bonus: int = hotspot_rings[key]
+		if bonus <= 0:
+			continue
+		var parts: PackedStringArray = String(key).split(":")
+		if parts.size() != 2:
+			continue
+		var wedge_idx: int = int(parts[0])
+		if wedge_idx < 0 or wedge_idx >= 20:
+			continue
+		var ring_name: String = parts[1]
+		var norms: Vector2 = _ring_norms(ring_name)
+		if norms == Vector2.ZERO:
+			continue
+
+		var start_deg: float = _wedge_start_deg(wedge_idx)
+		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+
+		# Smoke polygon shaped exactly to the ring slice (same geometry as the segment fills).
+		var poly: Polygon2D = Polygon2D.new()
+		poly.polygon = _build_segment_points(start_deg, end_deg, norms.y, norms.x)
+		var mat: ShaderMaterial = ShaderMaterial.new()
+		mat.shader = _HOTSPOT_SHADER
+		var ring_key: String = ring_name.to_lower().replace(" ", "_")
+		var seg_color: ScoringEnums.SegmentColor = _lookup_segment_color(wedge_idx, ring_key)
+		var render_col: Color = _segment_color_to_render(seg_color)
+		# Multi-tone smoke in the wedge's OWN color family: a darker and a lighter shade the shader
+		# mixes between, so green rings show several greens, red several reds, black greys-into-black,
+		# white shades of cream. Normal alpha blend (in the shader) keeps it legible on every wedge.
+		mat.set_shader_parameter("color_a", render_col.darkened(0.40))
+		mat.set_shader_parameter("color_b", render_col.lightened(0.50))
+		# Higher-tier hotspots read denser/more opaque (+1 -> 0.66, +2 -> 0.78, +3 -> 0.90).
+		mat.set_shader_parameter("opacity", minf(0.54 + 0.12 * float(bonus), 0.92))
+		poly.material = mat
+		_hotspot_shader_layer.add_child(poly)
+
+		# "+N" value label, kept above the smoke (z_index) so the number stays legible.
+		var mid_norm: float = (norms.x + norms.y) * 0.5
+		var mid_rad: float = deg_to_rad(start_deg + WEDGE_ANGLE_DEG * 0.5)
+		var direction: Vector2 = Vector2(sin(mid_rad), -cos(mid_rad))
+		var center: Vector2 = direction * board_radius * mid_norm
+		var lbl: Label = Label.new()
+		lbl.text = "+%d" % bonus
+		lbl.add_theme_font_size_override("font_size", hotspot_value_font_size)
+		lbl.add_theme_color_override("font_color", hotspot_indicator_color)
+		lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.85))
+		lbl.add_theme_constant_override("outline_size", 5)
+		lbl.size = Vector2(48.0, 36.0)
+		lbl.position = center - lbl.size * 0.5
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lbl.z_index = 1
+		# Smokify the number so it drifts instead of looking pasted on.
+		lbl.material = _hotspot_label_material
+		_hotspot_shader_layer.add_child(lbl)
 
 
 ## Draw a border outline around a wedge segment.

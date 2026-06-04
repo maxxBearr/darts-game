@@ -15,3 +15,4 @@ h_speed_bonus = 27.0
 v_speed_bonus = -7.0
 h_accuracy_bonus = 27.0
 v_accuracy_bonus = -7.0
+streak_slot_grant = 3

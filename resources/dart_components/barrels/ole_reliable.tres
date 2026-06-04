@@ -13,3 +13,4 @@ h_range_bonus = 23.0
 v_range_bonus = 12.0
 h_speed_bonus = 7.0
 h_accuracy_bonus = 9.0
+streak_slot_grant = 2
