@@ -37,6 +37,8 @@ signal node_chosen(node: MapNode)
 @export var color_shop: Color = Color(0.30, 0.55, 0.45)
 @export var color_boss: Color = Color(0.62, 0.30, 0.33)
 @export var color_offbranch: Color = Color(0.42, 0.42, 0.60)
+## Challenge ("Trial") node — the post-boss-1 off-branch wager race (Phase 02).
+@export var color_challenge: Color = Color(0.62, 0.50, 0.28)
 
 var graph: MapGraph
 
@@ -176,6 +178,8 @@ func _color_for(n: MapNode) -> Color:
 			return color_shop
 		MapNode.Type.BOSS:
 			return color_boss
+		MapNode.Type.CHALLENGE:
+			return color_challenge
 		_:
 			return color_offbranch if n.is_off_branch else color_leg
 

@@ -72,6 +72,7 @@ var game_over_screen: GameOverScreen
 var level_select: LevelSelectScreen
 var boss_manager: BossManager
 var map_view: MapView
+var _challenge_entry_view: ChallengeEntryView
 
 ## The generated run map. Built at run start (_on_run_confirmed); drives leg/shop/
 ## boss scheduling between encounters. Null outside a run. See specs/map/.
@@ -218,6 +219,40 @@ var _active_rewards: Array[RuleModifierReward] = []
 
 ## Whether the current boss leg was a boss (for triggering reward flow after upgrades).
 var _boss_leg_just_cleared: bool = false
+
+# --- Phase 02 challenge-node state (specs/map/02-challenge-nodes-impl.md) ---
+
+## Highest score the player has actually CLEARED this run (boss or leg). The §3 anchor:
+## a challenge target rolls within −target_undercut of this, never above it. Updated on
+## every banked win; reset on run start.
+var _highest_cleared: int = 0
+
+## True for the duration of a challenge race (between deposit and win/loss). Gates the
+## win/loss handling onto the challenge paths (forfeit-not-run-end, typed reward) and
+## disables the bailout (a fixed wager can't be bailed). §11/§9.
+var _challenge_active: bool = false
+
+## The ChallengeNode being raced (its target/dpt/deposit band/reward family/handicap).
+var _active_challenge: ChallengeNode = null
+
+## The deposit staked on the active race (withheld from the bank at entry; forfeited on
+## loss, its unused remainder banked on win via get_saved_darts). §11.
+var _challenge_deposit: int = 0
+
+## darts_per_turn captured before the race's dpt override, restored when the race ends.
+var _challenge_prev_dpt: int = 3
+
+## The instantiated handicap boss effect for this race (rotation / narrow_double), or
+## null for a clean precision race. Driven directly (not via boss_manager) so it doesn't
+## draw from the level boss pool. §8.
+var _challenge_handicap: Boss = null
+
+## True while a typed challenge reward pick is pending, so the shared pick chokepoint
+## (_continue_shop_after_pick) returns to the map instead of resuming a shop. §6.
+var _challenge_reward_pending: bool = false
+
+## Run-scoped RNG for the arrival-time challenge target roll (§3). Randomized at run start.
+var _challenge_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 ## The modifier awaiting wedge picker configuration.
 var _pending_modifier: ScoringModifier = null
@@ -774,11 +809,19 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		dartboard.clear_illumination()
 		if response["is_game_over"] and not _try_bailout(response, score_tween):
 			_run_total_darts += x01_game.darts_used_in_leg
-			_run_over = true
-			if score_tween != null and score_tween.is_valid():
-				score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
+			if _challenge_active:
+				# A lost challenge forfeits the staked deposit but NEVER ends the run — it
+				# returns to the map (the parallel leg is gone, that's the cost). §4/§11.
+				if score_tween != null and score_tween.is_valid():
+					score_tween.tween_callback(_fail_challenge)
+				else:
+					_fail_challenge()
 			else:
-				_show_game_over(response["current_leg"])
+				_run_over = true
+				if score_tween != null and score_tween.is_valid():
+					score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
+				else:
+					_show_game_over(response["current_leg"])
 		else:
 			_awaiting_next_turn = true
 			if score_tween != null and score_tween.is_valid():
@@ -805,11 +848,19 @@ func _resolve_throw_impact(hit_position: Vector2) -> void:
 		dartboard.clear_illumination()
 		if response["is_game_over"] and not _try_bailout(response, score_tween):
 			_run_total_darts += x01_game.darts_used_in_leg
-			_run_over = true
-			if score_tween != null and score_tween.is_valid():
-				score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
+			if _challenge_active:
+				# A lost challenge forfeits the staked deposit but NEVER ends the run — it
+				# returns to the map (the parallel leg is gone, that's the cost). §4/§11.
+				if score_tween != null and score_tween.is_valid():
+					score_tween.tween_callback(_fail_challenge)
+				else:
+					_fail_challenge()
 			else:
-				_show_game_over(response["current_leg"])
+				_run_over = true
+				if score_tween != null and score_tween.is_valid():
+					score_tween.tween_callback(_show_game_over.bind(response["current_leg"]))
+				else:
+					_show_game_over(response["current_leg"])
 		else:
 			_awaiting_next_turn = true
 			if score_tween != null and score_tween.is_valid():
@@ -898,11 +949,23 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		_show_run_won()
 		return
 
+	# Track the highest score actually cleared (boss or leg) — the §3 challenge anchor.
+	# A challenge re-clears an OLD number, so it never raises this (target ≤ highest).
+	_highest_cleared = maxi(_highest_cleared, int(response["target_score"]))
+
 	# Accumulate this leg's unused darts into the persistent bank, trickling them
-	# into the rail's saved cache.
+	# into the rail's saved cache. For a won challenge race get_saved_darts() returns the
+	# unused deposit (budget − used), so the same line banks the leftover wager. §11.
 	var leg_saved: int = x01_game.get_saved_darts()
 	_banked_darts += leg_saved
 	hud.bank_leg_savings(leg_saved, _banked_darts)
+
+	# A won challenge race grants a TYPED reward at the earned rarity instead of the
+	# normal accuracy pick / boss reward (§6). The bank line above already returned the
+	# unused deposit.
+	if _challenge_active:
+		_finish_challenge_win()
+		return
 
 	# Boss reward pick — show 3 rewards before normal upgrades/shop
 	if _boss_leg_just_cleared:
@@ -979,6 +1042,11 @@ func _on_next_turn() -> void:
 		boss_manager.on_turn_start(_build_game_state())
 		_sync_board_and_solver()
 		_update_boss_status()
+	# A challenge handicap (rotation re-rolls each turn, etc.) is driven directly, not via
+	# boss_manager (it doesn't draw from the level boss pool). §8.
+	if _challenge_handicap != null:
+		_challenge_handicap.on_turn_start(_build_game_state())
+		_sync_board_and_solver()
 	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
 	hud.update_streak_section(
 		scoring_modifier_manager.get_active_streak_modifiers(),
@@ -1038,6 +1106,8 @@ func _on_map_node_chosen(node: MapNode) -> void:
 			"target_score": x01_game.target_score,
 		}
 		_start_shop(response)
+	elif node.type == MapNode.Type.CHALLENGE:
+		_enter_challenge(node)
 	else:
 		_slide_to_leg_node(node)
 
@@ -1056,7 +1126,7 @@ func _slide_to_leg_node(node: MapNode) -> void:
 	tween.tween_callback(func() -> void:
 		scoring_modifier_manager.reset_for_leg()
 		_clear_darts()
-		x01_game.start_leg_with(node.target_score, node.darts_fronted / x01_game.darts_per_turn)
+		x01_game.start_leg_with(node.target_score, node.max_turns)
 		_update_all_hud()
 		hud.update_streak_section(
 			scoring_modifier_manager.get_active_streak_modifiers(),
@@ -1083,6 +1153,213 @@ func _slide_to_leg_node(node: MapNode) -> void:
 	)
 
 
+# ── Phase 02: challenge nodes (specs/map/02-challenge-nodes-impl.md) ─────────
+
+## Arrive at a challenge node: compute its target + deposit band from the LIVE
+## highest_cleared (§3/§4), then open the pre-entry readout + deposit picker (§10). The
+## actual wager/withdrawal happens on confirm.
+func _enter_challenge(node: MapNode) -> void:
+	if node.challenge == null:
+		_slide_to_leg_node(node)   # safety: malformed node, treat as a leg
+		return
+	_active_challenge = node.challenge
+	_map_graph.compute_challenge_params(node, _highest_cleared, _challenge_rng)
+	_disable_hover()
+	_challenge_entry_view.show_for(node.challenge, _banked_darts)
+
+
+## Player declined the challenge — take the parallel leg (§12). The fork rejoins
+## immediately, so just return to the map for the next pick.
+func _on_challenge_skipped() -> void:
+	_active_challenge = null
+	_show_map()
+
+
+## Player confirmed the wager. Withhold the deposit from the bank (forfeited on a loss,
+## its unused remainder returned on a win) and start the race. §11.
+func _on_challenge_confirmed(deposit: int) -> void:
+	_challenge_deposit = clampi(deposit, _active_challenge.min_deposit, _banked_darts)
+	_banked_darts -= _challenge_deposit
+	hud.update_bank(_banked_darts)
+	_challenge_active = true
+	_start_challenge_race()
+
+
+## Slide the board in and start the x01 race under the challenge's constrained front:
+## its target, its dpt override, and the deposit as the total-dart budget (§9). Mirrors
+## _slide_to_leg_node but routes through start_challenge_race + applies a handicap.
+func _start_challenge_race() -> void:
+	var c: ChallengeNode = _active_challenge
+	var viewport_size: Vector2 = get_viewport_rect().size
+	var center: Vector2 = viewport_size / 2.0
+	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
+	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(dartboard, "position", off_left, leg_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(func() -> void:
+		scoring_modifier_manager.reset_for_leg()
+		_clear_darts()
+		# Capture dpt before the per-race override so it restores cleanly afterward (the
+		# same mutate/restore contract two_darts_boss uses). §9.
+		_challenge_prev_dpt = x01_game.darts_per_turn
+		x01_game.start_challenge_race(c.target_score, c.darts_per_turn, _challenge_deposit)
+		_update_all_hud()
+		hud.update_streak_section(
+			scoring_modifier_manager.get_active_streak_modifiers(),
+			scoring_modifier_manager.effective_wedge_values
+		)
+		_apply_handicap(c.handicap_id)
+		dartboard.position = off_right
+	)
+	tween.tween_property(dartboard, "position", center, leg_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.tween_callback(func() -> void:
+		_update_checkout_highlights()
+		_update_checkout_helper()
+		_start_new_throw()
+	)
+
+
+## Instantiate + start a recycled benched-boss aim handicap for this race (§8). Driven
+## directly (not via boss_manager) so it doesn't draw from the level boss pool. Empty id
+## = a clean precision race.
+func _apply_handicap(id: StringName) -> void:
+	_challenge_handicap = null
+	var script: GDScript = _handicap_script_for(id)
+	if script == null:
+		return
+	_challenge_handicap = script.new() as Boss
+	_challenge_handicap.configure({})
+	var gs: Dictionary = _build_game_state()
+	_challenge_handicap.on_leg_start(gs)
+	_challenge_handicap.on_turn_start(gs)
+	_sync_board_and_solver()
+
+
+## Tear down the active handicap, restoring any board mutations (rotation offset, double
+## ring width). Safe to call when there is no handicap.
+func _end_handicap() -> void:
+	if _challenge_handicap == null:
+		return
+	_challenge_handicap.on_leg_end(_build_game_state())
+	_challenge_handicap = null
+	_sync_board_and_solver()
+
+
+## Map a handicap id to its benched-boss script (the aim handicaps only — see §8 and the
+## generator's _roll_challenge_node for why two_darts is excluded).
+func _handicap_script_for(id: StringName) -> GDScript:
+	match id:
+		&"rotation":
+			return load("res://scripts/bosses/rotation_boss.gd")
+		&"narrow_double":
+			return load("res://scripts/bosses/narrow_double_ring_boss.gd")
+		_:
+			return null
+
+
+## A won challenge race: restore the dpt override, tear down the handicap, then grant the
+## TYPED reward at the rarity earned by finish-efficiency (§6). The unused deposit was
+## already banked by _show_leg_upgrades's get_saved_darts line.
+func _finish_challenge_win() -> void:
+	_end_handicap()
+	x01_game.darts_per_turn = _challenge_prev_dpt
+	x01_game.dart_budget = 0
+	var used: int = x01_game.darts_used_in_leg
+	var rarity: ScoringEnums.Rarity = _active_challenge.rarity_for_used(used)
+	var family: ScoringEnums.Family = _active_challenge.reward_family
+	_challenge_active = false
+	_show_challenge_reward(family, rarity)
+
+
+## Offer the earned typed reward: a ScoringModifier of `family` at `rarity`, drawn from
+## the modifier pool (the only pool that carries family + rarity). Reuses the shop pick
+## UI + selection path; the pick chokepoint returns to the map via _finish_challenge_reward.
+func _show_challenge_reward(family: ScoringEnums.Family, rarity: ScoringEnums.Rarity) -> void:
+	_sync_brush_affinity()
+	# Brush items are affinity-gated; if the player owns no colors, fall back to a Scoring
+	# pick rather than offer an empty family (§6 note).
+	if family == ScoringEnums.Family.BRUSH and ModifierRegistry.available_brush_colors.is_empty():
+		family = ScoringEnums.Family.SCORING
+	var picks: Array[Dictionary] = _generate_challenge_reward_picks(family, rarity)
+	if picks.is_empty():
+		_finish_challenge_reward()
+		return
+	_shop_pick_items = picks
+	_challenge_reward_pending = true
+	_leg_phase = "challenge_reward"
+	var replacement_info: Array[String] = []
+	for item: Dictionary in picks:
+		replacement_info.append(_get_replacement_text(item["data"] as ScoringModifier))
+	hud.show_shop_pick_items(_shop_pick_items, _banked_darts, replacement_info)
+	# Reframe the shop-flavored header as the earned reward (the pick UI is reused as-is).
+	hud.score_label.text = "CHALLENGE CLEARED — claim your %s reward" % _rarity_name(rarity)
+
+
+## Player-facing rarity label for the challenge reward header.
+func _rarity_name(rarity: ScoringEnums.Rarity) -> String:
+	match rarity:
+		ScoringEnums.Rarity.RARE:
+			return "RARE"
+		ScoringEnums.Rarity.UNCOMMON:
+			return "UNCOMMON"
+		_:
+			return "COMMON"
+
+
+## Build the typed reward picks: distinct modifiers whose family matches, at the earned
+## rarity. Generated per-type (not via generate_distinct_at_rarity's weight overrides) so
+## the offer stays family-PURE even for single-type families (its fallback would leak an
+## off-family type). Capped at shop_pick_count.
+func _generate_challenge_reward_picks(family: ScoringEnums.Family, rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
+	var family_types: Array = []
+	for type in ModifierRegistry.MODIFIER_TYPES:
+		var sample: ScoringModifier = type.generate(rarity)
+		if sample != null and sample.family == family:
+			family_types.append(type)
+	family_types.shuffle()
+	var picks: Array[Dictionary] = []
+	var owned: Array[String] = _get_owned_fingerprints()
+	for type in family_types:
+		if picks.size() >= shop_pick_count:
+			break
+		var mod: ScoringModifier = type.generate(rarity)
+		var attempts: int = 0
+		while mod.get_config_fingerprint() in owned and attempts < 8:
+			mod = type.generate(rarity)
+			attempts += 1
+		owned.append(mod.get_config_fingerprint())
+		picks.append({"type": "modifier", "data": mod})
+	return picks
+
+
+## The typed reward has been picked (and configured) — clean up and return to the map.
+func _finish_challenge_reward() -> void:
+	_active_challenge = null
+	_leg_phase = ""
+	_turn_score = 0
+	_turn_darts_scored = 0
+	hud.update_turn_score(0)
+	_show_map()
+
+
+## A lost challenge race: the deposit is forfeit (already withheld), the run CONTINUES.
+## Restore the dpt override, tear down the handicap, flash a notice, and return to the map.
+func _fail_challenge() -> void:
+	_end_handicap()
+	x01_game.darts_per_turn = _challenge_prev_dpt
+	x01_game.dart_budget = 0
+	_challenge_active = false
+	_active_challenge = null
+	AuidoManager.on_leg_lost()
+	hud.update_bank(_banked_darts)
+	hud.show_bust("CHALLENGE FAILED — wager forfeit")
+	get_tree().create_timer(next_dart_delay * 2.0).timeout.connect(func() -> void:
+		hud.set_remaining_bust(false)
+		_show_map()
+	)
+
+
 ## Bailout: rescue a would-be run-ending leg by spending banked darts.
 ##
 ## Fires automatically when the player runs out of turns without checking out
@@ -1098,6 +1375,10 @@ func _slide_to_leg_node(node: MapNode) -> void:
 ## budget by 3, so get_saved_darts() (max_turns*darts_per_turn - darts_used_in_leg)
 ## returns the unused bailout darts back to the bank on the eventual leg win.
 func _try_bailout(response: Dictionary, score_tween: Tween) -> bool:
+	# A challenge race is a fixed wager — its budget can't be topped up. Never bail (the
+	# loss must forfeit the deposit and continue the run, handled by _fail_challenge). §9/§11.
+	if _challenge_active:
+		return false
 	# Glass Cannon busts end the run immediately — never bail.
 	if response["is_bust"] and x01_game.glass_cannon_active:
 		return false
@@ -1256,8 +1537,16 @@ func _reset_run_state() -> void:
 	_active_rewards.clear()
 	_current_rewards.clear()
 	_boss_leg_just_cleared = false
+	# Phase 02 challenge state.
+	_highest_cleared = 0
+	_challenge_active = false
+	_active_challenge = null
+	_challenge_deposit = 0
+	_challenge_handicap = null
+	_challenge_reward_pending = false
 	x01_game.darts_per_turn = 3
 	x01_game.max_turns = 5
+	x01_game.dart_budget = 0
 	x01_game.allow_triple_checkout = false
 	x01_game.glass_cannon_active = false
 	x01_game.bust_ends_turn = true
@@ -1634,8 +1923,16 @@ func _on_shop_pick_selected(index: int) -> void:
 	_continue_shop_after_pick()
 
 
-## Continue the shop after a pick is resolved (including wedge picker).
+## Continue the shop after a pick is resolved (including wedge picker). This is the single
+## chokepoint every pick path (direct, wedge/segment/streak config) funnels through, so a
+## pending challenge reward (§6) finishes here and returns to the map instead of resuming a
+## shop that isn't running.
 func _continue_shop_after_pick() -> void:
+	if _challenge_reward_pending:
+		_challenge_reward_pending = false
+		_shop_pick_items.clear()
+		_finish_challenge_reward()
+		return
 	_leg_phase = "shop"
 	if _shop_darts_remaining <= 0:
 		_end_shop_delayed()
@@ -1735,6 +2032,16 @@ func _setup_tutorial_system() -> void:
 	map_view.node_chosen.connect(_on_map_node_chosen)
 	map_view.visible = false
 	hud.add_child(map_view)
+
+	# Challenge entry / deposit picker overlay (Phase 02). Shown on arriving at a
+	# challenge node; emits the chosen wager or a skip.
+	_challenge_entry_view = ChallengeEntryView.new()
+	_challenge_entry_view.name = "ChallengeEntryView"
+	_challenge_entry_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_challenge_entry_view.confirmed.connect(_on_challenge_confirmed)
+	_challenge_entry_view.skipped.connect(_on_challenge_skipped)
+	_challenge_entry_view.visible = false
+	hud.add_child(_challenge_entry_view)
 
 	# Boss manager — handles boss scheduling and lifecycle
 	boss_manager = BossManager.new()
@@ -1991,6 +2298,11 @@ func _on_run_confirmed() -> void:
 	_map_graph = MapGraph.generate(_current_level, run_rng, x01_game.starting_target, x01_game.target_increment)
 	_map_graph.advance_to(_map_graph.start_id)
 
+	# Challenge-node state: anchor starts at leg-1's target (the lowest score in play) and
+	# climbs with every banked win; the roll RNG is run-scoped so each node anchors fresh.
+	_highest_cleared = x01_game.starting_target
+	_challenge_rng.randomize()
+
 	# Debug: skip to the boss leg by jumping to the final leg's target
 	if debug_boss_immediately and _current_level != null:
 		var final_target: int = _current_level.max_score_target
@@ -2054,8 +2366,9 @@ func _on_upgrade_selected(index: int) -> void:
 
 ## Player picks a scoring modifier card.
 func _on_modifier_selected(index: int) -> void:
-	# Shop pick uses its own modifier array (2-of-2)
-	if _in_shop:
+	# Shop pick AND the challenge typed-reward pick both populate _shop_pick_items and
+	# reuse the shop selection path (the reward isn't in a shop, hence the extra flag). §6.
+	if _in_shop or _challenge_reward_pending:
 		_on_shop_pick_selected(index)
 		return
 
@@ -2100,7 +2413,9 @@ func _on_modifier_selected(index: int) -> void:
 
 ## Player skips the scoring modifier pick.
 func _on_modifier_skipped() -> void:
-	if _in_shop:
+	# Declining the earned typed reward is allowed; it funnels through the same chokepoint,
+	# which returns to the map (the reward was guaranteed, not forced). §6.
+	if _in_shop or _challenge_reward_pending:
 		_continue_shop_after_pick()
 		return
 	_leg_phase = ""
@@ -2811,7 +3126,9 @@ func _finish_picker() -> void:
 	hud.hide_picker()
 	_pending_modifier = null
 	_picker_selected_wedge = -1
-	if _in_shop:
+	# A challenge reward modifier that needed board config (Hotspot / Wedge Swap / Brush)
+	# finishes here too — route through the shared chokepoint so it returns to the map. §6.
+	if _in_shop or _challenge_reward_pending:
 		_continue_shop_after_pick()
 		return
 	_leg_phase = ""

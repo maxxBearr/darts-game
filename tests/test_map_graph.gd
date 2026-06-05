@@ -26,14 +26,58 @@ func _init() -> void:
 
 func _test_level(level: LevelDefinition) -> void:
 	print("— Level %s (max %d, %d acts/bosses)" % [level.display_name, level.max_score_target, level.boss_count])
+	var turns_dist: Dictionary = {}   ## max_turns value -> count of non-boss legs across all seeds
 	for seed_value: int in range(SEEDS_PER_LEVEL):
 		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 		rng.seed = seed_value
 		# generate() asserts internally; if a roll is invalid the engine halts here.
 		var g: MapGraph = MapGraph.generate(level, rng, 101, 100)
 		_assert_structure(level, g, seed_value)
+		for id: int in g.nodes:
+			var n: MapNode = g.get_node_by_id(id)
+			if n.type != MapNode.Type.BOSS:
+				turns_dist[n.max_turns] = turns_dist.get(n.max_turns, 0) + 1
+	# Spread guarantee: the generator must NOT silently go inert (every leg == ref).
+	_assert_spread(level, turns_dist)
+	# Parity guarantee: forcing the roll to reference_turns reproduces the slice-1 ladder.
+	_assert_parity(level)
 	# Spot-check one seed in detail.
 	_dump_example(level)
+
+
+## The slice was inert once (every leg rolled reference_turns) and the bounds-only
+## suite stayed green. Assert the rolled max_turns actually spreads: more than one
+## distinct value, and both ends of the configured range appear across the seeds.
+func _assert_spread(level: LevelDefinition, turns_dist: Dictionary) -> void:
+	var cfg: MapGenConfig = level.map_gen_config if level.map_gen_config != null else MapGenConfig.new()
+	var keys: Array = turns_dist.keys()
+	keys.sort()
+	var dist_str: String = ""
+	for t: int in keys:
+		dist_str += "%d×%d  " % [t, turns_dist[t]]
+	print("   max_turns distribution (non-boss legs, %d seeds): %s" % [SEEDS_PER_LEVEL, dist_str.strip_edges()])
+	_check(keys.size() > 1, "turns roll produces >1 distinct value (not inert)", -1)
+	_check(turns_dist.has(cfg.turns_min), "turns_min (%d) appears across seeds" % cfg.turns_min, -1)
+	_check(turns_dist.has(cfg.turns_max), "turns_max (%d) appears across seeds" % cfg.turns_max, -1)
+
+
+## "Ships at parity": with turns forced to reference_turns and pressure 1.0, every
+## node's target must equal baseline_target(depth) — i.e. the slice-1 ladder value.
+func _assert_parity(level: LevelDefinition) -> void:
+	var cfg: MapGenConfig = level.map_gen_config.duplicate() if level.map_gen_config != null else MapGenConfig.new()
+	cfg.turns_min = cfg.reference_turns
+	cfg.turns_max = cfg.reference_turns
+	cfg.pressure_baseline = 1.0
+	var lvl: LevelDefinition = level.duplicate()
+	lvl.map_gen_config = cfg
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = 999
+	var g: MapGraph = MapGraph.generate(lvl, rng, 101, 100)
+	for id: int in g.nodes:
+		var n: MapNode = g.get_node_by_id(id)
+		_check(n.max_turns == cfg.reference_turns, "parity: turns == reference_turns", 999)
+		var want: int = g.baseline_target(n.depth)
+		_check(n.target_score == want, "parity: target == slice-1 ladder at depth %d (got %d want %d)" % [n.depth, n.target_score, want], 999)
 
 
 func _assert_structure(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
@@ -61,23 +105,39 @@ func _assert_structure(level: LevelDefinition, g: MapGraph, seed_value: int) -> 
 	_check(g.get_node_by_id(g.terminal_id).target_score == level.max_score_target, "terminal target == max_score_target", seed_value)
 	_check(g.get_node_by_id(g.terminal_id).type == MapNode.Type.BOSS, "terminal is a BOSS", seed_value)
 
-	# Exactly one BOSS per act; ladder is monotonic non-decreasing by depth.
+	# Exactly one BOSS per act. (Slice 2 drops strict ladder monotonicity: a
+	# low-turn leg deeper than a high-turn one can carry a lower raw target.)
 	var boss_per_act: Dictionary = {}
-	var max_target_by_depth: Dictionary = {}
 	for id: int in g.nodes:
 		var n: MapNode = g.get_node_by_id(id)
 		if n.type == MapNode.Type.BOSS:
 			boss_per_act[n.act] = boss_per_act.get(n.act, 0) + 1
-		max_target_by_depth[n.depth] = maxi(max_target_by_depth.get(n.depth, 0), n.target_score)
 	for a: int in range(g.acts):
 		_check(boss_per_act.get(a, 0) == 1, "exactly one boss in act %d" % a, seed_value)
 
-	var depths: Array = max_target_by_depth.keys()
-	depths.sort()
-	var prev: int = 0
-	for d: int in depths:
-		_check(max_target_by_depth[d] >= prev, "ladder non-decreasing at depth %d" % d, seed_value)
-		prev = max_target_by_depth[d]
+	# Slice 2 contract: each non-boss leg rolls turns in range and targets flat
+	# pressure_baseline (within the half-increment _snap can introduce), unless the
+	# act-window clamp pushed it onto a boundary. Every target stays in its window.
+	var cfg: MapGenConfig = level.map_gen_config if level.map_gen_config != null else MapGenConfig.new()
+	for id: int in g.nodes:
+		var n: MapNode = g.get_node_by_id(id)
+		var fl: int = g.act_floor(n.act)
+		var ce: int = g.act_ceiling(n.act)
+		_check(n.target_score >= fl and n.target_score <= ce, "target in act %d window [%d,%d]" % [n.act, fl, ce], seed_value)
+		if n.type == MapNode.Type.BOSS:
+			continue
+		_check(n.max_turns >= cfg.turns_min and n.max_turns <= cfg.turns_max, "leg turns in [%d,%d]" % [cfg.turns_min, cfg.turns_max], seed_value)
+		var base: int = g.baseline_target(n.depth)
+		var ideal_raw: float = cfg.pressure_baseline * float(n.max_turns) / float(cfg.reference_turns) * float(base)
+		if ideal_raw < float(fl) or ideal_raw > float(ce):
+			# Clamped: the snapped ideal landed outside the window, so it sits on a
+			# boundary by construction. Pressure is intentionally off here (§2c).
+			_check(n.target_score == fl or n.target_score == ce, "clamped leg target on act boundary", seed_value)
+		else:
+			var p: float = g.pressure_of(n.target_score, n.max_turns, n.depth)
+			# Half-increment snap tolerance, expressed in pressure units at this node.
+			var tol: float = 0.5 * 100.0 * float(cfg.reference_turns) / (float(n.max_turns) * float(base)) + 0.001
+			_check(absf(p - cfg.pressure_baseline) <= tol, "flat pressure ~%.2f (got %.3f, tol %.3f)" % [cfg.pressure_baseline, p, tol], seed_value)
 
 	# At least one shop exists across the run (soft coverage; counts are rolled).
 	var shop_count: int = 0

@@ -9,7 +9,10 @@ static var ALL_REWARDS: Array[RuleModifierReward] = [
 	preload("res://resources/rewards/extra_turn.tres"),
 	preload("res://resources/rewards/lucky_eye.tres"),
 	preload("res://resources/rewards/pool_widener.tres"),
-	preload("res://resources/rewards/frequent_shopping.tres"),
+	# Frequent Shopping pulled from the pool 2026-06-04: it only mutates `shop_cadence`,
+	# which no longer schedules anything now that shops are map nodes (Phase 01 substrate).
+	# Re-point it at the map's shop mix and re-add when that wiring exists (Phase 03/04).
+	# preload("res://resources/rewards/frequent_shopping.tres"),
 	preload("res://resources/rewards/triple_outs.tres"),
 	preload("res://resources/rewards/glass_cannon.tres"),
 	preload("res://resources/rewards/all_in.tres"),

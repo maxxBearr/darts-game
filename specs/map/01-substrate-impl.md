@@ -1,9 +1,11 @@
 ---
 Spec date: 2026-06-04
-Status: IMPLEMENTATION SPEC — ready to build (Cowork session, Max + Claude). Converts the conceptual design in
-  `01-substrate.md` into a code-grounded build plan against the current run-flow. Slice-1 scope decided this
-  session: **full rough-rect topology, ported difficulty ladder** (pressure-ratio generator deferred to a
-  slice-2 task — see "Slice boundary" for the reasoning).
+Status: SHIPPED 2026-06-04 (Claude Code, from this spec; commit `e71762f` "Phase 1 of the map"). Slice 1 of
+  Phase 01 — full rough-rect topology + ported difficulty ladder. Verified in-editor + headless (200 seeds × 3
+  levels). The ported ladder is superseded by the pressure-ratio generator in
+  `01-substrate-slice2-impl.md` (specced 2026-06-05). Deferred from this slice: pressure generator (→ slice 2),
+  challenge content (→ Phase 02), arrival ceremony + art reskin (polish). Original build-doc body preserved below
+  for design context.
 Part of: the Map Program (`specs/map/00-overview.md`), Phase 01. Design rationale lives in `01-substrate.md`;
   this file is the build doc. When this phase moves to build it takes CLAUDE.md's active-spec slot.
 ---

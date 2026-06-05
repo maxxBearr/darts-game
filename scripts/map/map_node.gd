@@ -16,7 +16,12 @@ var act: int = 0                  ## which act this node sits in (0-based)
 
 # --- Leg params (the x01 handoff payload; meaningful for LEG/CHALLENGE/BOSS) ---
 var target_score: int = 0         ## what x01_game.target_score becomes on arrival
-var darts_fronted: int = 15       ## leg dart budget → max_turns = darts_fronted / darts_per_turn
+## A leg is defined by its turn budget, NOT a stored dart total. The fronted-darts
+## *concept* — the leg's dart budget — is the derived quantity max_turns ×
+## x01_game.darts_per_turn, computed live so power items that raise darts_per_turn
+## (e.g. extra_dart_reward) correctly *add* darts instead of shrinking the budget.
+## See specs/map/01-substrate-slice2-impl.md §3.
+var max_turns: int = 5            ## what x01_game.max_turns becomes on arrival
 
 # --- Graph wiring ---
 var next_ids: Array[int] = []     ## forward edges (the legal next picks)
@@ -26,9 +31,15 @@ var prev_ids: Array[int] = []     ## back edges (layout + reachability checks)
 var visited: bool = false
 var reachable: bool = false       ## true when legally pickable from the current node
 
-## Reserved off-branch fork slot — where a CHALLENGE/EVENT will prefer to sit in
-## Phase 02/03. Filled with a LEG/SHOP this slice; only marks the geometry.
+## Reserved off-branch fork slot — where a CHALLENGE/EVENT prefers to sit (Phase 02/03).
+## Marks the geometry; a post-boss-1 fork is upgraded to Type.CHALLENGE at generation.
 var is_off_branch: bool = false
+
+## Set on Type.CHALLENGE nodes only (Phase 02): the wager/race tuning for this node.
+## Its target_score + deposit band are computed at arrival from the live highest_cleared
+## (they depend on runtime progress), not at generation. Null on every other node type.
+## See specs/map/02-challenge-nodes-impl.md §7.
+var challenge: ChallengeNode = null
 
 
 func _to_string() -> String:

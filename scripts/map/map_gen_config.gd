@@ -27,9 +27,43 @@ extends Resource
 @export var shop_min_col_gap: int = 1
 
 ## Chance per act to inject one in-lane reconverging fork (a reserved off-branch
-## slot). The fork's opportunity cost is purely spatial — see the design doc.
-@export var fork_chance: float = 0.6
+## slot). The fork's opportunity cost is purely spatial — see the design doc. A
+## post-boss-1 fork (act ≥ 1) is upgraded to a Phase 02 challenge node, so this
+## also sets how often challenges appear: at 0.85 a post-boss-1 act reliably
+## offers one. NOTE: only ONE fork per act, so this can't push a 1001 run past a
+## single challenge or a 1501 past two — raise challenges_per_act for that.
+@export var fork_chance: float = 0.85
 
-## Leg dart budget fronted on every node this slice. max_turns is derived as
-## darts_fronted / x01_game.darts_per_turn. Slice 2 varies this per node.
-@export var darts_fronted: int = 15
+## Chance a placed challenge node carries a recycled benched-boss aim handicap (§8);
+## otherwise it is a clean precision race. 0 = never handicapped, 1 = always. The
+## handicap raises darts-used, so it nudges the earned rarity down a band on its own.
+@export_range(0.0, 1.0) var challenge_handicap_chance: float = 0.5
+
+# ── Slice 2: per-leg turns roll (the difficulty texture) ─────────────────────
+# Each non-boss leg rolls a whole turn count, then derives its target from a flat
+# pressure line that reproduces the slice-1 ladder at reference_turns (ships at
+# parity). See specs/map/01-substrate-slice2-impl.md §2 / §4.
+
+## The turn count at which a leg reproduces the seeded slice-1 ladder (pressure
+## pressure_baseline, base darts). The roll centres here. turns = reference_turns
+## ⇒ target = the depth's baseline ladder value (slice-1 parity).
+@export var reference_turns: int = 5
+
+## Fewest turns a leg may roll — the sniper floor. 4 → ≥12 base darts so the dart
+## bank is never starved. Lower it for spicier (leaner, snippier) snipers.
+@export var turns_min: int = 4
+
+## Most turns a leg may roll — the marathon ceiling (longer, more forgiving, a
+## bigger target number).
+@export var turns_max: int = 6
+
+## The fraction of legs pinned to reference_turns; the rest roll uniform across
+## [turns_min, turns_max]. 0 = fully uniform; 1 = always reference_turns. At 0.35
+## with a 4–6 range, ~57% of legs sit at reference_turns (0.35 pinned + a third of
+## the remaining 0.65) and ~43% get marathon/sniper texture.
+@export_range(0.0, 1.0) var turns_center_bias: float = 0.35
+
+## The flat pressure every non-boss leg targets — a single global difficulty dial
+## (raise it to make *all* legs harder). Held flat as a control variable this
+## slice; a future depth-ramp plugs in by making this a function of depth.
+@export var pressure_baseline: float = 1.0

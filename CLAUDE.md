@@ -1,47 +1,39 @@
-# Spec: MAP SUBSTRATE — Phase 01, slice 1 (ready to build)
+# Map Program — Phase 02 Challenge Nodes (ACTIVE: impl spec ready to build)
 
-**Active spec: `specs/map/01-substrate-impl.md`** (impl) + `specs/map/01-substrate.md` (rationale). Part of the
-Map Program (`specs/map/00-overview.md`, the multi-phase index). The map is "the house" the shipped scoring
-tools get arranged into; the substrate is its frame — a navigable graph that first just hosts the *current* run
-flow (legs/shops/bosses), mostly a reorganization of what exists.
+**Active spec:** `specs/map/02-challenge-nodes-impl.md` — the buildable doc for Phase 02. Design was finalized in a
+Cowork session (2026-06-05); the impl spec is the build surface for Claude Code. Program index + per-phase status
+live in `specs/map/00-overview.md`.
 
-**Slice 1 scope (decided 2026-06-04 Cowork session): full rough-rect topology + ported difficulty ladder.**
-- New `scripts/map/`: `MapNode` (RefCounted data — type/depth/lane/act + `(target_score, darts_fronted)` payload
-  + edges), `MapGraph` (seeded-RNG generator + traversal API, headless-testable), `MapView` (code-built
-  `Control`, grey-rect `Button` per node, **type-only** — follows the `LevelSelectScreen` instantiation pattern).
-- Generator steps: skeleton → depth grid → wire edges (2 lanes + in-lane reconverging forks + bridges + funnel
-  chokepoints) → slot specials by type-mix + one distance-decay weight → assign params → validate-or-assert.
-- Active node types this slice: LEG / SHOP / BOSS. CHALLENGE + EVENT slots reserved (off-branch marked), filled
-  as legs/stubs until Phases 02/03.
-- **The seam** (the one invasive change): run structure is *implicit* today — `x01_game.advance_leg()` self-
-  increments the target ladder; shop = `leg % shop_cadence` in `_show_leg_upgrades`; boss = `leg % boss_cadence`
-  in `BossManager`. The map makes it explicit: generate at `_on_run_confirmed`; show `MapView` between legs; on
-  node pick apply `(target_score, max_turns = darts_fronted / darts_per_turn)` to `x01_game` (add a
-  `start_leg_with()` helper). **Two `advance_leg()` call sites** to intercept — normal next-leg (main.gd:1027)
-  and post-shop (`_end_shop`, main.gd:1647); the latter because **shop becomes its own node** (leaving a shop
-  returns to the map, no auto-advance). Run victory = reaching the terminal act-3 BOSS node.
-- Slice-1 difficulty = **ported ladder**: `target(depth)`, both parallel nodes at a depth share the tier, so
-  branches differ by *type composition*, not hardness. `darts_fronted = 15` for all.
+**What Phase 02 is:** an optional, **post-boss-1**, off-branch map node (slice 1's reserved `is_off_branch` fork).
+The player **wagers banked darts as the race budget** to re-clear a score they've already beaten, in a tighter
+budget than a normal leg — the challenge verb is *match concisely*, not *match big*. Win → typed reward (rarity =
+how few darts you used) + bank the unused darts. **Lose → forfeit the whole wager, run continues.** Skip is always
+allowed (take the parallel leg instead).
 
-**Deferred (explicit follow-ups):** slice 2 = the pressure-ratio generator (`(target/darts)/expected_per_dart`
-roll + the static curve — held back because its numbers can't be tuned until the map is playable); Phase 02
-challenge content (fills the reserved fork off-branch); Phase 03 typed shop + codex + event/family glyphs; the
-arrival ceremony (center readout dock + dart print-out reusing the bank-save animation); art reskin (graph/view
-split means `MapGraph` is untouched); Phase 04 path-biasing (made load-bearing by the type-only info model).
+**Core resolved decisions (see impl spec for the full surface):**
+- **Deposit = wager = race budget**, one pool; **loss forfeits all of it** — that's what makes deposit-size the
+  single risk dial (lean = cheap rare attempt with no fail-soft; fat = pricey safety net down to a common win).
+  This **supersedes** the old `02-challenge-nodes.md` turns↔rarity "banter table."
+- **Target anchor:** within −300 of the highest score the player has *cleared* (boss or leg); never above it.
+- **Deposit range derived from the slice-2 seam:** `reliable = ceil(target / expected_per_dart(depth))`, then
+  `min ≈ reliable×0.65`, `max ≈ reliable+2`. Lands in a tight ~6–13 dart band all game (worked numbers in §4).
+- **`darts_per_turn` rolled per node ∈ [2,5]**, shown before deposit; **ice-tray** fill (raw-dart deposit chunks
+  into rows of dpt, partial last row) with the budget **capped by total darts**, not whole turns.
+- **Handicaps** reuse the benched bosses (Rotation / Narrow Double / two-darts — code still present).
 
-Design laws this leans on: *frame before furniture* (build the rough substrate before node types — positional
-features need a run-position to feel-test) and *chosen friction is spice*. Build-steering spine stays: exposure
-(codex) + informed shop + earned challenge selection; **no free typed picks** (power stays earned — protects the
-darts-as-currency "bank is the climb" thesis).
+**Build dependency (do first):** Phase 02 reads the slice-2 pressure seam, which is currently **skeleton** —
+`baseline_target` calls undefined `_act_ceiling` / `_act_floor` / `_snap`, and `pressure_of` is referenced but not
+implemented. Finish/compile the seam before Phase 02 consumes it (impl spec §14). Engine additions Phase 02 needs:
+an x01 total-dart-cap budget mode (partial final turn) + a per-race `darts_per_turn` override (§9).
 
-**Board-scoring rework SHIPPED 2026-06-03** — `specs/2026-06-03-scoring-on-the-board.md`. Two-axis scoring:
-additive face-value baseline (ring + hotspot + wedge value) × ONE combined multiplicative streak factor
-(`1 + Σ`). Per-category streak capacity from components (`DartComponent.streak_slot_grant`). `HotspotModifier`
-live; hotspot smoke shader + streak pulse visuals. The shipped `family` tag is the steering prerequisite the
-map's event/shop glyphs key off. Also deferred from that pass: **Tier-2 geometry** (wedge resize, bigger bull)
-behind the checkout-solver lift; hotspot **"value-in-the-smoke"** (`use_glyph`).
+**Build-steering spine (unchanged):** exposure (codex) + informed shop + earned challenge selection; **no free
+typed picks** (power stays earned — protects the darts-as-currency "bank is the climb" thesis). Phase 02 is the
+*earned-selection* third. Design laws: *frame before furniture*, *chosen friction is spice*.
 
-When this phase ships, archive it per the Workflow Notes and replace this section with the next spec.
+**Shipped before this — Phase 01 Substrate:** slice 1 (graph/view/seam, `01-substrate-impl.md`, commit `e71762f`)
++ slice 2 (pressure-ratio generator, `01-substrate-slice2-impl.md`). Note the slice-2 *seam* is skeleton in the
+working tree (above). Deferred substrate polish: arrival ceremony, cramped-1501 layout fix, HUD dart-budget
+texture. Later phases: 03 typed shop + codex, 04 pool filtration, 05 boss cadence (see overview).
 
 ---
 

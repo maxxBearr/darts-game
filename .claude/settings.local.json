@@ -42,7 +42,18 @@
       "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; if \\(-not \\(Test-Path $godot\\)\\) { $godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64.exe\" }; & $godot --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --quit-after 8)",
       "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; & $godot --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_map_graph.gd\"; \"EXIT: $LASTEXITCODE\")",
       "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; & $godot --headless --editor --quit --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" 2>&1 | Select-Object -Last 5; \"EXIT: $LASTEXITCODE\")",
-      "PowerShell(Select-String *)"
+      "PowerShell(Select-String *)",
+      "PowerShell($godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\"; if \\(-not \\(Test-Path $godot\\)\\) { $godot = \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64.exe\" }; & $godot --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_map_graph.gd\" 2>&1 | Out-String)",
+      "Bash(python3 *)",
+      "Bash(cat)",
+      "Bash(python /tmp/scanperm.py)",
+      "Bash(python /tmp/scanperm2.py)",
+      "Bash(python /tmp/scanperm3.py)",
+      "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_map_graph.gd\")",
+      "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_challenge_nodes.gd\")",
+      "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --import)",
+      "Bash(timeout 25 \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\")",
+      "Bash(timeout 22 \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\")"
     ]
   }
 }
