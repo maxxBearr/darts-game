@@ -61,9 +61,21 @@ func start_turn() -> void:
 
 
 ## Advance to the next leg (called after player confirms leg win).
+## Legacy self-incrementing ladder, retained for debug paths. The map drives the
+## normal flow via start_leg_with() instead (see specs/map/01-substrate-impl.md).
 func advance_leg() -> void:
 	current_leg += 1
 	target_score += target_increment
+	start_leg()
+
+
+## Start the next leg with map-supplied parameters instead of the self-increment.
+## The selected MapNode owns the difficulty: it hands over the target and the dart
+## budget (as max_turns), keeping the engine's leg invariants in one place.
+func start_leg_with(new_target: int, new_max_turns: int) -> void:
+	current_leg += 1
+	target_score = new_target
+	max_turns = maxi(new_max_turns, 1)
 	start_leg()
 
 

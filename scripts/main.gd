@@ -59,7 +59,7 @@ var _score_layer: CanvasLayer
 @onready var scoring_modifier_manager: Node = $ScoringModifierManager
 @onready var dart_component_registry: DartComponentRegistry = $DartComponentRegistry
 @onready var dart_build: DartBuild = $DartBuild
-@onready var assembly_screen: AssemblyScreen = $HUD/AssemblyScreen
+@onready var assembly_screen: AssemblyScreen = %AssemblyScreen
 
 # Tutorial system nodes — instantiated in _ready()
 var start_screen: StartScreen
@@ -71,6 +71,11 @@ var ghost_dart_layer: GhostDartLayer
 var game_over_screen: GameOverScreen
 var level_select: LevelSelectScreen
 var boss_manager: BossManager
+var map_view: MapView
+
+## The generated run map. Built at run start (_on_run_confirmed); drives leg/shop/
+## boss scheduling between encounters. Null outside a run. See specs/map/.
+var _map_graph: MapGraph = null
 
 ## The level definition for the current run. Null during tutorial/legacy mode.
 var _current_level: LevelDefinition = null
@@ -340,6 +345,7 @@ func _ready() -> void:
 	hud.streak_replace_selected.connect(_on_streak_replace_selected)
 	hud.modifier_toggled.connect(_on_modifier_toggled)
 	hud.checkout_path_clicked.connect(_on_checkout_path_clicked)
+	hud.throw_aim_pressed.connect(func() -> void: throw_mechanic.confirm_aim_placement())
 
 	# Connect assembly screen
 	assembly_screen.dart_build = dart_build
@@ -351,6 +357,11 @@ func _ready() -> void:
 
 	# Wire dartboard reference to throw_mechanic for target declaration
 	throw_mechanic.dartboard = dartboard
+
+	# Touch devices (incl. mobile browsers) can't hover-then-click to aim, so the AIMING
+	# stage switches to drag-to-position + an on-screen Throw button. The two release meters
+	# stay tap-to-lock either way. Desktop keeps mouse hover + click.
+	throw_mechanic.touch_mode = DisplayServer.is_touchscreen_available()
 
 	# Center the dartboard on screen
 	var viewport_size: Vector2 = get_viewport_rect().size
@@ -878,8 +889,12 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		_boss_leg_just_cleared = true
 		hud.hide_boss_status()
 
-	# Check for run victory — player cleared the final leg of this level
-	if _current_level != null and response["target_score"] >= _current_level.max_score_target:
+	# Check for run victory — player cleared the terminal boss node (the act-3 boss).
+	# The map's terminal test is the source of truth; the score test is kept as a
+	# belt-and-suspenders fallback for the debug skip path (no map advance there).
+	var map_victory: bool = _map_graph != null and _map_graph.is_terminal(_map_graph.current_id)
+	var score_victory: bool = _current_level != null and response["target_score"] >= _current_level.max_score_target
+	if map_victory or score_victory:
 		_show_run_won()
 		return
 
@@ -896,13 +911,9 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		hud.show_reward_choices(_current_rewards)
 		return
 
-	# Check if this is a shop leg (every Nth leg)
-	if response["current_leg"] % shop_cadence == 0:
-		_leg_phase = "shop_enter"
-		var saved: int = _banked_darts
-		hud.show_shop_entry(response["current_leg"], response["target_score"], response["current_turn"], saved)
-		return
-
+	# Shops are no longer scheduled off the leg counter — they're their own map node,
+	# entered by choosing the shop node. Every leg win grants the accuracy/modifier
+	# pick; the map (shown when the player presses Next Leg) offers the next node.
 	_show_accuracy_pick()
 
 
@@ -982,17 +993,10 @@ func _on_next_turn() -> void:
 func _on_next_leg() -> void:
 	AuidoManager.play_ui_click()
 	hud.next_leg_button.visible = false
-	if _leg_phase == "shop_enter":
-		var response: Dictionary = {
-			"current_leg": x01_game.current_leg,
-			"target_score": x01_game.target_score,
-		}
-		_start_shop(response)
-		return
 
 	# "shop_complete" = ran the shop dry; "shop" = player chose to leave early. Both
-	# bank the unspent remainder via _end_shop. Cancel any pending auto-advance so a
-	# queued shop throw doesn't fire after we've left.
+	# bank the unspent remainder via _end_shop, which returns to the map. Cancel any
+	# pending auto-advance so a queued shop throw doesn't fire after we've left.
 	if _leg_phase == "shop_complete" or _leg_phase == "shop":
 		_awaiting_next_dart = false
 		var response: Dictionary = {
@@ -1002,12 +1006,46 @@ func _on_next_leg() -> void:
 		_end_shop(response)
 		return
 
+	# Normal post-leg advance: show the map and let the player pick the next node.
 	_awaiting_next_leg = false
 	_turn_score = 0
 	_turn_darts_scored = 0
-	_leg_phase = ""
 	hud.update_turn_score(0)
+	_show_map()
 
+
+## Show the run-map overlay so the player can choose their next encounter.
+func _show_map() -> void:
+	if _map_graph == null:
+		return
+	_leg_phase = "map"
+	hud.next_leg_button.visible = false
+	map_view.display(_map_graph)
+	map_view.visible = true
+
+
+## The player picked a node on the map. Hide the map and route by node type:
+## shop nodes enter the shop; everything else slides into a new leg (boss-aware).
+func _on_map_node_chosen(node: MapNode) -> void:
+	if node == null:
+		return
+	map_view.visible = false
+	_map_graph.advance_to(node.id)
+	_leg_phase = ""
+	if node.type == MapNode.Type.SHOP:
+		var response: Dictionary = {
+			"current_leg": x01_game.current_leg,
+			"target_score": x01_game.target_score,
+		}
+		_start_shop(response)
+	else:
+		_slide_to_leg_node(node)
+
+
+## Slide the board out/in and start a leg with the chosen node's parameters. This
+## replaces advance_leg()'s self-increment — the node owns (target, dart budget),
+## and a BOSS node rolls a concrete boss from the level pool on arrival.
+func _slide_to_leg_node(node: MapNode) -> void:
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var center: Vector2 = viewport_size / 2.0
 	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
@@ -1018,15 +1056,15 @@ func _on_next_leg() -> void:
 	tween.tween_callback(func() -> void:
 		scoring_modifier_manager.reset_for_leg()
 		_clear_darts()
-		x01_game.advance_leg()
+		x01_game.start_leg_with(node.target_score, node.darts_fronted / x01_game.darts_per_turn)
 		_update_all_hud()
 		hud.update_streak_section(
 			scoring_modifier_manager.get_active_streak_modifiers(),
 			scoring_modifier_manager.effective_wedge_values
 		)
-		if boss_manager.is_boss_leg(x01_game.current_leg):
+		if node.type == MapNode.Type.BOSS:
 			var game_state: Dictionary = _build_game_state()
-			var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
+			boss_manager.start_boss_leg(game_state)
 			boss_manager.on_turn_start(game_state)
 			_sync_board_and_solver()
 			_update_boss_status()
@@ -1158,14 +1196,11 @@ func _on_reward_selected(index: int) -> void:
 ## Resume the post-reward flow (enter shop or show the next-leg button). Shared by
 ## the normal reward path and the relic-flip picker once all flips are placed.
 func _continue_after_reward() -> void:
-	if shop_after_boss:
-		_leg_phase = "shop_enter"
-		var saved: int = _banked_darts
-		hud.show_shop_entry(x01_game.current_leg, x01_game.target_score, x01_game.current_turn, saved)
-	else:
-		_leg_phase = ""
-		hud.score_label.text = ""
-		hud.next_leg_button.visible = true
+	# Post-boss shopping is now a map routing choice (a shop node after the boss),
+	# not an automatic appendage. Surface the Next Leg button → map.
+	_leg_phase = ""
+	hud.score_label.text = ""
+	hud.next_leg_button.visible = true
 
 
 ## Begin the Mirror-Zone relic's wedge-flip picker. The player must pick `count`
@@ -1238,6 +1273,9 @@ func _reset_run_state() -> void:
 	shop_pick_count = 2
 	ModifierRegistry.current_rarity_shift = 0.0
 	boss_manager.configure_for_level(null)
+	_map_graph = null
+	if map_view != null:
+		map_view.visible = false
 	dartboard.clear_boss_overlays()
 	dartboard.clear_illumination()
 	_checkout_paths.clear()
@@ -1612,7 +1650,8 @@ func _end_shop_delayed() -> void:
 	hud.show_shop_complete()
 
 
-## Finalize the shop and advance to the next leg with a slide transition.
+## Finalize the shop and return to the map. A shop is its own node now, so leaving
+## it does NOT advance a leg — the player picks the next encounter from the map.
 func _end_shop(response: Dictionary) -> void:
 	_in_shop = false
 	# Persist the bank: keep whatever darts went unspent in the shop. The seed at
@@ -1626,7 +1665,8 @@ func _end_shop(response: Dictionary) -> void:
 	hud.exit_shop_mode()
 	UnlockManager.on_shop_closed()
 
-	# Slide board up off the top, clear shop, drop back down from the top
+	# Slide the board up off the top, clear the shop, drop it back to centre, then
+	# show the map for the next pick (no leg advance — the shop was the encounter).
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var center: Vector2 = viewport_size / 2.0
 	var off_top: Vector2 = Vector2(center.x, -dartboard.board_radius * 2.0)
@@ -1637,29 +1677,12 @@ func _end_shop(response: Dictionary) -> void:
 		dartboard.clear_shop_spots()
 		dartboard.position = off_top
 		_awaiting_next_leg = false
-		scoring_modifier_manager.reset_for_leg()
-		x01_game.advance_leg()
 		_update_all_hud()
 		_sync_board_state()
 		_update_checkout_highlights()
 	)
 	tween.tween_property(dartboard, "position", center, shop_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	tween.tween_callback(_on_post_shop_leg_start)
-
-
-## Called after the shop exit transition to start the next leg (possibly a boss leg).
-func _on_post_shop_leg_start() -> void:
-	if boss_manager.is_boss_leg(x01_game.current_leg):
-		var game_state: Dictionary = _build_game_state()
-		var boss_def: BossDefinition = boss_manager.start_boss_leg(game_state)
-		boss_manager.on_turn_start(game_state)
-		_sync_board_and_solver()
-		_update_boss_status()
-		_update_checkout_highlights()
-		var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
-		announce_tween.tween_callback(_start_new_throw)
-	else:
-		_start_new_throw()
+	tween.tween_callback(_show_map)
 
 
 # ── Tutorial system ───────────────────────────────────────────────────────
@@ -1705,6 +1728,13 @@ func _setup_tutorial_system() -> void:
 	level_select.back_pressed.connect(_on_level_select_back)
 	level_select.visible = false
 	hud.add_child(level_select)
+
+	# Run map overlay — shown between encounters, lets the player pick the next node.
+	map_view = MapView.new()
+	map_view.name = "MapView"
+	map_view.node_chosen.connect(_on_map_node_chosen)
+	map_view.visible = false
+	hud.add_child(map_view)
 
 	# Boss manager — handles boss scheduling and lifecycle
 	boss_manager = BossManager.new()
@@ -1952,6 +1982,14 @@ func _on_run_confirmed() -> void:
 	if _current_level != null:
 		boss_manager.configure_for_level(_current_level)
 	x01_game.start_run()
+
+	# Generate the run map and step onto its start node (leg 1). The start node's
+	# tier matches start_run()'s target, so the engine and map agree on leg 1; the
+	# map only drives picks from the second encounter onward.
+	var run_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	run_rng.randomize()
+	_map_graph = MapGraph.generate(_current_level, run_rng, x01_game.starting_target, x01_game.target_increment)
+	_map_graph.advance_to(_map_graph.start_id)
 
 	# Debug: skip to the boss leg by jumping to the final leg's target
 	if debug_boss_immediately and _current_level != null:
@@ -2573,6 +2611,9 @@ func _on_throw_state_changed(new_state: int) -> void:
 	if _in_tutorial:
 		return
 
+	# The Throw button only exists on touch devices, and only during AIMING.
+	hud.set_throw_aim_button_visible(throw_mechanic.touch_mode and new_state == throw_mechanic.ThrowState.AIMING)
+
 	match new_state:
 		throw_mechanic.ThrowState.AIMING:
 			_enable_hover()
@@ -2581,11 +2622,17 @@ func _on_throw_state_changed(new_state: int) -> void:
 			_update_stats_display()
 			var no_modifiers: Array[String] = []
 			hud.update_modifier_status(no_modifiers)
-			hud.show_instruction("Move to aim, click to place zone")
+			if throw_mechanic.touch_mode:
+				hud.show_instruction("Drag to aim  |  tap Throw to place zone")
+			else:
+				hud.show_instruction("Move to aim, click to place zone")
 		throw_mechanic.ThrowState.VERTICAL_RELEASE:
 			_disable_hover()
 			hud.clear_modifier_perkup()
-			hud.show_instruction("Click or Space to lock vertical  |  Right-click or Esc to undo")
+			if throw_mechanic.touch_mode:
+				hud.show_instruction("Tap to lock vertical")
+			else:
+				hud.show_instruction("Click or Space to lock vertical  |  Right-click or Esc to undo")
 			# Declare target and show highlight
 			var target: Dictionary = throw_mechanic._declared_target
 			if not target.is_empty():
@@ -2597,7 +2644,10 @@ func _on_throw_state_changed(new_state: int) -> void:
 				_evaluate_aim_placed_bonuses(target)
 		throw_mechanic.ThrowState.HORIZONTAL_RELEASE:
 			_disable_hover()
-			hud.show_instruction("Click or Space to lock horizontal")
+			if throw_mechanic.touch_mode:
+				hud.show_instruction("Tap to lock horizontal")
+			else:
+				hud.show_instruction("Click or Space to lock horizontal")
 		throw_mechanic.ThrowState.RESOLVING:
 			_disable_hover()
 			hud.show_instruction("Releasing...")

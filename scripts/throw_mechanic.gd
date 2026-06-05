@@ -227,6 +227,12 @@ var _target_centroid: Vector2 = Vector2.ZERO
 ## Reference to the dartboard node, set by main.gd.
 var dartboard: Node2D = null
 
+## When true, the AIMING stage is driven by touch: dragging on the board repositions the
+## crosshair but does NOT commit — placement happens only via confirm_aim_placement() (the
+## on-screen Throw button). Set by main.gd from DisplayServer.is_touchscreen_available().
+## The two release meters stay tap-to-lock either way. Desktop leaves this false.
+var touch_mode: bool = false
+
 ## Center of the placed aim crosshair (locked when player confirms placement).
 var _placed_center: Vector2 = Vector2.ZERO
 
@@ -494,6 +500,12 @@ func _process(delta: float) -> void:
 			if _scripted_mode:
 				queue_redraw()
 				return
+			# Touch drives the aim position from discrete touch/drag events (see
+			# _unhandled_input); skip the per-frame pointer chase so the crosshair stays
+			# put when the finger lifts to reach the Throw button.
+			if touch_mode:
+				queue_redraw()
+				return
 			# Check for mouse movement — if mouse moved, reclaim mouse control
 			var current_mouse: Vector2 = get_global_mouse_position()
 			if current_mouse.distance_to(_last_mouse_pos) > 1.0:
@@ -552,6 +564,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _paused or _scripted_mode or _input_blocked:
 		return
 
+	# Touch-driven aim positioning: dragging on the board moves the crosshair, but does NOT
+	# commit (the Throw button does, via confirm_aim_placement). Only during AIMING in
+	# touch_mode; the release meters still lock on the emulated tap below.
+	if touch_mode and _state == ThrowState.AIMING:
+		if event is InputEventScreenTouch:
+			var touch: InputEventScreenTouch = event as InputEventScreenTouch
+			if touch.pressed:
+				_touch_move_aim(touch.position)
+			return
+		elif event is InputEventScreenDrag:
+			_touch_move_aim((event as InputEventScreenDrag).position)
+			return
+
 	# Detect WASD/arrow presses to switch away from mouse control
 	if _state == ThrowState.AIMING and event is InputEventKey:
 		var key: InputEventKey = event as InputEventKey
@@ -565,7 +590,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			match _state:
 				ThrowState.AIMING:
-					_place_aim_crosshair()
+					# On touch the emulated tap only repositions (handled above) — the Throw
+					# button commits. On desktop the click places directly.
+					if not touch_mode:
+						_place_aim_crosshair()
 					get_viewport().set_input_as_handled()
 				ThrowState.VERTICAL_RELEASE:
 					_lock_vertical()
@@ -595,6 +623,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif key.pressed and key.keycode == KEY_ESCAPE and _state == ThrowState.VERTICAL_RELEASE:
 			_cancel_to_aiming()
 			get_viewport().set_input_as_handled()
+
+
+## Move the aim crosshair to a touch position (screen-space). Rejects touches outside the
+## board surround so reaching for off-board UI (e.g. the Throw button) never drags the
+## crosshair. Used only in touch_mode during AIMING.
+func _touch_move_aim(screen_pos: Vector2) -> void:
+	var world: Vector2 = get_viewport().get_canvas_transform().affine_inverse() * screen_pos
+	if dartboard != null:
+		var surround_radius: float = dartboard.board_radius * dartboard.surround_outer_multiplier
+		if (world - dartboard.global_position).length() > surround_radius:
+			return
+	_aim_center = world
+	_clamp_aim_to_board()
+	queue_redraw()
+
+
+## Commit the current aim position and advance to the vertical meter. Called by the HUD's
+## Throw button in touch_mode (the desktop path commits via click in _unhandled_input).
+func confirm_aim_placement() -> void:
+	if _state == ThrowState.AIMING and not _paused and not _scripted_mode:
+		_place_aim_crosshair()
 
 
 ## Lock the aim crosshair in place and transition to VERTICAL_RELEASE.

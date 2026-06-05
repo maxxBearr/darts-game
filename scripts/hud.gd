@@ -12,27 +12,29 @@ signal modifier_skipped
 signal reward_selected(index: int)
 signal checkout_path_clicked(index: int)
 signal streak_replace_selected(index: int)
+signal throw_aim_pressed
 
-@onready var score_label: Label = $ScoreLabel
-@onready var instruction_label: Label = $InstructionLabel
-@onready var remaining_label: Label = $RemainingLabel
-@onready var turn_label: Label = $TurnLabel
-@onready var dart_label: Label = $DartLabel
-@onready var leg_label: Label = $LegLabel
-@onready var bust_label: Label = $BustLabel
-@onready var next_dart_button: Button = $NextDartButton
-@onready var next_turn_button: Button = $NextTurnButton
-@onready var next_leg_button: Button = $NextLegButton
-@onready var new_run_button: Button = $NewRunButton
-@onready var upgrade_container: HBoxContainer = $UpgradeContainer
-@onready var upgrade_button_1: Button = $UpgradeContainer/UpgradeButton1
-@onready var upgrade_button_2: Button = $UpgradeContainer/UpgradeButton2
-@onready var upgrade_button_3: Button = $UpgradeContainer/UpgradeButton3
-@onready var dart_indicator: Control = $DartIndicator
-@onready var turn_score_label: Label = $TurnScoreLabel
-@onready var hover_tooltip: Label = $HoverTooltip
-@onready var modifier_tooltip: Label = $ModifierTooltip
-@onready var modifier_panel: HBoxContainer = $ModifierPanel
+@onready var score_label: Label = %ScoreLabel
+@onready var instruction_label: Label = %InstructionLabel
+@onready var remaining_label: Label = %RemainingLabel
+@onready var turn_label: Label = %TurnLabel
+@onready var dart_label: Label = %DartLabel
+@onready var leg_label: Label = %LegLabel
+@onready var bust_label: Label = %BustLabel
+@onready var next_dart_button: Button = %NextDartButton
+@onready var next_turn_button: Button = %NextTurnButton
+@onready var next_leg_button: Button = %NextLegButton
+@onready var new_run_button: Button = %NewRunButton
+@onready var upgrade_container: HBoxContainer = %UpgradeContainer
+@onready var upgrade_button_1: Button = %UpgradeContainer/UpgradeButton1
+@onready var upgrade_button_2: Button = %UpgradeContainer/UpgradeButton2
+@onready var upgrade_button_3: Button = %UpgradeContainer/UpgradeButton3
+@onready var dart_indicator: Control = %DartIndicator
+@onready var turn_score_label: Label = %TurnScoreLabel
+@onready var hover_tooltip: Label = %HoverTooltip
+@onready var modifier_tooltip: Label = %ModifierTooltip
+@onready var modifier_panel: HBoxContainer = %ModifierPanel
+@onready var throw_aim_button: Button = %ThrowAimButton
 
 @export_group("Modifier Panel")
 
@@ -136,7 +138,7 @@ signal streak_replace_selected(index: int)
 @export var checkout_top_margin: float = 12.0
 
 
-@onready var stats_container: VBoxContainer = $StatsContainer
+@onready var stats_container: VBoxContainer = %StatsContainer
 
 const STAT_KEYS: Array[String] = [
 	"horizontal_range", "vertical_range",
@@ -243,6 +245,10 @@ func _ready() -> void:
 	# Pulse action buttons when they become visible
 	for btn: Button in [next_dart_button, next_turn_button, next_leg_button, new_run_button]:
 		btn.visibility_changed.connect(_on_action_button_visibility_changed.bind(btn))
+
+	# Touch-only Throw button — commits the aim placement during AIMING on touch devices.
+	throw_aim_button.pressed.connect(func() -> void: throw_aim_pressed.emit())
+	throw_aim_button.visible = false
 
 	# Connect upgrade buttons — each emits upgrade_selected with its index
 	upgrade_button_1.pressed.connect(func() -> void: _select_upgrade(0))
@@ -740,6 +746,11 @@ func reset_bust() -> void:
 ## Show instruction text to the player.
 func show_instruction(text: String) -> void:
 	instruction_label.text = text
+
+
+## Show or hide the touch-only Throw button (commits aim placement on touch devices).
+func set_throw_aim_button_visible(value: bool) -> void:
+	throw_aim_button.visible = value
 
 
 ## Hide the per-dart score text and all buttons (called at start of each throw).

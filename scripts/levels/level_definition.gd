@@ -26,3 +26,8 @@ extends Resource
 
 ## Unlock condition for this level. Null means always unlocked (starter level).
 @export var unlock_condition: UnlockCondition
+
+## Map generation tuning for this level (lanes, column counts, shop mix/spacing,
+## fork chance, dart budget). Null falls back to MapGenConfig's defaults. The run
+## map's act count is taken from boss_count, not from here.
+@export var map_gen_config: MapGenConfig
