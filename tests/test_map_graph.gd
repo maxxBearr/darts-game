@@ -1,13 +1,14 @@
 extends SceneTree
-## Headless unit test for MapGraph (specs/map/01-substrate-slice3-impl.md §8 + the
-## slice-2 pressure contract). Generates maps for every shipped level across many seeds
-## and asserts the structural invariants the segment-based, INCREMENTAL generator
-## promises. Run with:
+## Headless unit test for MapGraph (specs/map/01-substrate-slice3-impl.md §8, the slice-2
+## pressure contract, and the 2026-06-06 round-2 topology: decoupled crossovers, typed
+## crossovers, mini-branches, act-0 challenges). Generates maps for every shipped level
+## across many seeds and asserts the structural invariants the generator promises. Run with:
 ##   godot --headless --script res://tests/test_map_graph.gd
 ## Exits non-zero on any failure.
 
 const SEEDS_PER_LEVEL := 200
 const PATH_SEEDS := 30          ## seeds used for the (heavier) full-path enumeration checks
+const INCREMENT := 100          ## X01 target lattice step (mirrors _generate_full's 101/100)
 
 var _failures: int = 0
 var _checks: int = 0
@@ -37,7 +38,7 @@ func _init() -> void:
 func _generate_full(level: LevelDefinition, seed_value: int, brush_colors: Array = []) -> MapGraph:
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = seed_value
-	var g: MapGraph = MapGraph.generate(level, rng, 101, 100)
+	var g: MapGraph = MapGraph.generate(level, rng, 101, INCREMENT)
 	for a: int in range(1, maxi(level.boss_count, 1)):
 		g.generate_next_act({"available_brush_colors": brush_colors, "highest_cleared": 101})
 	return g
@@ -48,8 +49,9 @@ func _cfg_for(level: LevelDefinition) -> MapGenConfig:
 
 
 ## Enumerate every start→terminal path (the DAG's branch choices). Returns an Array of
-## paths, each an Array[int] of node ids. Branching is 2 per segment, so this stays small
-## (≤ 2^(segments·acts), e.g. 64 for a 3-act / 2-segment run).
+## paths, each an Array[int] of node ids. Round-2 topology: at each stretch boundary a path
+## may STAY in lane or CROSS via the interchange, and within a stretch it may take a
+## mini-branch detour or the straight run, so the path set fans out with crossovers + branches.
 func _enumerate_paths(g: MapGraph) -> Array:
 	var paths: Array = []
 	var stack: Array = [[g.start_id]]
@@ -65,6 +67,24 @@ func _enumerate_paths(g: MapGraph) -> Array:
 	return paths
 
 
+## How many nodes share `depth` in the whole graph (the funnel/crossover sole-ness test).
+func _depth_population(g: MapGraph, depth: int) -> int:
+	var c: int = 0
+	for id: int in g.nodes:
+		if g.get_node_by_id(id).depth == depth:
+			c += 1
+	return c
+
+
+## The number of distinct (target, turns) leg configs an act can host — its combo capacity
+## MINUS the reserved boss pair. The no-repeat rule is allowed to repeat only once a path's
+## claims exceed this (the documented exhaustion fallback in claim_unplayed_leg_params).
+func _act_leg_capacity(g: MapGraph, cfg: MapGenConfig, act: int) -> int:
+	var num_targets: int = (g.act_ceiling(act) - g.act_floor(act)) / INCREMENT + 1
+	var num_turns: int = cfg.turns_max - cfg.turns_min + 1
+	return num_targets * num_turns - 1   # boss pair (ceiling @ reference_turns) is reserved
+
+
 # ── Per-level suite ───────────────────────────────────────────────────────────
 
 func _test_level(level: LevelDefinition) -> void:
@@ -78,11 +98,32 @@ func _test_level(level: LevelDefinition) -> void:
 			var n: MapNode = g.get_node_by_id(id)
 			if n.type != MapNode.Type.BOSS:
 				turns_dist[n.max_turns] = turns_dist.get(n.max_turns, 0) + 1
-	# Heavier per-path checks on a subset of seeds (budget + skip invariant + traversed len).
+	# Heavier per-path checks on a subset of seeds, plus cross-seed spread/existence signals.
+	var crossover_count_dist: Dictionary = {}   ## act-0 crossover count -> seeds with it
+	var total_branches_seen: int = 0
+	var act0_challenges_seen: int = 0
 	for seed_value: int in range(PATH_SEEDS):
 		var g: MapGraph = _generate_full(level, seed_value)
 		_assert_topology_invariants(level, g, seed_value)
 		_assert_per_path_budget(level, g, seed_value)
+		_assert_crossover_invariants(level, g, seed_value)
+		_assert_branch_invariants(level, g, seed_value)
+		_assert_no_repeat_claims(level, g, seed_value)
+		var c0: int = 0
+		for id: int in g.nodes:
+			var n: MapNode = g.get_node_by_id(id)
+			if n.act == 0 and n.is_crossover:
+				c0 += 1
+			if n.act == 0 and n.type == MapNode.Type.CHALLENGE:
+				act0_challenges_seen += 1
+			if n.is_branch and n.prev_ids.size() == 1 and not g.get_node_by_id(n.prev_ids[0]).is_branch:
+				total_branches_seen += 1   # count branch HEADS (one per detour)
+		crossover_count_dist[c0] = crossover_count_dist.get(c0, 0) + 1
+	# Round-2 spread/existence: the crossover count must not be pinned to one value, branches
+	# must occur, and act-0 challenges (newly allowed) must appear across seeds.
+	_check(crossover_count_dist.size() > 1, "act-0 crossover count spreads across seeds (not pinned)", -1)
+	_check(total_branches_seen > 0, "mini-branches appear across seeds", -1)
+	_check(act0_challenges_seen > 0, "act-0 challenges appear across seeds (round 2)", -1)
 	# Spread guarantee: the generator must NOT silently go inert (every leg == ref).
 	_assert_spread(level, turns_dist)
 	# Parity guarantee: forcing the roll to reference_turns reproduces the slice-1 ladder.
@@ -183,53 +224,67 @@ func _assert_structure(level: LevelDefinition, g: MapGraph, seed_value: int) -> 
 	_check(shop_count >= g.acts, "at least one shop per act (>= acts total)", seed_value)
 
 
-## Slice-3 topology invariants (§5/§8): no specials on chokepoints, every CHALLENGE has a
-## live parallel run (the Skip path), per-act placed-node budget, EVENT family eligibility.
+## Topology invariants (§5/§8, round 2): every special has a skip (same-depth sibling OR
+## is_crossover); act-0 challenges respect the depth gate; ≤1 detour challenge per act; the
+## per-act placed-node budget holds; EVENT families are eligible under the run-state.
 func _assert_topology_invariants(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
 	var cfg: MapGenConfig = _cfg_for(level)
-	# A chokepoint is the SOLE node at its depth; a branch-run node has a same-depth sibling.
 	var depth_count: Dictionary = {}
+	var act_min_depth: Dictionary = {}
 	for id: int in g.nodes:
-		var d: int = g.get_node_by_id(id).depth
-		depth_count[d] = depth_count.get(d, 0) + 1
+		var n: MapNode = g.get_node_by_id(id)
+		depth_count[n.depth] = depth_count.get(n.depth, 0) + 1
+		if not act_min_depth.has(n.act) or n.depth < act_min_depth[n.act]:
+			act_min_depth[n.act] = n.depth
 
 	var per_act: Dictionary = {}
+	var detour_challenges_per_act: Dictionary = {}
 	for id: int in g.nodes:
 		var n: MapNode = g.get_node_by_id(id)
 		per_act[n.act] = per_act.get(n.act, 0) + 1
+		var has_skip: bool = depth_count[n.depth] > 1 or n.is_crossover
 		if n.type == MapNode.Type.SHOP or n.type == MapNode.Type.EVENT or n.type == MapNode.Type.CHALLENGE:
-			_check(depth_count[n.depth] > 1, "special (type %d) node not on a chokepoint" % n.type, seed_value)
+			_check(has_skip, "special (type %d) node %d has a skip (sibling or crossover)" % [n.type, n.id], seed_value)
 		if n.type == MapNode.Type.CHALLENGE:
-			_check(n.act >= 1, "challenge is post-boss-1 (act >= 1)", seed_value)
-			_check(depth_count[n.depth] > 1, "challenge has a live parallel run (Skip available)", seed_value)
+			if n.act == 0:
+				_check(n.depth - int(act_min_depth[0]) >= cfg.challenge_act0_min_depth,
+					"act-0 challenge %d respects depth gate (depth %d, entry %d, gate %d)" % [n.id, n.depth, int(act_min_depth[0]), cfg.challenge_act0_min_depth], seed_value)
+			_check(has_skip, "challenge %d has a skip (Skip available)" % n.id, seed_value)
 			_check(n.challenge != null, "challenge node carries a ChallengeNode resource", seed_value)
+			if n.is_crossover or n.is_branch:
+				detour_challenges_per_act[n.act] = detour_challenges_per_act.get(n.act, 0) + 1
 		if n.type == MapNode.Type.EVENT:
 			_check(n.event != null, "event node carries an EventNode resource", seed_value)
 			# Accuracy-only run-state (default) ⇒ the only eligible family is accuracy.
 			_check(n.event.reward_family == &"accuracy", "event family is accuracy under empty run-state", seed_value)
+	for a: int in detour_challenges_per_act:
+		_check(detour_challenges_per_act[a] <= 1, "act %d has ≤1 detour challenge (got %d)" % [a, detour_challenges_per_act[a]], seed_value)
 	for a: int in per_act:
 		_check(per_act[a] >= cfg.act_node_budget_min and per_act[a] <= cfg.act_node_budget_max,
 			"act %d placed-node count %d in [%d,%d]" % [a, per_act[a], cfg.act_node_budget_min, cfg.act_node_budget_max], seed_value)
 
 
-## Per-traversal budget (§1.2/§8): enumerate full paths; each act's contribution of each
-## special stays ≤ type_max; act-0 paths collect zero challenges; ≥1 challenge appears on
-## at least one branch in every act ≥ 1; traversed path length per act ≈ 12 ± slack.
+## Per-traversal budget (§1.2/§4/§8): enumerate full paths; each act's contribution of each
+## special — counting LANE-RUN nodes only, crossover/branch content excluded (§4) — stays ≤
+## its per-path max; ≥1 lane-run challenge appears on at least one branch in every act ≥ 1;
+## traversed path length per act ≈ lane_len + 3 + crossovers taken.
 func _assert_per_path_budget(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
 	var cfg: MapGenConfig = _cfg_for(level)
 	var paths: Array = _enumerate_paths(g)
 	_check(paths.size() > 0, "at least one start→boss path exists", seed_value)
-	# Traversed length bounds: 2 (entry+boss) + segments (chokepoints) + Σ run lengths.
-	var trav_min: int = 2 + cfg.branch_segments_min + cfg.branch_segments_min * cfg.branch_len_min
-	var trav_max: int = 2 + cfg.branch_segments_max + cfg.branch_segments_max * cfg.branch_len_max
-	# Track, per act, the max challenge count any single branch collects (existence check).
-	var act_max_challenges: Dictionary = {}
+	# Traversed length: entry + boss + pre-boss = 3, plus lane_len lane nodes (branches swap
+	# equal-length spans), plus 0 … crossovers_max interchanges taken.
+	var trav_min: int = cfg.lane_len_min + 3
+	var trav_max: int = cfg.lane_len_max + cfg.crossovers_max + 3
+	var act_max_challenges: Dictionary = {}   ## act -> max lane-run challenges any single branch collects
 	for path: Array in paths:
-		var per_act_count: Dictionary = {}   ## act -> {type -> count}
-		var per_act_len: Dictionary = {}
+		var per_act_count: Dictionary = {}   ## act -> {type -> count} (lane-run nodes only)
+		var per_act_len: Dictionary = {}     ## act -> total nodes on path (incl detours)
 		for id: int in path:
 			var n: MapNode = g.get_node_by_id(id)
 			per_act_len[n.act] = per_act_len.get(n.act, 0) + 1
+			if n.is_crossover or n.is_branch:
+				continue   # §4: detour content is off the per-path special budget
 			if not per_act_count.has(n.act):
 				per_act_count[n.act] = {}
 			var tc: Dictionary = per_act_count[n.act]
@@ -239,18 +294,177 @@ func _assert_per_path_budget(level: LevelDefinition, g: MapGraph, seed_value: in
 			var shops: int = tc.get(MapNode.Type.SHOP, 0)
 			var events: int = tc.get(MapNode.Type.EVENT, 0)
 			var challenges: int = tc.get(MapNode.Type.CHALLENGE, 0)
+			var chal_max: int = cfg.challenges_act0_per_path_max if a == 0 else cfg.challenges_per_path_max
 			_check(shops <= cfg.shops_per_path_max, "path collects ≤ %d shops in act %d (got %d)" % [cfg.shops_per_path_max, a, shops], seed_value)
 			_check(events <= cfg.events_per_path_max, "path collects ≤ %d events in act %d (got %d)" % [cfg.events_per_path_max, a, events], seed_value)
-			_check(challenges <= cfg.challenges_per_path_max, "path collects ≤ %d challenges in act %d (got %d)" % [cfg.challenges_per_path_max, a, challenges], seed_value)
-			if a == 0:
-				_check(challenges == 0, "act-0 path collects zero challenges (post-boss-1 gate)", seed_value)
+			_check(challenges <= chal_max, "path collects ≤ %d lane-run challenges in act %d (got %d)" % [chal_max, a, challenges], seed_value)
 			act_max_challenges[a] = maxi(act_max_challenges.get(a, 0), challenges)
 		for a: int in per_act_len:
 			_check(per_act_len[a] >= trav_min and per_act_len[a] <= trav_max,
-				"act %d traversed length %d in [%d,%d] (~12)" % [a, per_act_len[a], trav_min, trav_max], seed_value)
-	# Every act ≥ 1 offers a challenge on at least one branch (challenges_per_path_min ≥ 1).
+				"act %d traversed length %d in [%d,%d]" % [a, per_act_len[a], trav_min, trav_max], seed_value)
+	# Every act ≥ 1 offers a lane-run challenge on at least one branch (challenges_per_path_min ≥ 1).
 	for a: int in range(1, g.acts):
-		_check(act_max_challenges.get(a, 0) >= 1, "act %d offers ≥1 challenge on at least one branch" % a, seed_value)
+		_check(act_max_challenges.get(a, 0) >= 1, "act %d offers ≥1 lane-run challenge on at least one branch" % a, seed_value)
+
+
+## Crossover invariants (round 2): every is_crossover node is sole at its depth, fed by BOTH
+## lane-ends and exits to BOTH next runs, with the lanes also continuing straight past it
+## (the stay edges); the per-act count sits in [crossovers_min, crossovers_max]; and the
+## feature is not inert — both crossing and staying paths exist.
+func _assert_crossover_invariants(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+	var cfg: MapGenConfig = _cfg_for(level)
+	var crossover_ids: Dictionary = {}
+	var crossovers_per_act: Dictionary = {}
+	for id: int in g.nodes:
+		var n: MapNode = g.get_node_by_id(id)
+		if not n.is_crossover:
+			continue
+		crossover_ids[n.id] = true
+		crossovers_per_act[n.act] = crossovers_per_act.get(n.act, 0) + 1
+		_check(_depth_population(g, n.depth) == 1, "crossover %d is sole at its depth (centred)" % n.id, seed_value)
+		_check(n.next_ids.size() == 2, "crossover %d exits to 2 nodes" % n.id, seed_value)
+		_check(n.prev_ids.size() == 2, "crossover %d fed by 2 nodes" % n.id, seed_value)
+		var in_lanes: Dictionary = {}
+		var out_lanes: Dictionary = {}
+		for pid: int in n.prev_ids:
+			in_lanes[g.get_node_by_id(pid).lane] = true
+		for nid: int in n.next_ids:
+			out_lanes[g.get_node_by_id(nid).lane] = true
+		_check(in_lanes.has(0) and in_lanes.has(1), "crossover %d fed by BOTH lanes" % n.id, seed_value)
+		_check(out_lanes.has(0) and out_lanes.has(1), "crossover %d exits to BOTH lanes" % n.id, seed_value)
+		# Stay edges: each feeder also continues straight into its own lane's next run.
+		for pid: int in n.prev_ids:
+			var p: MapNode = g.get_node_by_id(pid)
+			var stays: bool = false
+			for nnid: int in p.next_ids:
+				if nnid != n.id and g.get_node_by_id(nnid).lane == p.lane:
+					stays = true
+			_check(stays, "lane-end %d keeps a straight stay edge past crossover %d" % [pid, n.id], seed_value)
+	# Per-act count in [crossovers_min, crossovers_max] (clamp can't bite at default lane_len).
+	for a: int in range(g.acts):
+		var got: int = crossovers_per_act.get(a, 0)
+		_check(got >= cfg.crossovers_min and got <= cfg.crossovers_max,
+			"act %d crossover count %d in [%d,%d]" % [a, got, cfg.crossovers_min, cfg.crossovers_max], seed_value)
+	# Not-inert: with ≥1 crossover, the path set holds BOTH a crossing path and a stay path.
+	if cfg.crossovers_min >= 1:
+		var any_cross: bool = false
+		var any_stay: bool = false
+		for path: Array in _enumerate_paths(g):
+			var crossed: bool = false
+			for id: int in path:
+				if crossover_ids.has(id):
+					crossed = true
+			if crossed:
+				any_cross = true
+			else:
+				any_stay = true
+		_check(any_cross, "some path crosses lanes via an interchange", seed_value)
+		_check(any_stay, "some path stays in-lane the whole run", seed_value)
+
+
+## Mini-branch invariants (round 2): every detour forks off a lane node, runs on the correct
+## OUTER row, rejoins THE SAME lane within ONE stretch (a straight stay path of equal length
+## exists), and — when any branch is present — both a path that takes a branch and one that
+## skips every branch exist. Branches may not fit a given seed (clamped/skipped), so this
+## validates the ones found; cross-seed existence is asserted in _test_level.
+func _assert_branch_invariants(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+	var branch_count: int = 0
+	for id: int in g.nodes:
+		var n: MapNode = g.get_node_by_id(id)
+		if not n.is_branch:
+			continue
+		_check(n.prev_ids.size() == 1, "branch node %d has exactly one predecessor" % n.id, seed_value)
+		if n.prev_ids.size() != 1:
+			continue
+		var fork: MapNode = g.get_node_by_id(n.prev_ids[0])
+		if fork.is_branch:
+			continue   # interior chain node — validate the chain from its head only
+		branch_count += 1
+		var chain_lane: int = n.lane
+		# Walk to the tail of the chain.
+		var cur: MapNode = n
+		while cur.next_ids.size() == 1 and g.get_node_by_id(cur.next_ids[0]).is_branch:
+			cur = g.get_node_by_id(cur.next_ids[0])
+			_check(cur.lane == chain_lane, "branch chain stays on one outer row", seed_value)
+		_check(cur.next_ids.size() == 1, "branch tail %d has one successor (the rejoin)" % cur.id, seed_value)
+		var rejoin: MapNode = g.get_node_by_id(cur.next_ids[0])
+		_check(not rejoin.is_branch, "branch tail rejoins a non-branch lane node", seed_value)
+		_check(fork.lane == rejoin.lane, "branch forks and rejoins the SAME lane (%d→%d)" % [fork.lane, rejoin.lane], seed_value)
+		var expected_outer: int = -1 if fork.lane == 0 else 2
+		_check(chain_lane == expected_outer, "branch off lane %d uses outer row %d (got %d)" % [fork.lane, expected_outer, chain_lane], seed_value)
+		_check(_straight_lane_reaches(g, fork, rejoin), "branch %d→%d has a same-stretch straight stay path" % [fork.id, rejoin.id], seed_value)
+	# Optionality: if any branch exists, the path set holds both a detour-taking and a
+	# branch-free path (the straight stay path guarantees the latter).
+	if branch_count > 0:
+		var any_with: bool = false
+		var any_without: bool = false
+		for path: Array in _enumerate_paths(g):
+			var has_branch: bool = false
+			for id: int in path:
+				if g.get_node_by_id(id).is_branch:
+					has_branch = true
+			if has_branch:
+				any_with = true
+			else:
+				any_without = true
+		_check(any_with, "some path takes a mini-branch detour", seed_value)
+		_check(any_without, "some path skips every mini-branch (straight)", seed_value)
+
+
+## True if the straight main-lane chain from `fork` reaches `rejoin` without stepping onto a
+## branch or a crossover — confirms the detour stays inside one stretch (the stay edges exist).
+func _straight_lane_reaches(g: MapGraph, fork: MapNode, rejoin: MapNode) -> bool:
+	var walker: MapNode = fork
+	var guard: int = 0
+	while guard < 64:
+		if walker.id == rejoin.id:
+			return true
+		var nxt: int = -1
+		for nid: int in walker.next_ids:
+			var c: MapNode = g.get_node_by_id(nid)
+			if not c.is_branch and not c.is_crossover and c.lane == fork.lane:
+				nxt = nid
+				break
+		if nxt == -1:
+			return false
+		walker = g.get_node_by_id(nxt)
+		guard += 1
+	return false
+
+
+## The no-repeat leg rule: claiming every non-boss LEG along any single path yields
+## pairwise-distinct (target, turns) configs — never the act boss's reserved pair, always
+## inside the act window / turns band — UNTIL the act's leg combo capacity is exhausted, at
+## which point the documented fallback may repeat (round-2 act-0 paths can be long enough to
+## approach the 15-config space). Mirrors main.gd's arrival flow (record leg 1, claim arrivals).
+func _assert_no_repeat_claims(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+	var cfg: MapGenConfig = _cfg_for(level)
+	var paths: Array = _enumerate_paths(g)
+	# One representative path per seed keeps the cost linear (claims mutate the graph).
+	var path: Array = paths[seed_value % paths.size()]
+	g.record_played_config(101, 5)   # leg 1, as main.gd records it at run start
+	var seen: Dictionary = {"101|5": true}
+	var claims_in_act: Dictionary = {0: 1}   # leg 1 is an act-0 config
+	for id: int in path:
+		var n: MapNode = g.get_node_by_id(id)
+		# Specials don't play their rolled params (shop/event/challenge arrivals route
+		# elsewhere in main.gd), and the boss is its reserved pair's single owner.
+		if n.type != MapNode.Type.LEG:
+			continue
+		if n.id == g.start_id:
+			continue   # leg 1 is recorded above, not claimed
+		g.claim_unplayed_leg_params(n)
+		claims_in_act[n.act] = claims_in_act.get(n.act, 0) + 1
+		var key: String = "%d|%d" % [n.target_score, n.max_turns]
+		if seen.has(key):
+			# A repeat is legal ONLY once this act's leg combo space is exhausted.
+			_check(claims_in_act[n.act] > _act_leg_capacity(g, cfg, n.act),
+				"claimed leg %s repeats only when act %d combo space is exhausted (claim #%d, cap %d)" % [key, n.act, claims_in_act[n.act], _act_leg_capacity(g, cfg, n.act)], seed_value)
+		seen[key] = true
+		_check(n.max_turns >= cfg.turns_min and n.max_turns <= cfg.turns_max, "claimed turns in band", seed_value)
+		_check(n.target_score >= g.act_floor(n.act) and n.target_score <= g.act_ceiling(n.act), "claimed target in act window", seed_value)
+		_check(key != "%d|%d" % [g.act_ceiling(n.act), cfg.reference_turns],
+			"claimed leg never replays the act boss's reserved pair", seed_value)
 
 
 # ── Incremental generation (§3.6 / §8) ────────────────────────────────────────
@@ -260,7 +474,7 @@ func _test_incremental_gen() -> void:
 	var level: LevelDefinition = load("res://resources/levels/level_1501.tres")  # 3 acts
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = 4242
-	var g: MapGraph = MapGraph.generate(level, rng, 101, 100)
+	var g: MapGraph = MapGraph.generate(level, rng, 101, INCREMENT)
 	# generate() seeds ONLY act 0 — no act-1+ nodes, terminal unset.
 	var act0_only: bool = true
 	for id: int in g.nodes:
@@ -269,6 +483,17 @@ func _test_incremental_gen() -> void:
 	_check(act0_only, "generate() yields only act 0 nodes", -1)
 	_check(g.terminal_id == -1, "terminal_id unset before the final act is generated", -1)
 	var act0_count: int = g.nodes.size()
+
+	# Simulate the real boss-clear flow: the player steps onto the act-0 boss (current_id =
+	# boss) BEFORE the next act exists, so reachability is last computed when the boss has no
+	# successors. advance_to here mirrors _on_map_node_chosen picking the boss node in main.gd.
+	var act0_boss_id: int = -1
+	for id: int in g.nodes:
+		var bn: MapNode = g.get_node_by_id(id)
+		if bn.type == MapNode.Type.BOSS and bn.act == 0:
+			act0_boss_id = id
+	_check(act0_boss_id != -1, "act-0 boss exists to clear", -1)
+	g.advance_to(act0_boss_id)
 
 	# Append act 1 — chained (prev boss → new entry), terminal still unset (act 2 remains).
 	g.generate_next_act({"available_brush_colors": [], "highest_cleared": 501})
@@ -283,6 +508,22 @@ func _test_incremental_gen() -> void:
 				if g.get_node_by_id(pid).type == MapNode.Type.BOSS and g.get_node_by_id(pid).act == 0:
 					entry_chained = true
 	_check(entry_chained, "act-1 entry chains off the act-0 boss", -1)
+
+	# Regression (act-boundary "first leg does nothing" bug): generate_next_act must refresh
+	# reachability so the freshly-chained act-1 entry is pickable immediately, while the
+	# cleared act-0 boss is still current. Without the refresh the entry's reachable flag
+	# stays false (computed when the boss had no successors) and the map click is rejected
+	# even though its button is enabled.
+	_check(g.current_id == act0_boss_id, "current is still the cleared act-0 boss", -1)
+	var act1_entry_found: bool = false
+	var act1_entry_reachable: bool = false
+	for id: int in g.reachable_from(act0_boss_id):
+		var en: MapNode = g.get_node_by_id(id)
+		if en.act == 1:
+			act1_entry_found = true
+			act1_entry_reachable = en.reachable
+	_check(act1_entry_found, "cleared act-0 boss now has an act-1 successor (the new entry)", -1)
+	_check(act1_entry_reachable, "act-1 entry's reachable flag is true after generate_next_act", -1)
 
 	# Append the final act — terminal_id now set to the act-2 boss.
 	g.generate_next_act({"available_brush_colors": [], "highest_cleared": 1001})

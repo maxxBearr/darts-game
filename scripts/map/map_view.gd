@@ -119,7 +119,7 @@ func _is_displayed(n: MapNode) -> bool:
 func _layout() -> void:
 	var min_depth: int = 1 << 30
 	var max_depth: int = 0
-	var max_row: int = 0
+	var lanes_present: Dictionary = {}   ## distinct lane values among displayed nodes
 	var per_depth_count: Dictionary = {}
 	for id: int in graph.nodes:
 		var n: MapNode = graph.nodes[id]
@@ -127,16 +127,26 @@ func _layout() -> void:
 			continue
 		min_depth = mini(min_depth, n.depth)
 		max_depth = maxi(max_depth, n.depth)
-		max_row = maxi(max_row, n.lane)
+		lanes_present[n.lane] = true
 		per_depth_count[n.depth] = per_depth_count.get(n.depth, 0) + 1
 	if min_depth > max_depth:
 		min_depth = 0   # nothing displayed (defensive)
+
+	# Map distinct lane values to contiguous row indices in lane order (round 2). Mini-branch
+	# lanes (−1 above lane 0, 2 below lane 1) sort outside the two main lanes, so a branch row
+	# sits lane_spacing beyond its parent lane. With only lanes {0,1} this reproduces the old
+	# two-row layout exactly. Sole-at-depth nodes (funnels / crossovers) stay centred.
+	var sorted_lanes: Array = lanes_present.keys()
+	sorted_lanes.sort()
+	var lane_to_row: Dictionary = {}
+	for idx: int in range(sorted_lanes.size()):
+		lane_to_row[sorted_lanes[idx]] = idx
+	var rows: int = maxi(sorted_lanes.size(), 1)
 
 	var span: int = maxi(max_depth - min_depth, 1)
 	var avail_w: float = size.x - margin.x * 2.0
 	var col_spacing: float = avail_w / float(span)
 	var center_y: float = size.y / 2.0 + 30.0
-	var rows: int = max_row + 1
 
 	for id: int in graph.nodes:
 		var n: MapNode = graph.nodes[id]
@@ -147,7 +157,8 @@ func _layout() -> void:
 		if per_depth_count[n.depth] == 1:
 			y = center_y
 		else:
-			y = center_y + (float(n.lane) - float(rows - 1) / 2.0) * lane_spacing
+			var row: int = lane_to_row[n.lane]
+			y = center_y + (float(row) - float(rows - 1) / 2.0) * lane_spacing
 		_positions[id] = Vector2(x, y)
 
 
@@ -171,7 +182,11 @@ func _build_widgets() -> void:
 
 func _on_node_pressed(id: int) -> void:
 	var n: MapNode = graph.get_node_by_id(id)
-	if n == null or not n.reachable:
+	# Gate on the LIVE forward edges from the current node, the same query that decided the
+	# button's enabled state in _refresh_reachability — never the cached per-node `reachable`
+	# flag. The two could diverge at an act boundary (a freshly-generated act's entry carried
+	# a stale reachable=false), making the button clickable but the click inert.
+	if n == null or not graph.reachable_from(graph.current_id).has(id):
 		return
 	node_chosen.emit(n)
 

@@ -11,6 +11,7 @@ extends Node
 @onready var menu_music: AudioStreamPlayer = $MenuMusic
 @onready var game_music: AudioStreamPlayer = $GameMusic
 @onready var move_darts_to_saved: AudioStreamPlayer = $MoveDartsToSaved
+@onready var text_print: AudioStreamPlayer = $TextPrint
 
 const BONUS_BASE_PITCH: float = 0.9
 const BONUS_PITCH_STEP: float = 0.15
@@ -104,6 +105,17 @@ func play_move_darts_to_saved() -> void:
 
 func reset_move_darts_pitch() -> void:
 	_move_darts_pitch_accumulator = 0.0
+
+
+## Typewriter blip: played once per character revealed during a leg-intro text print. The
+## pitch is rolled fresh on EACH call (within pitch_min..pitch_max) so every character gets
+## its own pitch. The node is monophonic on purpose — pitch_scale is one live property
+## shared by all voices, so overlapping blips (max_polyphony > 1) would all snap to the last
+## pitch and read as a single gliding tone per label; restarting one voice keeps them distinct.
+func play_text_print(pitch_min: float = 0.94, pitch_max: float = 1.12, volume_db: float = 0.0) -> void:
+	text_print.pitch_scale = randf_range(pitch_min, pitch_max)
+	text_print.volume_db = volume_db
+	text_print.play()
 
 
 func transition_to_game_music() -> void:

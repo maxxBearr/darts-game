@@ -35,6 +35,19 @@ var reachable: bool = false       ## true when legally pickable from the current
 ## Marks the geometry; a post-boss-1 fork is upgraded to Type.CHALLENGE at generation.
 var is_off_branch: bool = false
 
+## True on a CROSSOVER interchange node (round-2 topology): the sole-at-depth node that
+## sits between two lane stretches, fed by both lane-ends and exiting to both next runs.
+## A crossover is "off-budget" for the per-path special caps and may itself be typed
+## (shop/event/challenge) — its built-in skip is the straight lane edges that pass it, so
+## a special on a crossover is still dodgeable. See map_graph._type_crossovers.
+var is_crossover: bool = false
+
+## True on a MINI-BRANCH node (round-2 topology): a short detour that forks off one lane,
+## runs on an outer render row, and rejoins THE SAME lane (equal node count to the straight
+## run it parallels). Off-budget for the per-path special caps (chosen friction, additive
+## spice). Branch nodes default LEG; one may host a single special. See map_graph._slot_branches.
+var is_branch: bool = false
+
 ## Set on Type.CHALLENGE nodes only (Phase 02): the wager/race tuning for this node.
 ## Its target_score + deposit band are computed at arrival from the live highest_cleared
 ## (they depend on runtime progress), not at generation. Null on every other node type.

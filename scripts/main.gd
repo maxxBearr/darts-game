@@ -204,7 +204,9 @@ var _base_accuracy_skew_v: float = 0.0
 # The 3 generated upgrade choices for the current leg-complete screen
 var _current_upgrades: Array[Dictionary] = []
 
-## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker", "segment_picker", "boss_reward_pick"
+## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker", "segment_picker",
+## "boss_reward_pick". Also "leg_intro" while the leg-intro presentation plays (gates the
+## checkout-path cycling input; no throw exists yet, so aiming is impossible by construction).
 var _leg_phase: String = ""
 
 ## Cached checkout paths for illumination (from last solver run).
@@ -1253,6 +1255,10 @@ func _on_map_node_chosen(node: MapNode) -> void:
 ## replaces advance_leg()'s self-increment — the node owns (target, dart budget),
 ## and a BOSS node rolls a concrete boss from the level pool on arrival.
 func _slide_to_leg_node(node: MapNode) -> void:
+	# No-repeat rule (tuning pass 2026-06-06): a run never plays the exact same
+	# (target, turns) leg twice. Claimed at arrival — params aren't shown on the map
+	# ("type on map, params on arrival"), so a nearest-config adjustment is invisible.
+	_map_graph.claim_unplayed_leg_params(node)
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var center: Vector2 = viewport_size / 2.0
 	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
@@ -1269,6 +1275,9 @@ func _slide_to_leg_node(node: MapNode) -> void:
 			scoring_modifier_manager.get_active_streak_modifiers(),
 			scoring_modifier_manager.effective_wedge_values
 		)
+		# Leg intro: hide the freshly-written info-column readouts + empty the fronted
+		# rail while the board is off-screen, so the intro (after slide-in) reveals them.
+		hud.conceal_for_leg_intro()
 		if node.type == MapNode.Type.BOSS:
 			var game_state: Dictionary = _build_game_state()
 			boss_manager.start_boss_leg(game_state)
@@ -1281,6 +1290,15 @@ func _slide_to_leg_node(node: MapNode) -> void:
 	tween.tween_callback(func() -> void:
 		_update_checkout_highlights()
 		_update_checkout_helper()
+		# Leg-intro presentation: the readouts fly to their slots and the fronted rail
+		# trickle-fills before any aiming exists. The "leg_intro" phase gates stray
+		# input (checkout-path cycling); _start_new_throw only runs once it finishes,
+		# so the player can't aim or throw mid-intro. Boss setup already ran during the
+		# slide-out; the announcement still plays after the intro, before the throw.
+		_leg_phase = "leg_intro"
+		hud.play_leg_intro(x01_game.current_leg, x01_game.target_score, x01_game.max_turns, x01_game.darts_per_turn)
+		await hud.leg_intro_finished
+		_leg_phase = ""
 		if boss_manager.is_boss_active():
 			var boss_def: BossDefinition = boss_manager.get_active_boss_definition()
 			var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
@@ -2453,6 +2471,9 @@ func _on_run_confirmed() -> void:
 	run_rng.randomize()
 	_map_graph = MapGraph.generate(_current_level, run_rng, x01_game.starting_target, x01_game.target_increment)
 	_map_graph.advance_to(_map_graph.start_id)
+	# Leg 1 starts off x01_game.start_run() (not a map arrival), so record its config
+	# directly — the no-repeat rule must count it or a later leg could replay 101.
+	_map_graph.record_played_config(x01_game.target_score, x01_game.max_turns)
 
 	# Challenge-node state: anchor starts at leg-1's target (the lowest score in play) and
 	# climbs with every banked win; the roll RNG is run-scoped so each node anchors fresh.
@@ -2470,6 +2491,16 @@ func _on_run_confirmed() -> void:
 
 	_update_all_hud()
 	_update_checkout_highlights()
+
+	# Leg-intro presentation for the run's FIRST leg — it starts here off start_run(),
+	# not via a map arrival, so it needs its own conceal + intro pass (the same sequence
+	# _slide_to_leg_node plays for every later leg). Conceal AFTER _update_all_hud so the
+	# already-written labels are hidden, then revealed one by one as the flyers land.
+	hud.conceal_for_leg_intro()
+	_leg_phase = "leg_intro"
+	hud.play_leg_intro(x01_game.current_leg, x01_game.target_score, x01_game.max_turns, x01_game.darts_per_turn)
+	await hud.leg_intro_finished
+	_leg_phase = ""
 
 	# Start boss if the initial leg is a boss leg (debug skip or future multi-boss levels)
 	if boss_manager.is_boss_leg(x01_game.current_leg):
@@ -2836,9 +2867,13 @@ func _recache_stats() -> void:
 func _update_checkout_highlights() -> void:
 	if _in_shop:
 		return
-	# Under Prism the board recolors reactively, so color/value can't be trusted —
-	# suppress the checkout hints entirely (the uncertainty is the boss).
-	if boss_manager.get_active_boss() is PrismBoss:
+	# Under Prism the board recolors reactively. That only invalidates the checkout hints
+	# when the player runs a COLOR-dependent build (a color bonus / color streak) — then the
+	# value of a segment genuinely shifts as the board mutates, so suppress the hints (the
+	# uncertainty is the boss). With no color build, Prism only changes appearance, never the
+	# values the solver computes, so the hints stay correct and live. (Dial note: if Prism
+	# should ever feel foggier regardless of build, widen this back to an unconditional gate.)
+	if boss_manager.get_active_boss() is PrismBoss and scoring_modifier_manager.has_color_dependent_scoring():
 		dartboard.set_checkout_segments([] as Array[Dictionary])
 		hud.set_remaining_checkout_available(false)
 		return
@@ -2866,9 +2901,13 @@ func _update_checkout_helper() -> void:
 		dartboard.clear_illumination()
 		return
 
-	# Under Prism the board recolors reactively — the checkout helper goes dark
-	# because color/value can no longer be trusted.
-	if boss_manager.get_active_boss() is PrismBoss:
+	# Under Prism the board recolors reactively — but that only makes the checkout helper
+	# untrustworthy when a COLOR-dependent build (color bonus / color streak) is active, since
+	# only then does a segment's score change as the board mutates. The helper goes dark in
+	# that case; with no color build it stays live (Prism changes appearance, not the solver's
+	# values). See ScoringModifierManager.has_color_dependent_scoring. (Dial note: revert to an
+	# unconditional Prism gate if you ever want Prism to feel foggier across all builds.)
+	if boss_manager.get_active_boss() is PrismBoss and scoring_modifier_manager.has_color_dependent_scoring():
 		hud.hide_checkout_helper()
 		dartboard.clear_illumination()
 		return

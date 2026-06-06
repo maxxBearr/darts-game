@@ -13,8 +13,9 @@ var _checks: int = 0
 
 
 func _init() -> void:
-	# 501 = 1 act (no post-boss-1 space → no challenges, asserted in _test_placement).
-	# 1001 / 1501 have act ≥ 1 forks that become challenges.
+	# Round 2: challenges may sit in ANY act (the post-boss-1 gate was dropped). 501 (1 act)
+	# now hosts act-0 challenges too, just not within the first challenge_act0_min_depth
+	# columns; all three levels generate challenges.
 	var levels: Array[String] = [
 		"res://resources/levels/level_501.tres",
 		"res://resources/levels/level_1001.tres",
@@ -44,8 +45,13 @@ func _generate_full(level: LevelDefinition, seed_value: int) -> MapGraph:
 	return g
 
 
+func _cfg_for(level: LevelDefinition) -> MapGenConfig:
+	return level.map_gen_config if level.map_gen_config != null else MapGenConfig.new()
+
+
 func _test_level(level: LevelDefinition) -> void:
 	print("— Level %s (max %d, %d acts/bosses)" % [level.display_name, level.max_score_target, level.boss_count])
+	var cfg: MapGenConfig = _cfg_for(level)
 	var total_challenges: int = 0
 	var band_samples: Array[String] = []
 	for seed_value: int in range(SEEDS_PER_LEVEL):
@@ -55,7 +61,7 @@ func _test_level(level: LevelDefinition) -> void:
 			if n.type != MapNode.Type.CHALLENGE:
 				continue
 			total_challenges += 1
-			_test_placement(g, n, seed_value)
+			_test_placement(g, n, cfg, seed_value)
 			# Compute params at a spread of plausible post-boss-1 highest_cleared values.
 			for hc: int in _highest_cleared_samples(g, n):
 				var prng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -71,10 +77,8 @@ func _test_level(level: LevelDefinition) -> void:
 	print("   challenge nodes seen across %d seeds: %d" % [SEEDS_PER_LEVEL, total_challenges])
 	for s: String in band_samples:
 		print("     %s" % s)
-	if level.boss_count == 1:
-		_check(total_challenges == 0, "501 (1-act) generates NO challenge nodes (post-boss-1 only)", -1)
-	else:
-		_check(total_challenges > 0, "multi-act level generates at least some challenge nodes", -1)
+	# Round 2: every level (including 501) generates challenges now (act 0 included).
+	_check(total_challenges > 0, "level generates at least some challenge nodes", -1)
 
 
 ## REALISTIC highest_cleared values for a node in act `a` at depth `d`. To stand on this
@@ -85,10 +89,13 @@ func _test_level(level: LevelDefinition) -> void:
 ## case that can't occur in play, so we don't sample it. See §4's depth↔anchor coupling.
 func _highest_cleared_samples(g: MapGraph, n: MapNode) -> Array[int]:
 	var samples: Array[int] = []
-	var prev_boss: int = g.act_ceiling(n.act - 1)     # cleared to enter this act (≥ 501)
+	var prev_boss: int = g.act_ceiling(n.act - 1)     # cleared to enter this act (act_ceiling(-1)=101 for act 0)
 	var local: int = maxi(g.baseline_target(n.depth), prev_boss)
 	samples.append(prev_boss)
-	var mid: int = prev_boss + (local - prev_boss) / 2
+	# A real highest_cleared is always a cleared TARGET (101 + n·100), so keep the midpoint
+	# sample ON the leg lattice — an off-lattice value (e.g. 251) never occurs in play and
+	# would only exercise compute_challenge_params' clamp against an impossible input.
+	var mid: int = 101 + int(round(float(prev_boss + (local - prev_boss) / 2 - 101) / 100.0)) * 100
 	if mid > prev_boss:
 		samples.append(mid)
 	if local > mid:
@@ -103,20 +110,30 @@ func _reliable(g: MapGraph, n: MapNode) -> int:
 
 # ── §13 placement ────────────────────────────────────────────────────────────
 
-func _test_placement(g: MapGraph, n: MapNode, seed_value: int) -> void:
-	_check(n.act >= 1, "challenge is post-boss-1 (act >= 1)", seed_value)
+func _test_placement(g: MapGraph, n: MapNode, cfg: MapGenConfig, seed_value: int) -> void:
 	_check(n.challenge != null, "challenge node carries a ChallengeNode resource", seed_value)
-	# Slice 3: a challenge sits INLINE in a branch run, so the Skip path (§12) is the
-	# parallel run — a sibling node at the SAME depth in the other lane, bounded by the
-	# same two chokepoints. A chokepoint is the sole node at its depth, so "another node
-	# exists at this depth" both confirms the parallel run AND that this isn't a chokepoint.
-	var parallel_found: bool = false
+	# Round 2: the post-boss-1 hard gate is gone — challenges may sit in any act. An act-0
+	# challenge must instead be ≥ challenge_act0_min_depth columns past the act-0 entry (the
+	# highest_cleared anchor needs a few cleared legs to mean anything); later acts have no
+	# depth gate.
+	if n.act == 0:
+		var entry_depth: int = 1 << 30
+		for id: int in g.nodes:
+			var o: MapNode = g.get_node_by_id(id)
+			if o.act == 0:
+				entry_depth = mini(entry_depth, o.depth)
+		_check(n.depth - entry_depth >= cfg.challenge_act0_min_depth,
+			"act-0 challenge respects depth gate (depth %d, entry %d, gate %d)" % [n.depth, entry_depth, cfg.challenge_act0_min_depth], seed_value)
+	# The Skip path (§12) is the parallel run — a sibling node at the SAME depth in the other
+	# lane — OR, for a typed-crossover challenge, the straight lane edges that pass it (a
+	# crossover's built-in skip, round 2). Either way the player can route around the wager.
+	var parallel_found: bool = n.is_crossover
 	for id: int in g.nodes:
 		var o: MapNode = g.get_node_by_id(id)
 		if o.id != n.id and o.depth == n.depth:
 			parallel_found = true
 			break
-	_check(parallel_found, "challenge has a live parallel run at its depth (skip available)", seed_value)
+	_check(parallel_found, "challenge has a skip (parallel run or crossover)", seed_value)
 
 
 # ── §3 anchor ─────────────────────────────────────────────────────────────────

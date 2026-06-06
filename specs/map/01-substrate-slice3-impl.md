@@ -5,6 +5,8 @@ Status: BUILT (Claude Code, 2026-06-06) — slice 3 of Phase 01: a topology revi
   state-aware special slotting, the raised/rewritten _validate, the per-act MapView render, and the main.gd
   generate_next_act seam all shipped; headless tests green (tests/test_map_graph.gd: 107847 checks; the challenge
   suite re-homed onto the branch model: 173848 checks). Built BEFORE the events spec (`03-events-impl.md`).
+  Live-playtested 2026-06-06 (commit `529c1e4`): working; full tuning pass over Max's notes queued as its own
+  session (expected dials: branch_contrast, *_per_path_* counts, segment/act pacing).
 Part of: the Map Program (`specs/map/00-overview.md`), Phase 01 (substrate). Revises slices 1 + 2.
 Depends on: slice 1 (`01-substrate-impl.md`, graph/view/seam) + slice 2 (`01-substrate-slice2-impl.md`, the
   pressure-ratio generator). Both shipped. This changes *topology* only; the slice-2 pressure seam

@@ -22,6 +22,10 @@ extends Control
 ## Shop mode is preserved: set_shop_darts()/restore_normal_darts() swap to a simple
 ## vertical "darts left to throw" stack, exactly as before.
 
+## Fired when the leg-intro fill finishes revealing every fronted row (either
+## naturally or via skip_intro_fill). hud.gd awaits this as the rail's intro step.
+signal intro_fill_finished
+
 enum DartState { AVAILABLE, ACTIVE, SPENT, BUSTED }
 
 const POINT_TEX: Texture2D = preload("res://sprites/point.png")
@@ -55,6 +59,18 @@ const POINT_TEX: Texture2D = preload("res://sprites/point.png")
 ## Colour of the set-completion slash.
 @export var slash_color: Color = Color(0.85, 0.85, 0.85, 0.8)
 
+@export_group("Fronted Label")
+## Header text drawn above the fronted rows (the leg's granted darts). Permanent — drawn
+## whenever the leg rail is (shop mode swaps to the simple stack, which omits it).
+@export var fronted_label_text: String = "FRONTED DARTS"
+## Font size of the fronted-darts header. Scales down with the rest of the rail when a
+## big bank forces the height-fit shrink.
+@export var fronted_label_font_size: int = 12
+## Colour of the fronted-darts header (defaults to the SAVED DARTS label's soft white).
+@export var fronted_label_color: Color = Color(1.0, 1.0, 1.0, 0.6)
+## Vertical gap (px) between the header's text block and the first fronted row.
+@export var fronted_label_gap: float = 4.0
+
 @export_group("Cache (Saved Darts)")
 @export var color_cache: Color = Color(0.45, 0.78, 1.0, 0.95)
 ## Completed cluster of three = a bonus turn; lit gold.
@@ -74,6 +90,10 @@ const POINT_TEX: Texture2D = preload("res://sprites/point.png")
 @export_group("Animation")
 @export var slash_duration: float = 0.28
 @export var trickle_duration: float = 0.6
+## Seconds per revealed row during the leg-intro fill (the reverse of the leg-win
+## trickle: rows appear top-to-bottom, one move-darts tick each). Total fill time =
+## turns × this, so it scales with the leg's turn budget. Lower = snappier trickle.
+@export var intro_fill_row_interval: float = 0.15
 
 # --- Leg state ---
 ## Darts per turn (a set's size). Named _max_darts for the existing hud read path.
@@ -108,6 +128,13 @@ var _trickle_base_bank: int = 0
 var _trickle_tween: Tween = null
 ## How many move-to-saved ticks have played this trickle (one per dart crossing).
 var _trickle_sound_count: int = 0
+
+# --- Leg-intro fill ---
+## Rows revealed so far by the leg-intro fill; -1 = inactive (draw every row normally).
+## conceal_for_intro() sets it to 0 (empty rail) and play_intro_fill() trickles it up.
+var _intro_rows_shown: int = -1
+## The active intro-fill tween, kept so a skip or a leg reset can cancel it mid-trickle.
+var _intro_fill_tween: Tween = null
 
 # --- Mode / shop ---
 var _mode: String = "leg"  # "leg" or "shop"
@@ -156,6 +183,9 @@ func set_turn(current_turn: int, max_turns: int) -> void:
 		_trickle_cells = []
 		_trickle_moved = 0.0
 		_displayed_bank = float(_banked_darts)
+		# Also drop any stale intro-fill state so the fresh rail draws complete.
+		_cancel_intro_fill_tween()
+		_intro_rows_shown = -1
 	elif current_turn > prev_turn:
 		# The turn we just left is fully spent — slash it (unless it busted; a bust
 		# already reads as red and shouldn't also be "completed").
@@ -232,6 +262,70 @@ func _bankable_front_cells() -> Array:
 				continue  # already thrown this turn — stays as a spent dart
 			cells.append({"t": t, "d": d})
 	return cells
+
+
+## Leg-intro: hide every fronted row so play_intro_fill() can reveal them one by one.
+## Call while the board is off-screen — the rail redraws empty immediately.
+func conceal_for_intro() -> void:
+	_cancel_intro_fill_tween()
+	_intro_rows_shown = 0
+	queue_redraw()
+
+
+## Leg-intro fill: reveal the fronted rows top-to-bottom, one move-darts tick per row —
+## the leg-win trickle in reverse (darts arriving up top instead of draining down). Total
+## time = turns × intro_fill_row_interval, so it scales with the leg's budget. Emits
+## intro_fill_finished when every row is visible (immediately if the rail is hidden).
+## Safe without a prior conceal_for_intro() — it starts from zero rows regardless.
+func play_intro_fill() -> void:
+	_cancel_intro_fill_tween()
+	# Hidden rail (shop flows, hidden HUD): skip the animation and finish at once.
+	if not is_visible_in_tree() or _max_turns <= 0:
+		_intro_rows_shown = -1
+		queue_redraw()
+		intro_fill_finished.emit()
+		return
+	_intro_rows_shown = 0
+	queue_redraw()
+	# Same sound contract as the leg-win trickle: pitch resets, then climbs per tick.
+	AuidoManager.reset_move_darts_pitch()
+	_intro_fill_tween = create_tween()
+	for i: int in range(_max_turns):
+		_intro_fill_tween.tween_callback(_reveal_intro_row)
+		_intro_fill_tween.tween_interval(intro_fill_row_interval)
+	_intro_fill_tween.tween_callback(func() -> void:
+		_intro_rows_shown = -1
+		queue_redraw()
+		intro_fill_finished.emit())
+
+
+## True while the leg-intro fill is mid-trickle (rows still hidden up top).
+func is_intro_fill_active() -> bool:
+	return _intro_rows_shown >= 0
+
+
+## Fast-forward the leg-intro fill: show every row at once and finish. Used by the HUD's
+## per-step click-skip. No-op when no fill is active.
+func skip_intro_fill() -> void:
+	if _intro_rows_shown < 0:
+		return
+	_cancel_intro_fill_tween()
+	_intro_rows_shown = -1
+	queue_redraw()
+	intro_fill_finished.emit()
+
+
+## Reveal the next fronted row during the intro fill (one chaining tick sound per row).
+func _reveal_intro_row() -> void:
+	_intro_rows_shown = mini(_intro_rows_shown + 1, _max_turns)
+	AuidoManager.play_move_darts_to_saved()
+	queue_redraw()
+
+
+func _cancel_intro_fill_tween() -> void:
+	if _intro_fill_tween != null and _intro_fill_tween.is_valid():
+		_intro_fill_tween.kill()
+	_intro_fill_tween = null
 
 
 ## Bailout beat: a cluster leaves the cache to fund a new turn. Grows the rail by the
@@ -418,14 +512,18 @@ func _draw_rail() -> void:
 	var tmarg: float = rail_top_margin
 	var dgap: float = dart_gap
 	var fsize: float = maxf(float(get_theme_default_font_size()), 12.0)
+	# Fronted-darts header sizing (drawn above the first set; see _draw_rail's header).
+	var flsize: float = maxf(float(fronted_label_font_size), 8.0)
+	var flgap: float = fronted_label_gap
 
-	# Then height-fit: shrink the WHOLE rail uniformly if the sets plus every cache
-	# cluster would overflow the control, so all saved darts stay visible (no "+N").
+	# Then height-fit: shrink the WHOLE rail uniformly if the header plus the sets plus
+	# every cache cluster would overflow the control, so all saved darts stay visible (no "+N").
 	var bank: int = int(round(_displayed_bank))
 	var cache_rows: int = int(ceil(float(bank) / 3.0)) if bank > 0 else 0
 	var label_block: float = fsize * 1.4 if bank > 0 else 0.0
 	var div_block: float = cgap if bank > 0 else 0.0
-	var content_h: float = tmarg + (_max_turns + cache_rows) * (ih + sgap) + div_block + label_block
+	var front_block: float = flsize * 1.2 + flgap
+	var content_h: float = tmarg + front_block + (_max_turns + cache_rows) * (ih + sgap) + div_block + label_block
 	if content_h > size.y and content_h > 0.0:
 		var sc: float = size.y / content_h
 		iw *= sc
@@ -435,8 +533,19 @@ func _draw_rail() -> void:
 		tmarg *= sc
 		dgap *= sc
 		fsize *= sc
+		flsize *= sc
+		flgap *= sc
+		front_block = flsize * 1.2 + flgap
 
 	var row_h: float = ih + sgap
+
+	# Permanent "FRONTED DARTS" header above the rail (the SAVED DARTS label's sibling) —
+	# names the leg's granted dart budget whenever the leg rail is visible.
+	draw_string(get_theme_default_font(), Vector2(0.0, tmarg + flsize), fronted_label_text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(int(flsize), 8), fronted_label_color)
+
+	# Sets start below the header block.
+	var rows_y0: float = tmarg + front_block
 
 	# Cells banked by the leg-win trickle stay hidden up top (during the animation only
 	# the first floor(_trickle_moved) are gone; after it finishes all of them are, until
@@ -452,7 +561,10 @@ func _draw_rail() -> void:
 	# high on the screen and the cache can stack beneath it.
 	for t: int in range(_max_turns):
 		var turn_number: int = t + 1
-		var y: float = tmarg + t * row_h
+		# Leg-intro fill: rows past the reveal front stay hidden until their tick lands.
+		if _intro_rows_shown >= 0 and t >= _intro_rows_shown:
+			continue
+		var y: float = rows_y0 + t * row_h
 
 		# Bounding box of the turn's still-in-hand darts, so the active set gets a
 		# SINGLE white outline rather than one box per dart (which doubled up the line
@@ -489,7 +601,7 @@ func _draw_rail() -> void:
 			var cur_end: Vector2 = start.lerp(Vector2(set_w, sy - ih * 0.4), p)
 			draw_line(start, cur_end, slash_color, maxf(ih * 0.14, 2.0), true)
 
-	var cache_y0: float = tmarg + _max_turns * row_h + cgap
+	var cache_y0: float = rows_y0 + _max_turns * row_h + cgap
 	_draw_cache(iw, ih, row_h, dgap, cgap, fsize, cache_y0)
 
 

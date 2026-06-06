@@ -5,30 +5,71 @@ extends Resource
 ## See specs/map/01-substrate-slice3-impl.md §4 — each spacing/mix/budget number is
 ## meant to be an inspector-tunable export, not a hard-coded constant.
 ##
-## Slice 3 topology: an act is entry chokepoint → branch segments (two parallel
-## L-node runs that reconverge at a chokepoint) → pre-boss chokepoint → boss. The
-## slice-1 mid-column/fork knobs are retired; the per-*act* shop framing becomes a
-## per-*traversal* budget shared by shops / events / challenges.
+## Topology (tuning pass 2026-06-06, "sideways H"): an act is entry chokepoint →
+## two continuous parallel lanes in branch segments, with a CROSSOVER interchange
+## node between consecutive segments (lanes run straight through; stepping onto the
+## crossover lets you switch lanes — or double back) → pre-boss chokepoint → boss.
+## Only the pre-boss merge remains; mid-act reconvergence chokepoints are retired.
+## The slice-1 mid-column/fork knobs are retired; the per-*act* shop framing becomes
+## a per-*traversal* budget shared by shops / events / challenges.
 
 ## Roughly-parallel routes per branch segment. Lean 2 (a segment is two runs); a
 ## 3-way branch is a deferred experiment (slice 3 §7).
 @export var lane_count: int = 2
 
-# ── Slice 3: segment topology ────────────────────────────────────────────────
+# ── Round 2: lane length + crossovers (decoupled, 2026-06-06) ─────────────────
+# The act is two parallel lanes of a rolled TOTAL length, cut into stretches by a
+# rolled number of CROSSOVER interchanges (count decoupled from stretch length, so
+# the traversed length stays ~constant regardless of how many lane-switch points an
+# act rolls). Retires the slice-3 branch_segments_* / branch_len_* pair.
 
-## How many branch segments per act (each segment = two parallel L-node runs). Two
-## ~4-node segments + chokepoints + boss ≈ the ~12-node traversed-path target (§2).
-@export var branch_segments_min: int = 2
+## How many CROSSOVER interchanges an act rolls (one between each pair of stretches, so
+## stretches = crossovers + 1). Decoupled from lane length (below) — more crossovers means
+## more, shorter stretches, not a longer act. Clamped so each stretch keeps ≥2 nodes
+## (crossovers ≤ lane_len/2 − 1). Each crossover may itself be typed (crossover_weight_*).
+@export var crossovers_min: int = 1
 
-## Maximum branch segments per act. Held at the min by default (a fixed 2-segment act);
-## raise the max to let an act roll a longer spine.
-@export var branch_segments_max: int = 2
+## Maximum crossovers per act.
+@export var crossovers_max: int = 3
 
-## Fewest nodes in each parallel run of a branch segment (both runs share the rolled L).
-@export var branch_len_min: int = 3
+## Fewest nodes in ONE lane across the whole act (both lanes share this total; it is cut
+## into crossovers+1 stretches of ≥2 each). Traversed path length per act ≈ lane_len + 3
+## (entry + pre-boss + boss) + crossovers actually taken.
+@export var lane_len_min: int = 9
 
-## Most nodes in each parallel run of a branch segment.
-@export var branch_len_max: int = 5
+## Most nodes in one lane across the whole act.
+@export var lane_len_max: int = 12
+
+## Relative weights for a crossover's rolled TYPE (normalized internally). A crossover is
+## off-budget, so these add spice on top of the lane-run special budget. Challenge respects
+## the act-0 depth gate and the ≤1 detour-challenge-per-act cap; event family is state-gated.
+@export var crossover_weight_leg: float = 0.5
+@export var crossover_weight_shop: float = 0.2
+@export var crossover_weight_event: float = 0.2
+@export var crossover_weight_challenge: float = 0.1
+
+# ── Round 2: mini-branches (2026-06-06) ──────────────────────────────────────
+# Short detours that fork off a lane, run on an outer render row, and rejoin THE SAME
+# lane with an equal node count — a stay-vs-detour choice. Off-budget (chosen friction).
+
+## How many mini-branches an act rolls. Capped at one per lane (2 lanes ⇒ effective max 2);
+## with 2, one detours off each lane (top lane's branch above, bottom's below).
+@export var branches_min: int = 1
+
+## Maximum mini-branches per act.
+@export var branches_max: int = 2
+
+## Fewest nodes in a mini-branch detour. A branch of B nodes needs a stretch of ≥ B+2 nodes
+## to fit (fork + B detour + rejoin); B is clamped to the host stretch, branch skipped if
+## nothing fits.
+@export var branch_node_min: int = 2
+
+## Most nodes in a mini-branch detour.
+@export var branch_node_max: int = 4
+
+## Chance a placed mini-branch hosts exactly ONE special (rolled from the crossover type
+## weights, leg excluded). 0 = branches are always plain legs; 1 = always one special.
+@export_range(0.0, 1.0) var branch_special_chance: float = 0.6
 
 # ── Slice 3: per-traversal special budgets ───────────────────────────────────
 # A budget for ONE full path through the act (the player only walks one branch per
@@ -47,12 +88,25 @@ extends Resource
 ## Hard maximum events a single traversal collects.
 @export var events_per_path_max: int = 3
 
-## Soft minimum challenges a single traversal collects. Acts >= 1 only (post-boss-1
-## gate, slice 3 §1.5 / 02 §1.1) — act 0 places no challenges regardless.
+## Soft minimum challenges a single traversal collects, for acts ≥ 1. Act 0 uses its own
+## (leaner) band below — the post-boss-1 hard gate was removed in round 2 (challenges may
+## now appear in act 0, just not too early; see challenge_act0_min_depth).
 @export var challenges_per_path_min: int = 1
 
-## Hard maximum challenges a single traversal collects.
+## Hard maximum challenges a single traversal collects (acts ≥ 1).
 @export var challenges_per_path_max: int = 3
+
+## Soft minimum challenges an act-0 traversal collects (leaner than later acts: the
+## highest_cleared anchor is still small early, so wagers stay modest).
+@export var challenges_act0_per_path_min: int = 1
+
+## Hard maximum challenges an act-0 traversal collects.
+@export var challenges_act0_per_path_max: int = 2
+
+## Earliest depth (relative to the act entry) an act-0 challenge may sit: a challenge's
+## target anchors on highest_cleared, which is meaningless until a few legs are cleared, so
+## the first `challenge_act0_min_depth` columns after the act-0 entry are challenge-free.
+@export var challenge_act0_min_depth: int = 3
 
 ## Min node gap between two of the SAME special type within one run (no two adjacent
 ## when 1: a gap of <= this many indices is rejected). The spacing curve's hard floor.
@@ -65,14 +119,18 @@ extends Resource
 
 # ── Slice 3: validation band ─────────────────────────────────────────────────
 
-## Smallest legal PLACED-node count for a single act (entry + two runs per segment +
-## chokepoints + boss). With 2 segments of L∈[3,5]: 1+2L_A+1+2L_B+1+1 ∈ [16,24]; the
-## floor sits a little under to tolerate a future shorter roll. Asserted in _validate.
-@export var act_node_budget_min: int = 14
+## Smallest legal PLACED-node count for a single act. Round-2 formula:
+##   2 (entry + pre-boss; boss counted separately below makes +1 → 3 sole spine nodes)
+##   + 2·lane_len   (two parallel lanes of the rolled total)
+##   + crossovers   (one interchange between each stretch pair)
+##   + branch nodes (0 … 2·branch_node_max)
+## i.e. 3 + 2·lane_len + crossovers + branches. Floor = 3 + 2·lane_len_min + crossovers_min
+## + 0 = 3 + 18 + 1 = 22, set a little under for a shorter future roll. Asserted in _validate.
+@export var act_node_budget_min: int = 20
 
-## Largest legal placed-node count for a single act (the ceiling of the band above,
-## with headroom for a longer segment/lane roll).
-@export var act_node_budget_max: int = 26
+## Largest legal placed-node count for a single act. Ceiling = 3 + 2·lane_len_max +
+## crossovers_max + 2·branch_node_max = 3 + 24 + 3 + 8 = 38, with a little headroom.
+@export var act_node_budget_max: int = 40
 
 # ── Retained from slice 1/2 ──────────────────────────────────────────────────
 

@@ -13,6 +13,7 @@
 [ext_resource type="AudioStream" uid="uid://lr4lni6o14uo" path="res://sounds/backroundmusic2.mp3" id="10_2gc06"]
 [ext_resource type="AudioStream" uid="uid://bs6yo0dpqxpqd" path="res://sounds/power up.ogg" id="11_2gc06"]
 [ext_resource type="AudioStream" uid="uid://c12daynt4ex5f" path="res://sounds/moveDarts.wav" id="13_gl6e8"]
+[ext_resource type="AudioStream" uid="uid://mrepyu2trmrk" path="res://sounds/zipclick (1).wav" id="14_kbfbl"]
 
 [node name="AuidoManager" type="Node" unique_id=993361023]
 script = ExtResource("1_br6uc")
@@ -62,3 +63,6 @@ stream = ExtResource("6_ilfjs")
 [node name="MoveDartsToSaved" type="AudioStreamPlayer" parent="." unique_id=405285190]
 stream = ExtResource("13_gl6e8")
 max_polyphony = 12
+
+[node name="TextPrint" type="AudioStreamPlayer" parent="." unique_id=1855806331]
+stream = ExtResource("14_kbfbl")

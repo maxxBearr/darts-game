@@ -6,6 +6,7 @@ Status: BUILT (Claude Code, 2026-06-06). The **event-node slice of Phase 03**. D
   removal of the per-leg free pick, the EventFamilyIcons scaffold, the challenge family edit (BRUSH dropped →
   [SCORING, PLACEMENT]), and tests/test_events.gd (52024 checks; realized rarity distribution matches the ramp).
   The rest of Phase 03 (typed-shop-ring rework + the codex) is deferred to later Phase-03 slices.
+  Live-playtested 2026-06-06 (commit `529c1e4`): working; tuning session queued.
 Part of: the Map Program (`specs/map/00-overview.md`), Phase 03 (typed shop + codex; this is its events portion).
 Depends on: **`01-substrate-slice3-impl.md` (build that first)** — events are placed *inline* inside the new
   multi-node branch runs, so they need the longer, branch-rich paths to exist. Also reuses the slice-1 EVENT enum

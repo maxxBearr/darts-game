@@ -173,6 +173,31 @@ func process_score(raw_result: Dictionary, is_preview: bool = false) -> Dictiona
 	return result
 
 
+## Whether any ENABLED active modifier reads a segment's COLOR when scoring a dart — i.e.
+## whether the checkout math depends on the live board colors. This is the exact set of
+## color-readers in _score_through_modifiers' pipeline:
+##   • ColorBonusModifier — a PER_DART bonus gated on result.segment_color == target_color.
+##   • any COLOR-category streak (ColorStreakModifier) — its continuation is keyed on color.
+## (OddEvenBonusModifier keys on face-value parity, not color; BrushModifier WRITES color on
+## acquire but never reads it at score time — neither makes scoring color-dependent.) Disabled
+## (toggled-off) modifiers are skipped because the pipeline never invokes them. Used to decide
+## whether Prism's reactive recolor actually invalidates the checkout helper: with no color
+## build, Prism only changes appearance, not the values the solver computes, so the helper
+## stays trustworthy and live.
+func has_color_dependent_scoring() -> bool:
+	for modifier: Resource in active_modifiers:
+		if not (modifier is ScoringModifier):
+			continue
+		var sm: ScoringModifier = modifier as ScoringModifier
+		if not sm.enabled:
+			continue
+		if sm is ColorBonusModifier:
+			return true
+		if sm.streak_category == ScoringEnums.StreakCategory.COLOR:
+			return true
+	return false
+
+
 ## Get all active streak modifiers (those with a non-NONE streak category).
 func get_active_streak_modifiers() -> Array:
 	var result: Array = []

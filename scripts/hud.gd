@@ -13,6 +13,9 @@ signal reward_selected(index: int)
 signal checkout_path_clicked(index: int)
 signal streak_replace_selected(index: int)
 signal throw_aim_pressed
+## Fired when the leg-intro presentation (flying readouts + fronted-rail fill) has fully
+## finished. main.gd awaits this before starting the leg's first throw.
+signal leg_intro_finished
 
 @onready var score_label: Label = %ScoreLabel
 @onready var instruction_label: Label = %InstructionLabel
@@ -225,6 +228,71 @@ var _checkout_has_paths: bool = false
 var _divergent_wedges: Dictionary = {}
 var _checkout_paths_ref: Array[Array] = []
 
+@export_group("Leg Intro")
+
+## Font size of the leg-intro flyers while they print BIG at screen centre; each flyer then
+## shrinks toward its real info-column label's size as it flies home. Bump this to make the
+## centred readout more prominent (the landing size is unaffected — it shrinks to the slot).
+@export var leg_intro_font_size: int = 72
+
+## Colour of the leg-intro flyer text (the real labels keep their normal styling).
+@export var leg_intro_text_color: Color = Color(1.0, 1.0, 1.0, 1.0)
+
+## Outline thickness (px) around the flyer text — keeps it readable over the board.
+@export var leg_intro_outline_size: int = 4
+
+## Seconds to reveal EACH character of a centred flyer (typewriter, driven by visible_ratio).
+## A text_print blip fires once per newly-shown glyph. 0 = the whole line appears at once
+## (no reveal, no blips). Per-flyer reveal time = this × the line's character count.
+@export var leg_intro_reveal_per_char: float = 0.035
+
+## Pitch range for the per-character text_print blip — randomized within this band each
+## glyph so a fast reveal doesn't read as one flat repeated tone.
+@export var leg_intro_print_pitch_min: float = 0.94
+@export var leg_intro_print_pitch_max: float = 1.12
+
+## Volume (dB) of the per-character text_print blip. The raw sample is quiet (0 dB on the
+## node); on the FIRST label it's accompanied by the parallel fronted-rail fill ticks so it
+## reads as loud, but the rail finishes during label 1 — leaving later labels with only the
+## bare blip. Raise this so every label's print carries on its own.
+@export var leg_intro_print_volume_db: float = 6.0
+
+## A short beat held at centre the instant a flyer finishes printing (visible_ratio hits
+## 1.0), BEFORE the normal hold + fly — so the line lands fully typed for a moment before it
+## moves. Folded into the (skippable) reveal step. 0 = none.
+@export var leg_intro_reveal_finish_delay: float = 0.2
+
+## Seconds each flyer holds at screen centre (big) AFTER it finishes revealing, before it
+## flies to its slot.
+@export var leg_intro_hold_duration: float = 0.35
+
+## Seconds a flyer spends flying + shrinking from centre to its info-column slot.
+@export var leg_intro_fly_duration: float = 0.4
+
+## Pause between one flyer landing and the next one printing (0 = back-to-back).
+## Default total intro length: 3 × (reveal + hold + fly + gap), rail fill in parallel.
+@export var leg_intro_gap: float = 0.08
+
+## Offset of the centred print position from true screen centre (negative Y prints the
+## readouts above the bull so they don't sit on top of the board).
+@export var leg_intro_center_offset: Vector2 = Vector2(0.0, -120.0)
+
+## True while the leg-intro sequence runs (blocker shown, clicks = per-step skip).
+var _leg_intro_active: bool = false
+
+## The current intro step's tween (one flyer's reveal, then its hold + flight). A click
+## custom_steps it to its end state, so only the CURRENT step fast-forwards — never the
+## whole sequence.
+var _intro_step_tween: Tween = null
+
+## Count of characters already revealed (and blipped) in the current flyer, so the
+## visible_ratio reveal fires text_print exactly once per newly-shown glyph.
+var _intro_reveal_last_count: int = 0
+
+## Full-screen invisible control shown during the intro: swallows clicks so gameplay UI
+## beneath can't fire, and turns each click into a per-step skip.
+var _intro_blocker: Control = null
+
 
 func _ready() -> void:
 	if hover_tooltip.label_settings:
@@ -317,6 +385,16 @@ func _ready() -> void:
 	_build_stat_bars()
 	_build_streak_section()
 	_build_checkout_panel()
+
+	# Full-screen click-catcher for the leg intro. Invisible; while shown it stops clicks
+	# reaching buttons beneath and routes them into the per-step skip (no on-screen hint).
+	_intro_blocker = Control.new()
+	_intro_blocker.name = "LegIntroBlocker"
+	_intro_blocker.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_intro_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+	_intro_blocker.visible = false
+	_intro_blocker.gui_input.connect(_on_intro_blocker_input)
+	add_child(_intro_blocker)
 
 
 ## Display the result of the current throw (per-dart feedback).
@@ -421,6 +499,144 @@ func update_leg(leg: int, target: int, is_boss: bool = false) -> void:
 		leg_label.add_theme_color_override("font_color", Color(0.9, 0.25, 0.2))
 	else:
 		leg_label.remove_theme_color_override("font_color")
+
+
+# --- Leg intro presentation ---
+
+## Hide the info-column readouts and empty the fronted rail ahead of a leg intro, so the
+## _update_all_hud() writes that follow a leg start stay invisible until the intro reveals
+## them piece by piece. Call while the board is off-screen; play_leg_intro() does the rest.
+func conceal_for_leg_intro() -> void:
+	leg_label.visible = false
+	turn_label.visible = false
+	dart_label.visible = false
+	dart_indicator.conceal_for_intro()
+
+
+## Leg-intro presentation (normal + boss legs; challenge races keep their own entry flow):
+## each info-column readout prints large at screen centre, holds, then flies + shrinks
+## onto its real label's slot (the real label is revealed as the flyer lands). The
+## fronted-darts rail trickle-fills row by row alongside the flights. Emits
+## leg_intro_finished once every step AND the rail fill are done. While active, a click
+## fast-forwards only the CURRENT step (per-step skip, no on-screen hint).
+func play_leg_intro(leg: int, target: int, turns: int, darts_per_turn: int) -> void:
+	_leg_intro_active = true
+	_intro_blocker.visible = true
+	# Keep the blocker on top of everything the HUD spawned after _ready (banners etc.).
+	_intro_blocker.move_to_front()
+
+	# Rail fill runs alongside the label flights — overlapping keeps the intro short.
+	dart_indicator.play_intro_fill()
+
+	# The three readouts fly home in order; each await is one skippable step.
+	await _fly_intro_label("Leg %d — %d" % [leg, target], leg_label)
+	await _fly_intro_label("Turns granted: %d" % turns, turn_label)
+	await _fly_intro_label("Darts per turn: %d" % darts_per_turn, dart_label)
+
+	# If the rail trickle outlasts the flights (long turn budgets), it becomes the final
+	# skippable step; otherwise it already finished in parallel and we fall straight through.
+	if dart_indicator.is_intro_fill_active():
+		await dart_indicator.intro_fill_finished
+
+	# Defensive reveal: every real label visible no matter how the steps were skipped.
+	leg_label.visible = true
+	turn_label.visible = true
+	dart_label.visible = true
+	_intro_blocker.visible = false
+	_leg_intro_active = false
+	leg_intro_finished.emit()
+
+
+## One leg-intro step: print `text` big at screen centre, hold, then fly + shrink it onto
+## `target_label`'s slot; the real label is revealed and the flyer freed on landing.
+## Awaitable. The step's tween is kept in _intro_step_tween so a click can fast-forward it.
+func _fly_intro_label(text: String, target_label: Label) -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+
+	var flyer: Label = Label.new()
+	flyer.text = text
+	flyer.add_theme_font_size_override("font_size", leg_intro_font_size)
+	flyer.add_theme_color_override("font_color", leg_intro_text_color)
+	flyer.add_theme_constant_override("outline_size", leg_intro_outline_size)
+	flyer.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	add_child(flyer)
+	flyer.reset_size()
+	# Top-left pivot: the shrink anchors on the corner that lines up with the real label.
+	flyer.pivot_offset = Vector2.ZERO
+	flyer.position = (viewport_size - flyer.size) / 2.0 + leg_intro_center_offset
+	flyer.scale = Vector2.ONE
+
+	# Typewriter reveal: unveil the centred flyer character-by-character via visible_ratio,
+	# firing one text_print blip (jittered pitch) per newly-shown glyph. This is its own
+	# skippable step (a click custom_steps it straight to fully revealed). per_char = 0
+	# prints the whole line at once with no reveal/blips.
+	var total_chars: int = flyer.get_total_character_count()
+	if total_chars > 0 and leg_intro_reveal_per_char > 0.0:
+		flyer.visible_ratio = 0.0
+		_intro_reveal_last_count = 0
+		var reveal_tween: Tween = create_tween()
+		_intro_step_tween = reveal_tween
+		reveal_tween.tween_method(_reveal_intro_ratio.bind(flyer), 0.0, 1.0, leg_intro_reveal_per_char * float(total_chars))
+		# A beat once fully printed, before the hold/fly — part of the step so a click skips it too.
+		if leg_intro_reveal_finish_delay > 0.0:
+			reveal_tween.tween_interval(leg_intro_reveal_finish_delay)
+		await reveal_tween.finished
+	flyer.visible_ratio = 1.0
+
+	# Landing scale: shrink the big intro font down to the real label's own size so the
+	# hand-off reads seamless (label_settings wins over theme when present).
+	var target_font: int = leg_intro_font_size
+	if target_label.label_settings != null:
+		target_font = target_label.label_settings.font_size
+	else:
+		target_font = target_label.get_theme_font_size("font_size")
+	var end_scale: float = float(target_font) / float(leg_intro_font_size)
+
+	var tween: Tween = create_tween()
+	_intro_step_tween = tween
+	tween.tween_interval(leg_intro_hold_duration)
+	tween.set_parallel(true)
+	tween.tween_property(flyer, "position", target_label.global_position, leg_intro_fly_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.tween_property(flyer, "scale", Vector2(end_scale, end_scale), leg_intro_fly_duration).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.set_parallel(false)
+	tween.tween_callback(func() -> void:
+		target_label.visible = true
+		flyer.queue_free())
+	if leg_intro_gap > 0.0:
+		tween.tween_interval(leg_intro_gap)
+	await tween.finished
+	_intro_step_tween = null
+
+
+## visible_ratio reveal step (tween_method target): set the flyer's reveal fraction and fire
+## one text_print blip per newly-revealed character. visible_characters tracks the glyph
+## count behind the ratio (it reads -1 at full reveal, hence the fallback to the total).
+func _reveal_intro_ratio(ratio: float, flyer: Label) -> void:
+	flyer.visible_ratio = ratio
+	var revealed: int = flyer.visible_characters
+	if revealed < 0:
+		revealed = flyer.get_total_character_count()
+	if revealed > _intro_reveal_last_count:
+		_intro_reveal_last_count = revealed
+		AuidoManager.play_text_print(leg_intro_print_pitch_min, leg_intro_print_pitch_max, leg_intro_print_volume_db)
+
+
+## Blocker input during the intro: a left click skips the current step only.
+func _on_intro_blocker_input(event: InputEvent) -> void:
+	if not _leg_intro_active:
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_skip_current_intro_step()
+
+
+## Fast-forward the CURRENT intro step to its end state. An in-flight label tween is
+## custom_stepped to completion (its landing callback still runs, so the real label gets
+## revealed); once the flights are done, a click snap-finishes the rail fill instead.
+func _skip_current_intro_step() -> void:
+	if _intro_step_tween != null and _intro_step_tween.is_valid():
+		_intro_step_tween.custom_step(3600.0)
+	elif dart_indicator.is_intro_fill_active():
+		dart_indicator.skip_intro_fill()
 
 
 ## Show the persistent boss status label with name, description, and status text.
@@ -543,7 +759,7 @@ func show_bailout(spent: int, banked_left: int, new_max_turns: int) -> void:
 	if dart_indicator.has_method("play_bailout_flyin"):
 		dart_indicator.play_bailout_flyin(spent, banked_left, new_max_turns)
 
-
+@export_group("Finish Leg Labels")
 ## Show a centered "LEG WON!" banner that scales in and fades out.
 ## Returns the tween so callers can chain callbacks after it finishes.
 ## Font size for the "LEG WON!" banner.
@@ -775,6 +991,17 @@ func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
 		var color: Color = upgrade["color"]
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
 		buttons[i].tooltip_text = upgrade["description"]
+
+		# Connect hover preview signals (disconnect any previous connections) so the
+		# stat bars live-preview the trade while hovering — same wiring as the shop
+		# path (show_shop_pick_items). Events route through here, and without this
+		# the accuracy-event options gave no hover feedback.
+		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
+			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
+		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
+			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
+		buttons[i].mouse_entered.connect(_on_upgrade_hover.bind(i))
+		buttons[i].mouse_exited.connect(_on_upgrade_unhover)
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 

@@ -123,6 +123,7 @@ button_pulse_min_alpha = 0.75
 button_pulse_max_alpha = 1.7
 upgrade_button_opacity = 1.0
 checkout_font_size = 14
+leg_intro_reveal_per_char = 0.08
 leg_won_font_size = 68
 boss_announce_hold_duration = 1.0
 boss_announce_scale_in_duration = 1.0
