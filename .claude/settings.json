@@ -15,7 +15,9 @@
       "PowerShell(Sort-Object *)",
       "PowerShell(Format-Table *)",
       "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless*)",
-      "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64.exe\" --headless*)"
+      "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64.exe\" --headless*)",
+      "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless*)",
+      "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64.exe\" --headless*)"
     ]
   }
 }

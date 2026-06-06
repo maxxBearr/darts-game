@@ -1,39 +1,33 @@
-# Map Program — Phase 02 Challenge Nodes (ACTIVE: impl spec ready to build)
+# Map Program — Substrate Slice 3 + Event Nodes (ACTIVE: two impl specs ready to build, in order)
 
-**Active spec:** `specs/map/02-challenge-nodes-impl.md` — the buildable doc for Phase 02. Design was finalized in a
-Cowork session (2026-06-05); the impl spec is the build surface for Claude Code. Program index + per-phase status
-live in `specs/map/00-overview.md`.
+**Active specs (build in this order):**
+1. `specs/map/01-substrate-slice3-impl.md` — **topology v2**: ~12-node *per-act traversed* paths, multi-node
+   branch segments (two parallel 3–5 node runs that reconverge), challenges re-homed inline onto branch runs
+   (skip = the other run; hard invariant: a challenge never sits without a parallel). Supersedes the single-node
+   `_add_fork` and `02-challenge-nodes-impl.md` §17. Frame before furniture — this hosts the events.
+2. `specs/map/03-events-impl.md` — **event nodes** (the events slice of Phase 03): inline, **free**, 1-of-3 picks
+   within one icon-advertised family. Replaces the per-leg free accuracy pick (removed).
 
-**What Phase 02 is:** an optional, **post-boss-1**, off-branch map node (slice 1's reserved `is_off_branch` fork).
-The player **wagers banked darts as the race budget** to re-clear a score they've already beaten, in a tighter
-budget than a normal leg — the challenge verb is *match concisely*, not *match big*. Win → typed reward (rarity =
-how few darts you used) + bank the unused darts. **Lose → forfeit the whole wager, run continues.** Skip is always
-allowed (take the parallel leg instead).
+Design finalized in a Cowork session (2026-06-05). Program index + status: `specs/map/00-overview.md`.
 
-**Core resolved decisions (see impl spec for the full surface):**
-- **Deposit = wager = race budget**, one pool; **loss forfeits all of it** — that's what makes deposit-size the
-  single risk dial (lean = cheap rare attempt with no fail-soft; fat = pricey safety net down to a common win).
-  This **supersedes** the old `02-challenge-nodes.md` turns↔rarity "banter table."
-- **Target anchor:** within −300 of the highest score the player has *cleared* (boss or leg); never above it.
-- **Deposit range derived from the slice-2 seam:** `reliable = ceil(target / expected_per_dart(depth))`, then
-  `min ≈ reliable×0.65`, `max ≈ reliable+2`. Lands in a tight ~6–13 dart band all game (worked numbers in §4).
-- **`darts_per_turn` rolled per node ∈ [2,5]**, shown before deposit; **ice-tray** fill (raw-dart deposit chunks
-  into rows of dpt, partial last row) with the budget **capped by total darts**, not whole turns.
-- **Handicaps** reuse the benched bosses (Rotation / Narrow Double / two-darts — code still present).
+**Core resolved decisions:**
+- **Trades are free (events); flats are earned (shop/challenge).** The spine's "no free typed picks" refined: a
+  trade's `−` governs its `+`, so free trades deepen commitment instead of climbing power. Event pool =
+  trade-shaped families only (accuracy now; geometry when built — see memory, don't forget geometry items).
+- **Three surfaces tier routing < currency < skill:** event = free trade, family by routing (map icon); shop =
+  darts for control; challenge = rarity earned by skill. A won challenge must out-rank a free event.
+- **Event reward = diagonal swing**, not the old near-net-zero reshape: common +6–8/−2–4, uncommon +9–11/−3–5,
+  rare +12–14/−4–5 (gain rolled, penalty rolled). Reuses `UPGRADE_TYPES` + `_apply_upgrade`.
+- **Rarity ramps by section, events only:** 85/10/5 → 65/20/15 → 45/30/25 (act 0/1/2; +10 unc & rare per boss
+  cleared, common absorbs). Shop/challenge keep their own rarity systems.
+- **No bank interaction at events** (shop + challenge already tax it); cost is the trade + the forgone parallel run.
+- **Agency is path-level:** you pick a *branch* (its whole composition), not "event vs leg" at a fork. Branch runs
+  get contrasting type mixes (`branch_contrast` knob). Per-traversal budget: 1–3 shops / 1–3 events / 1–3
+  challenges, rest legs. Icon scaffold (`EventFamilyIcons`) is the shared Phase-03 glyph — Max drops art in later.
 
-**Build dependency (do first):** Phase 02 reads the slice-2 pressure seam, which is currently **skeleton** —
-`baseline_target` calls undefined `_act_ceiling` / `_act_floor` / `_snap`, and `pressure_of` is referenced but not
-implemented. Finish/compile the seam before Phase 02 consumes it (impl spec §14). Engine additions Phase 02 needs:
-an x01 total-dart-cap budget mode (partial final turn) + a per-race `darts_per_turn` override (§9).
-
-**Build-steering spine (unchanged):** exposure (codex) + informed shop + earned challenge selection; **no free
-typed picks** (power stays earned — protects the darts-as-currency "bank is the climb" thesis). Phase 02 is the
-*earned-selection* third. Design laws: *frame before furniture*, *chosen friction is spice*.
-
-**Shipped before this — Phase 01 Substrate:** slice 1 (graph/view/seam, `01-substrate-impl.md`, commit `e71762f`)
-+ slice 2 (pressure-ratio generator, `01-substrate-slice2-impl.md`). Note the slice-2 *seam* is skeleton in the
-working tree (above). Deferred substrate polish: arrival ceremony, cramped-1501 layout fix, HUD dart-budget
-texture. Later phases: 03 typed shop + codex, 04 pool filtration, 05 boss cadence (see overview).
+**Status of what came before:** Phase 02 challenge nodes BUILT + PLAYTESTED (takeaway: they need this fuller map
+to be judged — that's this work). Substrate slices 1+2 shipped. Later: rest of Phase 03 (typed shop rings +
+codex), 04 pool filtration, 05 boss cadence.
 
 ---
 

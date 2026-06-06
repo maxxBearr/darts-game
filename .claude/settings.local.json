@@ -53,7 +53,12 @@
       "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_challenge_nodes.gd\")",
       "Bash(\"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --import)",
       "Bash(timeout 25 \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\")",
-      "Bash(timeout 22 \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\")"
+      "Bash(timeout 22 \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\")",
+      "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --import 2>&1 | Select-Object -Last 20)",
+      "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_map_graph.gd\" 2>&1 | Select-Object -Last 60)",
+      "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_challenge_nodes.gd\" 2>&1 | Select-Object -Last 40)",
+      "PowerShell(Out-Null *)",
+      "PowerShell(& \"C:\\\\Users\\\\max\\\\Downloads\\\\Godot_v4.6-stable_win64.exe\\\\Godot_v4.6-stable_win64_console.exe\" --headless --path \"C:\\\\Users\\\\max\\\\Documents\\\\GitHub\\\\darts-game\" --script \"res://tests/test_events.gd\" 2>&1 | Select-Object -Last 35)"
     ]
   }
 }

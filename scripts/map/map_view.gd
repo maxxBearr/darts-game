@@ -40,16 +40,24 @@ signal node_chosen(node: MapNode)
 ## Challenge ("Trial") node — the post-boss-1 off-branch wager race (Phase 02).
 @export var color_challenge: Color = Color(0.62, 0.50, 0.28)
 
+## Event-family glyph scaffold (Phase 03). The clear place Max drops art later; until then
+## EVENT nodes render a per-family placeholder label + tint from this resource. Shared with
+## the typed-shop ring. Lazily created in _ready if left unset.
+@export var family_icons: EventFamilyIcons
+
 var graph: MapGraph
 
 var _buttons: Dictionary = {}     ## id -> Button
 var _positions: Dictionary = {}   ## id -> Vector2 (widget centre)
 var _title: Label
+var _display_act: int = 0         ## the act currently drawn (incremental gen renders one act)
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if family_icons == null:
+		family_icons = EventFamilyIcons.new()
 
 
 ## Build/refresh the widgets from the graph and show the overlay.
@@ -75,33 +83,66 @@ func _rebuild() -> void:
 	_title.position = Vector2(0.0, 50.0)
 	add_child(_title)
 
+	_display_act = _current_display_act()
 	_layout()
 	_build_widgets()
 	_refresh_reachability()
 	queue_redraw()
 
 
+## Which act to draw. Incremental generation only materializes one act ahead, and the
+## paths the player can pick next all live in the frontier act, so render the act of the
+## reachable next nodes (at an act boundary the current node is the just-cleared boss,
+## whose successors are the NEW act's entry). Falls back to the current node's act when
+## there is nothing reachable (the terminal boss — run over).
+func _current_display_act() -> int:
+	if graph == null:
+		return 0
+	var reach: Array[int] = graph.reachable_from(graph.current_id)
+	if not reach.is_empty():
+		var first: MapNode = graph.get_node_by_id(reach[0])
+		if first != null:
+			return first.act
+	var cur: MapNode = graph.get_node_by_id(graph.current_id)
+	return cur.act if cur != null else 0
+
+
+## Whether a node belongs to the act currently being rendered.
+func _is_displayed(n: MapNode) -> bool:
+	return n != null and n.act == _display_act
+
+
 ## x = depth * column spacing (auto-fit to width); y = lane row, centred. Columns
 ## that hold a single node (act entries, bosses) are vertically centred — those are
-## the funnel chokepoints.
+## the funnel chokepoints. Depth is normalized to the displayed act's first column so a
+## deep act (large global depth) still lays out from the left margin.
 func _layout() -> void:
+	var min_depth: int = 1 << 30
 	var max_depth: int = 0
 	var max_row: int = 0
 	var per_depth_count: Dictionary = {}
 	for id: int in graph.nodes:
 		var n: MapNode = graph.nodes[id]
+		if not _is_displayed(n):
+			continue
+		min_depth = mini(min_depth, n.depth)
 		max_depth = maxi(max_depth, n.depth)
 		max_row = maxi(max_row, n.lane)
 		per_depth_count[n.depth] = per_depth_count.get(n.depth, 0) + 1
+	if min_depth > max_depth:
+		min_depth = 0   # nothing displayed (defensive)
 
+	var span: int = maxi(max_depth - min_depth, 1)
 	var avail_w: float = size.x - margin.x * 2.0
-	var col_spacing: float = avail_w / float(maxi(max_depth, 1))
+	var col_spacing: float = avail_w / float(span)
 	var center_y: float = size.y / 2.0 + 30.0
 	var rows: int = max_row + 1
 
 	for id: int in graph.nodes:
 		var n: MapNode = graph.nodes[id]
-		var x: float = margin.x + float(n.depth) * col_spacing
+		if not _is_displayed(n):
+			continue
+		var x: float = margin.x + float(n.depth - min_depth) * col_spacing
 		var y: float
 		if per_depth_count[n.depth] == 1:
 			y = center_y
@@ -113,6 +154,8 @@ func _layout() -> void:
 func _build_widgets() -> void:
 	for id: int in graph.nodes:
 		var n: MapNode = graph.nodes[id]
+		if not _is_displayed(n):
+			continue
 		var btn: Button = Button.new()
 		btn.custom_minimum_size = node_size
 		btn.size = node_size
@@ -180,6 +223,11 @@ func _color_for(n: MapNode) -> Color:
 			return color_boss
 		MapNode.Type.CHALLENGE:
 			return color_challenge
+		MapNode.Type.EVENT:
+			# Tint by the rolled trade-family so the routing decision reads off the map.
+			if n.event != null and family_icons != null:
+				return family_icons.color_for(n.event.reward_family)
+			return color_offbranch
 		_:
 			return color_offbranch if n.is_off_branch else color_leg
 
@@ -193,6 +241,9 @@ func _label_for(n: MapNode) -> String:
 		MapNode.Type.CHALLENGE:
 			return "Trial"
 		MapNode.Type.EVENT:
+			# The family glyph is the icon scaffold (placeholder shape until art lands).
+			if n.event != null and family_icons != null:
+				return "Event\n%s" % family_icons.label_for(n.event.reward_family)
 			return "Event"
 		_:
 			return "Leg"

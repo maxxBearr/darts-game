@@ -33,14 +33,23 @@ func _init() -> void:
 	quit(1 if _failures > 0 else 0)
 
 
+## Generate the WHOLE run incrementally (slice 3 §3.6): generate() seeds act 0, then one
+## generate_next_act per later act so the post-boss-1 challenge nodes actually materialize.
+func _generate_full(level: LevelDefinition, seed_value: int) -> MapGraph:
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = seed_value
+	var g: MapGraph = MapGraph.generate(level, rng, 101, 100)
+	for a: int in range(1, maxi(level.boss_count, 1)):
+		g.generate_next_act({"available_brush_colors": [], "highest_cleared": 101})
+	return g
+
+
 func _test_level(level: LevelDefinition) -> void:
 	print("— Level %s (max %d, %d acts/bosses)" % [level.display_name, level.max_score_target, level.boss_count])
 	var total_challenges: int = 0
 	var band_samples: Array[String] = []
 	for seed_value: int in range(SEEDS_PER_LEVEL):
-		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-		rng.seed = seed_value
-		var g: MapGraph = MapGraph.generate(level, rng, 101, 100)
+		var g: MapGraph = _generate_full(level, seed_value)
 		for id: int in g.nodes:
 			var n: MapNode = g.get_node_by_id(id)
 			if n.type != MapNode.Type.CHALLENGE:
@@ -95,31 +104,19 @@ func _reliable(g: MapGraph, n: MapNode) -> int:
 # ── §13 placement ────────────────────────────────────────────────────────────
 
 func _test_placement(g: MapGraph, n: MapNode, seed_value: int) -> void:
-	_check(n.is_off_branch, "challenge sits on an is_off_branch node", seed_value)
 	_check(n.act >= 1, "challenge is post-boss-1 (act >= 1)", seed_value)
 	_check(n.challenge != null, "challenge node carries a ChallengeNode resource", seed_value)
-	# A reconverging parallel leg must exist so Skip (§12) is always available: the
-	# fork shares predecessors and successors with an in-lane leg of the same depth.
+	# Slice 3: a challenge sits INLINE in a branch run, so the Skip path (§12) is the
+	# parallel run — a sibling node at the SAME depth in the other lane, bounded by the
+	# same two chokepoints. A chokepoint is the sole node at its depth, so "another node
+	# exists at this depth" both confirms the parallel run AND that this isn't a chokepoint.
 	var parallel_found: bool = false
 	for id: int in g.nodes:
 		var o: MapNode = g.get_node_by_id(id)
-		if o.id == n.id or o.depth != n.depth or o.type == MapNode.Type.CHALLENGE:
-			continue
-		# Shares at least one predecessor and one successor → reconverges immediately.
-		var shares_prev: bool = false
-		for p: int in o.prev_ids:
-			if p in n.prev_ids:
-				shares_prev = true
-				break
-		var shares_next: bool = false
-		for s: int in o.next_ids:
-			if s in n.next_ids:
-				shares_next = true
-				break
-		if shares_prev and shares_next:
+		if o.id != n.id and o.depth == n.depth:
 			parallel_found = true
 			break
-	_check(parallel_found, "challenge has a reconverging parallel leg (skip available)", seed_value)
+	_check(parallel_found, "challenge has a live parallel run at its depth (skip available)", seed_value)
 
 
 # ── §3 anchor ─────────────────────────────────────────────────────────────────

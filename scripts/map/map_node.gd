@@ -41,6 +41,12 @@ var is_off_branch: bool = false
 ## See specs/map/02-challenge-nodes-impl.md §7.
 var challenge: ChallengeNode = null
 
+## Set on Type.EVENT nodes only (Phase 03): the rolled trade-family (its map icon) for
+## this node. The family is chosen at generation against the live run-state (slice 3
+## §3.6); the 3 concrete options are rolled at arrival. Null on every other node type.
+## See specs/map/03-events-impl.md §4.
+var event: EventNode = null
+
 
 func _to_string() -> String:
 	return "MapNode#%d(%s d%d l%d a%d t%d)" % [id, Type.keys()[type], depth, lane, act, target_score]

@@ -54,6 +54,12 @@ grains, so no single surface has to do everything:
 Net: **the player chose NOT to get free typed picks.** Power stays earned; the free layer is pure
 *information*. This protects the darts-as-currency "the bank is the climb" thesis.
 
+> **Refined 2026-06-05 (events session):** the rule's final form is **trades are free, flats are earned.**
+> Event nodes (`03-events-impl.md`) give free typed picks of *trade-shaped* items only (a `+` bought with a
+> `−` — accuracy swings now, geometry later). A trade deepens a commitment instead of climbing power, so it
+> can't beeline variance flat — the original concern only applies to *flat* items, which stay gated behind
+> darts (shop) or skill (challenge). The three surfaces tier as **routing < currency < skill**.
+
 ## Two reusable design laws this program leans on
 
 - **Frame before furniture.** Same doctrine as "tools before house," one level in. Within the map, the
@@ -70,9 +76,9 @@ Net: **the player chose NOT to get free typed picks.** Power stays earned; the f
 
 | # | Phase | One-liner | Status |
 |---|---|---|---|
-| 01 | **Substrate** | Data-graph + view; first hosts the *current* run flow (legs/shops/bosses) as a navigable graph. Code-first rough visuals, art swap later. The dependency everything else needs. | **SHIPPED** — slice 1 (rough-rect topology + ported ladder, `01-substrate-impl.md`, 2026-06-04, commit `e71762f`) + slice 2 (pressure-ratio generator, `01-substrate-slice2-impl.md`, 2026-06-05). Rationale in `01-substrate.md`. Deferred: arrival ceremony + art reskin (polish). |
-| 02 | **Challenge nodes** | Optional post-boss-1 x01 races on the off-branch fork; **deposit darts = the race budget** (loss forfeits all), rarity earned by finish-efficiency, recycled benched bosses as handicaps. | **IMPL SPEC READY** (`02-challenge-nodes-impl.md`, 2026-06-05) — design finalized, build doc written. Turns↔rarity banter superseded by the deposit-size dial. Build dep: finish the skeleton slice-2 seam first (§14). |
-| 03 | **Typed shop + codex** | Family glyph in the smoke + hover type; the codex that teaches families. The informed-shop + exposure layer. | Folds in Phase B of darts-currency; design pending |
+| 01 | **Substrate** | Data-graph + view; first hosts the *current* run flow (legs/shops/bosses) as a navigable graph. Code-first rough visuals, art swap later. The dependency everything else needs. | **SHIPPED** — slice 1 (rough-rect topology + ported ladder, `01-substrate-impl.md`, 2026-06-04, commit `e71762f`) + slice 2 (pressure-ratio generator, `01-substrate-slice2-impl.md`, 2026-06-05). **Slice 3 IMPL SPEC READY** (`01-substrate-slice3-impl.md`, 2026-06-05) — topology v2: ~12-node per-act paths, multi-node 3–5 parallel branches, re-homes challenges onto branches (supersedes 02 §17). **Build-first** for the events work. Deferred: arrival ceremony + art reskin (polish). |
+| 02 | **Challenge nodes** | Optional post-boss-1 x01 races; **deposit darts = the race budget** (loss forfeits all), rarity earned by finish-efficiency, recycled benched bosses as handicaps. | **BUILT + PLAYTESTED** (`02-challenge-nodes-impl.md`, 2026-06-05; Claude Code). Playtest takeaway: the nodes feel incomplete without a fuller map to test the flow → motivates slice 3 + events. §17 placement follow-up superseded by slice 3's branch model. |
+| 03 | **Typed shop + codex (+ events)** | Family glyph in the smoke + hover type; the codex that teaches families; **inline event nodes** (free typed *trade* picks). The informed-shop + exposure layer. | **Events slice IMPL SPEC READY** (`03-events-impl.md`, 2026-06-05): inline events, trade-only rewards (accuracy swing now, geometry later), depth rarity ramp, replaces the per-leg free pick. Typed-shop-ring rework + codex = later slices, design pending. Folds in Phase B of darts-currency. |
 | 04 | **Pool filtration / path-biasing** | Map paths bias the reward pool toward a family (soft bias, gated — not a clean tap). | Absorbs `map-pool-filtration.md`; design pending |
 | 05 | **Boss cadence** | Map raises boss frequency; benched effects become node mini-encounters. | Design pending |
 

@@ -2,37 +2,79 @@ class_name MapGenConfig
 extends Resource
 ## Tunable knobs for MapGraph generation. Attach one to a LevelDefinition to
 ## override per level; a null config on the level means "use these defaults".
-## See specs/map/01-substrate-impl.md §3 (each spacing/mix number is meant to be
-## an inspector-tunable export, not a hard-coded constant).
+## See specs/map/01-substrate-slice3-impl.md §4 — each spacing/mix/budget number is
+## meant to be an inspector-tunable export, not a hard-coded constant.
+##
+## Slice 3 topology: an act is entry chokepoint → branch segments (two parallel
+## L-node runs that reconverge at a chokepoint) → pre-boss chokepoint → boss. The
+## slice-1 mid-column/fork knobs are retired; the per-*act* shop framing becomes a
+## per-*traversal* budget shared by shops / events / challenges.
 
-## Roughly-parallel routes per act. Lean 2; 3 is an open tuning call.
+## Roughly-parallel routes per branch segment. Lean 2 (a segment is two runs); a
+## 3-way branch is a deferred experiment (slice 3 §7).
 @export var lane_count: int = 2
 
-## Minimum number of middle (lane) columns per act. With 2 lanes the per-act node
-## count ≈ 2 + lane_count*mid_cols (+1 optional fork), so a floor of 3 keeps acts
-## inside the design's 7–12 band.
-@export var mid_cols_min: int = 3
+# ── Slice 3: segment topology ────────────────────────────────────────────────
 
-## Maximum number of middle columns per act.
-@export var mid_cols_max: int = 4
+## How many branch segments per act (each segment = two parallel L-node runs). Two
+## ~4-node segments + chokepoints + boss ≈ the ~12-node traversed-path target (§2).
+@export var branch_segments_min: int = 2
 
-## Soft minimum shops slotted per act.
-@export var shops_per_act_min: int = 1
+## Maximum branch segments per act. Held at the min by default (a fixed 2-segment act);
+## raise the max to let an act roll a longer spine.
+@export var branch_segments_max: int = 2
 
-## Soft maximum shops slotted per act.
-@export var shops_per_act_max: int = 2
+## Fewest nodes in each parallel run of a branch segment (both runs share the rolled L).
+@export var branch_len_min: int = 3
 
-## Minimum column gap enforced between two shops within an act (the spacing
-## curve's hard floor — "never two shops within N").
-@export var shop_min_col_gap: int = 1
+## Most nodes in each parallel run of a branch segment.
+@export var branch_len_max: int = 5
 
-## Chance per act to inject one in-lane reconverging fork (a reserved off-branch
-## slot). The fork's opportunity cost is purely spatial — see the design doc. A
-## post-boss-1 fork (act ≥ 1) is upgraded to a Phase 02 challenge node, so this
-## also sets how often challenges appear: at 0.85 a post-boss-1 act reliably
-## offers one. NOTE: only ONE fork per act, so this can't push a 1001 run past a
-## single challenge or a 1501 past two — raise challenges_per_act for that.
-@export var fork_chance: float = 0.85
+# ── Slice 3: per-traversal special budgets ───────────────────────────────────
+# A budget for ONE full path through the act (the player only walks one branch per
+# split), NOT a per-act slot count. The generator caps every path at the max and
+# aims each path near the band; the min is soft (contrast can leave a branch lean).
+
+## Soft minimum shops a single traversal collects.
+@export var shops_per_path_min: int = 1
+
+## Hard maximum shops a single traversal collects.
+@export var shops_per_path_max: int = 3
+
+## Soft minimum events a single traversal collects.
+@export var events_per_path_min: int = 1
+
+## Hard maximum events a single traversal collects.
+@export var events_per_path_max: int = 3
+
+## Soft minimum challenges a single traversal collects. Acts >= 1 only (post-boss-1
+## gate, slice 3 §1.5 / 02 §1.1) — act 0 places no challenges regardless.
+@export var challenges_per_path_min: int = 1
+
+## Hard maximum challenges a single traversal collects.
+@export var challenges_per_path_max: int = 3
+
+## Min node gap between two of the SAME special type within one run (no two adjacent
+## when 1: a gap of <= this many indices is rejected). The spacing curve's hard floor.
+@export var special_min_gap: int = 1
+
+## How divergent the two runs of a segment are made (0 = identical mixes placed in
+## both runs, 1 = a special goes into only ONE run so the branch pick is a real
+## composition choice). The routing decision's strength. See slice 3 §3.
+@export_range(0.0, 1.0) var branch_contrast: float = 0.6
+
+# ── Slice 3: validation band ─────────────────────────────────────────────────
+
+## Smallest legal PLACED-node count for a single act (entry + two runs per segment +
+## chokepoints + boss). With 2 segments of L∈[3,5]: 1+2L_A+1+2L_B+1+1 ∈ [16,24]; the
+## floor sits a little under to tolerate a future shorter roll. Asserted in _validate.
+@export var act_node_budget_min: int = 14
+
+## Largest legal placed-node count for a single act (the ceiling of the band above,
+## with headroom for a longer segment/lane roll).
+@export var act_node_budget_max: int = 26
+
+# ── Retained from slice 1/2 ──────────────────────────────────────────────────
 
 ## Chance a placed challenge node carries a recycled benched-boss aim handicap (§8);
 ## otherwise it is a clean precision race. 0 = never handicapped, 1 = always. The

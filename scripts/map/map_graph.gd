@@ -36,119 +36,216 @@ var _act_min_depth: Dictionary = {}   ## act -> shallowest depth in that act
 var _act_max_depth: Dictionary = {}   ## act -> deepest depth (the boss) in that act
 var _depth_act: Dictionary = {}       ## depth -> act (each depth sits in exactly one act)
 
+# Incremental per-act generation state (§3.6). The graph is an accumulating container:
+# generate() seeds act 0, generate_next_act() appends each later act on a boss clear.
+# These persist the cfg/level/rng and the running frontier across those calls.
+var _cfg: MapGenConfig = null          ## the tuning config, captured at run start
+var _level: LevelDefinition = null     ## the level, captured at run start (max target / acts)
+var _rng: RandomNumberGenerator = null ## the SEEDED generator, threaded across act gens
+var _generated_acts: int = 0           ## how many acts have been appended so far
+var _prev_boss_id: int = -1            ## the most-recently generated boss (the frontier sink)
+var _next_depth: int = 0               ## the running global depth counter (next free column)
 
-## Build a full run map for `level`, using the seeded `rng` for every roll so runs
-## are reproducible. `starting_target` / `target_increment` mirror x01_game so the
-## rolled targets land on the engine's X01 parity lattice (101, 201, …).
+
+## Build a run map for `level`, using the seeded `rng` for every roll so runs are
+## reproducible. Slice 3 generates ONE act at a time: generate() seeds only act 0;
+## generate_next_act(run_state) appends each later act when its predecessor boss is
+## cleared, so a runtime-gated event family (brush) can be rolled against the live state
+## at the moment the section is shown (§3.6). `starting_target` / `target_increment`
+## mirror x01_game so the rolled targets land on the engine's X01 parity lattice (101, …).
 static func generate(level: LevelDefinition, rng: RandomNumberGenerator, starting_target: int = 101, target_increment: int = 100) -> MapGraph:
 	var graph: MapGraph = MapGraph.new()
-	var cfg: MapGenConfig = null
 	if level != null and level.map_gen_config != null:
-		cfg = level.map_gen_config
+		graph._cfg = level.map_gen_config
 	else:
-		cfg = MapGenConfig.new()
+		graph._cfg = MapGenConfig.new()
+	graph._level = level
+	graph._rng = rng
 	graph.acts = maxi(level.boss_count if level != null else 1, 1)
-	graph.lane_count = maxi(cfg.lane_count, 1)
-	graph._build(cfg, rng)
-	graph._assign_leg_params(level, cfg, rng, starting_target, target_increment)
+	graph.lane_count = maxi(graph._cfg.lane_count, 1)
+	# Capture the pressure-math context once at run start (before any power item raises
+	# darts_per_turn) so the public seam stays valid across each incremental act gen.
+	graph._starting_target = starting_target
+	graph._target_increment = target_increment
+	graph._max_target = level.max_score_target if level != null else 501
+	graph._reference_turns = maxi(graph._cfg.reference_turns, 1)
+	# Seed ONLY act 0. At run start nothing is owned, so an empty run-state ⇒ events roll
+	# the always-eligible accuracy family (brush has no colors yet).
+	graph._build_act(0, {})
 	graph._validate()
 	return graph
 
 
-# ── Generation ────────────────────────────────────────────────────────────
-
-func _build(cfg: MapGenConfig, rng: RandomNumberGenerator) -> void:
-	var prev_boss_id: int = -1
-	var depth: int = 0
-	for act: int in range(acts):
-		# Step 1 — act entry: a single shared funnel node (act 0's is the global start).
-		var entry: MapNode = _new_node(MapNode.Type.LEG, depth, 0, act)
-		if act == 0:
-			start_id = entry.id
-		else:
-			_connect(prev_boss_id, entry.id)
-		depth += 1
-
-		# Step 1 — middle columns: lane_count parallel slots each.
-		var mid_cols: int = rng.randi_range(cfg.mid_cols_min, cfg.mid_cols_max)
-		var mid_columns: Array = []
-		var prev_col: Array[int] = [entry.id]
-		for c: int in range(mid_cols):
-			var col: Array[int] = []
-			for lane: int in range(lane_count):
-				col.append(_new_node(MapNode.Type.LEG, depth, lane, act).id)
-			# Step 2 — lane edges (entry fans into the whole first column).
-			_wire_columns(prev_col, col)
-			mid_columns.append(col)
-			prev_col = col
-			depth += 1
-
-		# Step 1 — terminal boss: lanes reconverge into a single node (the pre-boss
-		# funnel chokepoint is the boss itself this slice).
-		var boss: MapNode = _new_node(MapNode.Type.BOSS, depth, 0, act)
-		for nid: int in prev_col:
-			_connect(nid, boss.id)
-		depth += 1
-		if act == acts - 1:
-			terminal_id = boss.id
-		prev_boss_id = boss.id
-
-		# Step 2 — bridges (crossover lane-switches) and an optional in-lane fork.
-		_add_bridges(mid_columns, rng)
-		_add_fork(mid_columns, rng, cfg)
-
-		# Step 3 — slot shops by count + spacing within this act's middle columns.
-		_slot_shops(mid_columns, rng, cfg)
+## Append the next act on a boss clear, chaining the previous boss → the new act's entry.
+## `run_state` (≥ available_brush_colors / highest_cleared) gates state-dependent event
+## families: a family is eligible only if its prereq holds NOW (brush ⇒ colors non-empty).
+## No-op once every act is generated; terminal_id is set when the FINAL act appends. §3.6.
+func generate_next_act(run_state: Dictionary) -> void:
+	if _generated_acts >= acts:
+		return
+	_build_act(_generated_acts, run_state)
+	_validate()
 
 
-## Wire one column to the next. A single-node column (the act entry) fans into the
-## whole next column; otherwise nodes connect by matching lane index.
-func _wire_columns(prev_col: Array[int], col: Array[int]) -> void:
-	if prev_col.size() == 1:
-		for nid: int in col:
-			_connect(prev_col[0], nid)
+# ── Generation (per-act, incremental — §2 / §3 / §3.6) ──────────────────────
+
+## Build one act's subgraph and fold it onto the accumulating graph: entry chokepoint
+## → branch segments (each two parallel L-node runs that reconverge at a chokepoint) →
+## pre-boss chokepoint → boss. Then slot specials onto the branch runs (consulting
+## run_state) and assign leg params to the new nodes. Chains the previous act's boss
+## into this act's entry; advances the running depth/frontier across calls.
+func _build_act(act: int, run_state: Dictionary) -> void:
+	# Step 1 — act entry: a single shared funnel node (act 0's is the global start).
+	var entry: MapNode = _new_node(MapNode.Type.LEG, _next_depth, 0, act)
+	if act == 0:
+		start_id = entry.id
 	else:
-		var n: int = mini(prev_col.size(), col.size())
-		for lane: int in range(n):
-			_connect(prev_col[lane], col[lane])
+		_connect(_prev_boss_id, entry.id)
+	_next_depth += 1
+
+	# Step 2 — branch segments. Each is two parallel runs of L nodes (lanes 0/1) that
+	# fan out of the preceding chokepoint and reconverge into a single shared chokepoint.
+	# The last segment's reconvergence chokepoint IS the pre-boss chokepoint (§3 step 2/3).
+	var num_segments: int = maxi(_rng.randi_range(_cfg.branch_segments_min, _cfg.branch_segments_max), 1)
+	var segments: Array = []        # each: { "run0": Array[int], "run1": Array[int] }
+	var prev_chokepoint: int = entry.id
+	for s: int in range(num_segments):
+		var run_len: int = maxi(_rng.randi_range(_cfg.branch_len_min, _cfg.branch_len_max), 1)
+		var run0: Array[int] = []
+		var run1: Array[int] = []
+		for i: int in range(run_len):
+			run0.append(_new_node(MapNode.Type.LEG, _next_depth + i, 0, act).id)
+			run1.append(_new_node(MapNode.Type.LEG, _next_depth + i, 1, act).id)
+		# Wire: the preceding chokepoint fans into the first node of BOTH runs.
+		_connect(prev_chokepoint, run0[0])
+		_connect(prev_chokepoint, run1[0])
+		# Wire each run depth→depth+1 (a run is consecutive depths at one lane).
+		for i: int in range(run_len - 1):
+			_connect(run0[i], run0[i + 1])
+			_connect(run1[i], run1[i + 1])
+		_next_depth += run_len
+		# Reconvergence chokepoint — both runs' last nodes funnel into a single shared LEG.
+		# For the final segment this same node serves as the pre-boss chokepoint (§3 step 3).
+		var chokepoint: MapNode = _new_node(MapNode.Type.LEG, _next_depth, 0, act)
+		_connect(run0[run_len - 1], chokepoint.id)
+		_connect(run1[run_len - 1], chokepoint.id)
+		_next_depth += 1
+		segments.append({"run0": run0, "run1": run1})
+		prev_chokepoint = chokepoint.id
+
+	# Step 3 — terminal boss for this act: the pre-boss chokepoint funnels into it.
+	var boss: MapNode = _new_node(MapNode.Type.BOSS, _next_depth, 0, act)
+	_connect(prev_chokepoint, boss.id)
+	_next_depth += 1
+	_prev_boss_id = boss.id
+	# terminal_id is set ONLY when the final act generates (reaching it == run victory).
+	if act == acts - 1:
+		terminal_id = boss.id
+
+	# Step 4 — distribute specials across this act's branch runs (never chokepoints),
+	# meeting the per-traversal budget and rolling state-gated event families.
+	_slot_specials(act, segments, run_state)
+
+	# Step 5 — assign leg params to the new act's nodes off the slice-2 pressure curve
+	# (the helper skips already-assigned earlier-act nodes, so visited legs never re-roll).
+	_assign_leg_params(_level, _cfg, _rng, _starting_target, _target_increment)
+
+	_generated_acts = act + 1
 
 
-## Add one crossover at a rolled interior boundary so a player can switch lanes by
-## *playing* the crossover node (lane commitment stays meaningful). Lanes 0/1 only.
-func _add_bridges(mid_columns: Array, rng: RandomNumberGenerator) -> void:
-	if mid_columns.size() < 2 or lane_count < 2:
+## Distribute SHOP / EVENT / CHALLENGE across an act's branch-run nodes only, meeting the
+## §1.2 per-traversal budget. CHALLENGE only when act ≥ 1 (post-boss-1 gate). For each
+## type a per-traversal target is rolled in [type_min, type_max] and hosted in that many
+## DISTINCT segments — one occurrence per placed run — so the worst-case path (one run per
+## segment) collects at most `target` ≤ type_max. Each hosting segment places the type in
+## ONE run (high branch_contrast → the two branches differ in content, a real composition
+## choice) or BOTH runs (low contrast → either branch collects it). §3.
+func _slot_specials(act: int, segments: Array, run_state: Dictionary) -> void:
+	if segments.is_empty():
 		return
-	var c: int = rng.randi_range(0, mid_columns.size() - 2)
-	var a: Array = mid_columns[c]
-	var b: Array = mid_columns[c + 1]
-	_connect(a[0], b[1])
-	_connect(a[1], b[0])
+	var specs: Array[Dictionary] = [
+		{"type": MapNode.Type.SHOP, "lo": _cfg.shops_per_path_min, "hi": _cfg.shops_per_path_max},
+		{"type": MapNode.Type.EVENT, "lo": _cfg.events_per_path_min, "hi": _cfg.events_per_path_max},
+	]
+	# Challenges are post-boss-1 only (§1.5 / 02 §1.1) — act 0 never hosts one.
+	if act >= 1:
+		specs.append({"type": MapNode.Type.CHALLENGE, "lo": _cfg.challenges_per_path_min, "hi": _cfg.challenges_per_path_max})
+
+	for spec: Dictionary in specs:
+		var target: int = _rng.randi_range(maxi(spec["lo"], 0), maxi(spec["hi"], 0))
+		var host_count: int = mini(target, segments.size())
+		if host_count <= 0:
+			continue
+		var order: Array[int] = _shuffled_indices(segments.size())
+		for k: int in range(host_count):
+			var seg: Dictionary = segments[order[k]]
+			if _rng.randf() < _cfg.branch_contrast:
+				# Content contrast: place into ONE run only so the branches differ.
+				var pick_run: Array[int] = seg["run0"] if _rng.randi_range(0, 1) == 0 else seg["run1"]
+				_place_special_in_run(pick_run, spec["type"], run_state)
+			else:
+				# No contrast: both runs host it, so either branch pick collects it.
+				_place_special_in_run(seg["run0"], spec["type"], run_state)
+				_place_special_in_run(seg["run1"], spec["type"], run_state)
 
 
-## Inject one in-lane reconverging fork: an extra off-branch node sharing a lane
-## node's predecessors and successors, so picking it forgoes the parallel leg but
-## rejoins immediately. This is the reserved CHALLENGE/EVENT home (Phase 02/03).
-func _add_fork(mid_columns: Array, rng: RandomNumberGenerator, cfg: MapGenConfig) -> void:
-	if mid_columns.is_empty() or rng.randf() > cfg.fork_chance:
-		return
-	var c: int = rng.randi_range(0, mid_columns.size() - 1)
-	var lane: int = rng.randi_range(0, lane_count - 1)
-	var base: MapNode = nodes[mid_columns[c][lane]]
-	if base.prev_ids.is_empty() or base.next_ids.is_empty():
-		return
-	var fork: MapNode = _new_node(MapNode.Type.LEG, base.depth, lane_count, base.act)
-	fork.is_off_branch = true
-	for p: int in base.prev_ids.duplicate():
-		_connect(p, fork.id)
-	for n: int in base.next_ids.duplicate():
-		_connect(fork.id, n)
-	# Phase 02: a POST-BOSS-1 off-branch fork becomes a challenge node (§1.1 — never
-	# pre-boss-1, so a 501/1-act run gets none and the early-anchor case vanishes). The
-	# parallel leg always remains, so Skip (§12) is structurally guaranteed. The target
-	# and deposit band are computed later, at arrival, from the live highest_cleared.
-	if base.act >= 1:
-		fork.type = MapNode.Type.CHALLENGE
-		fork.challenge = _roll_challenge_node(rng, cfg)
+## Fisher–Yates over [0, n) using the SEEDED generator. Array.shuffle() draws from the
+## global RNG and would break seed reproducibility, so it is never used in generation.
+func _shuffled_indices(n: int) -> Array[int]:
+	var a: Array[int] = []
+	for i: int in range(n):
+		a.append(i)
+	for i: int in range(n - 1, 0, -1):
+		var j: int = _rng.randi_range(0, i)
+		var tmp: int = a[i]
+		a[i] = a[j]
+		a[j] = tmp
+	return a
+
+
+## Convert one eligible LEG node in `run_ids` to `type`, honouring special_min_gap (no
+## two of the SAME type within that many indices in the run) and never overwriting a node
+## that is already a special. Hangs the type's payload (challenge roll / event family) on
+## the chosen node. Returns the chosen node, or null if no slot fits.
+func _place_special_in_run(run_ids: Array[int], type: MapNode.Type, run_state: Dictionary) -> MapNode:
+	var eligible: Array[int] = []
+	for i: int in range(run_ids.size()):
+		if (nodes[run_ids[i]] as MapNode).type != MapNode.Type.LEG:
+			continue   # already a special — never stack two on one node
+		var blocked: bool = false
+		for j: int in range(run_ids.size()):
+			if (nodes[run_ids[j]] as MapNode).type == type and absi(i - j) <= _cfg.special_min_gap:
+				blocked = true
+				break
+		if not blocked:
+			eligible.append(i)
+	if eligible.is_empty():
+		return null
+	var idx: int = eligible[_rng.randi_range(0, eligible.size() - 1)]
+	var node: MapNode = nodes[run_ids[idx]]
+	node.type = type
+	match type:
+		MapNode.Type.CHALLENGE:
+			node.challenge = _roll_challenge_node(_rng, _cfg)
+		MapNode.Type.EVENT:
+			node.event = _roll_event_node(run_state)
+		_:
+			pass
+	return node
+
+
+## Roll an EVENT node's trade-family against the live run-state (§3.6). accuracy is always
+## eligible; brush only where the run currently owns brush colors (available_brush_colors
+## non-empty). The 3 concrete options are rolled at arrival (events slice), so only the
+## family — the routed map icon — is fixed here.
+func _roll_event_node(run_state: Dictionary) -> EventNode:
+	var e: EventNode = EventNode.new()
+	var families: Array[StringName] = [&"accuracy"]
+	var brush_colors: Variant = run_state.get("available_brush_colors", null)
+	if brush_colors is Array and not (brush_colors as Array).is_empty():
+		families.append(&"brush")
+	e.reward_family = families[_rng.randi_range(0, families.size() - 1)]
+	return e
 
 
 ## Roll a challenge node's STABLE knobs (the ones independent of runtime progress):
@@ -159,12 +256,14 @@ func _roll_challenge_node(rng: RandomNumberGenerator, cfg: MapGenConfig) -> Chal
 	var c: ChallengeNode = ChallengeNode.new()
 	# darts-per-turn ∈ [dpt_min, dpt_max], the bust-grain shown up front (§5).
 	c.darts_per_turn = rng.randi_range(c.dpt_min, c.dpt_max)
-	# Offer one board-item family (Scoring / Placement / Brush) — the typed pick the
-	# player earns; rarity comes from finish-efficiency at win time (§6).
+	# Offer one high-impact FLAT board family (Scoring / Placement) — the typed pick the
+	# player earns; rarity comes from finish-efficiency at win time (§6). Brush was dropped
+	# here in the events slice (03 §1.2): brush is a *trade*, so it now lives on the free
+	# event surface, not the earned challenge surface — challenge and event never share a
+	# family, so there is no cross-surface rarity ceiling to enforce.
 	var families: Array[ScoringEnums.Family] = [
 		ScoringEnums.Family.SCORING,
 		ScoringEnums.Family.PLACEMENT,
-		ScoringEnums.Family.BRUSH,
 	]
 	c.reward_family = families[rng.randi_range(0, families.size() - 1)]
 	# Optionally handicap the race with a recycled benched-boss aim effect (§8); empty
@@ -231,6 +330,12 @@ func _assign_leg_params(level: LevelDefinition, cfg: MapGenConfig, rng: RandomNu
 
 	for id: int in nodes:
 		var n: MapNode = nodes[id]
+		# Incremental gen (§3.6): only assign nodes from the act being appended. An
+		# already-assigned node carries a non-zero target (legs roll ≥ starting_target;
+		# bosses get the act ceiling), so this skips every earlier act — a visited leg's
+		# params never re-roll, and the depth-map rebuild above still spans all acts.
+		if n.target_score != 0:
+			continue
 		# Bosses: fixed at the act ceiling, reference turns — tier checkpoints, not
 		# rolled. baseline_target at the boss depth already equals the act ceiling.
 		if n.type == MapNode.Type.BOSS:
@@ -366,11 +471,20 @@ func _snap(value: float, starting_target: int, target_increment: int) -> int:
 
 # ── Step 5: validation (fail loud on a bad roll) ────────────────────────────
 
+## Validate the graph generated SO FAR (incremental gen calls this after each act, so it
+## must tolerate a partial run). The frontier sink is the most-recently generated boss;
+## terminal_id is only asserted once every act is built. Adds slice-3's load-bearing
+## invariants: no specials on chokepoints, and every challenge sits beside a live parallel
+## run (the Skip path). Fail loud in debug so a bad roll never ships a skip-less map. §5.
 func _validate() -> void:
 	assert(start_id != -1 and nodes.has(start_id), "Map has no start node")
-	assert(terminal_id != -1 and nodes.has(terminal_id), "Map has no terminal boss")
 	assert((nodes[start_id] as MapNode).prev_ids.is_empty(), "Start node must have no predecessors")
-	assert((nodes[terminal_id] as MapNode).next_ids.is_empty(), "Terminal boss must have no successors")
+	# The current frontier sink is the latest boss; terminal_id matches it only when done.
+	var sink_id: int = _prev_boss_id
+	assert(sink_id != -1 and nodes.has(sink_id), "Map has no boss to anchor on")
+	assert((nodes[sink_id] as MapNode).next_ids.is_empty(), "Frontier boss must have no successors")
+	if _generated_acts >= acts:
+		assert(terminal_id == sink_id, "Terminal boss must be the final act's boss once fully generated")
 
 	# Every node reachable forward from start.
 	var seen: Dictionary = {}
@@ -384,9 +498,9 @@ func _validate() -> void:
 			stack.append(nid)
 	assert(seen.size() == nodes.size(), "Map has nodes unreachable from start")
 
-	# Every node can reach the terminal boss (reverse walk via prev edges).
+	# Every node can reach the frontier boss (reverse walk via prev edges).
 	var can_reach: Dictionary = {}
-	var rstack: Array[int] = [terminal_id]
+	var rstack: Array[int] = [sink_id]
 	while not rstack.is_empty():
 		var id: int = rstack.pop_back()
 		if can_reach.has(id):
@@ -396,13 +510,43 @@ func _validate() -> void:
 			rstack.append(pid)
 	assert(can_reach.size() == nodes.size(), "Map has dead-end nodes that cannot reach the boss")
 
-	# Per-act node budget stays in the design's 7–12 band.
-	var per_act: Dictionary = {}
+	# Exactly one sink overall — the frontier boss (an earlier boss now feeds the next entry).
+	var sinks: int = 0
 	for id: int in nodes:
-		var a: int = (nodes[id] as MapNode).act
-		per_act[a] = per_act.get(a, 0) + 1
+		if (nodes[id] as MapNode).next_ids.is_empty():
+			sinks += 1
+	assert(sinks == 1, "Map must have exactly one sink (the frontier boss), found %d" % sinks)
+
+	# Nodes-per-depth: a chokepoint (entry / reconvergence / pre-boss) is the SOLE node at
+	# its depth; a branch-run node always has a sibling at the other lane (its parallel run).
+	# This single fact identifies both "no specials on chokepoints" and the challenge Skip.
+	var depth_count: Dictionary = {}
+	for id: int in nodes:
+		var d: int = (nodes[id] as MapNode).depth
+		depth_count[d] = depth_count.get(d, 0) + 1
+
+	var per_act: Dictionary = {}
+	var boss_per_act: Dictionary = {}
+	for id: int in nodes:
+		var n: MapNode = nodes[id]
+		per_act[n.act] = per_act.get(n.act, 0) + 1
+		if n.type == MapNode.Type.BOSS:
+			boss_per_act[n.act] = boss_per_act.get(n.act, 0) + 1
+		# Specials (SHOP / EVENT / CHALLENGE) never sit on a chokepoint (no parallel run ⇒
+		# no opt-out). A special must have a same-depth sibling (a live parallel run).
+		if n.type == MapNode.Type.SHOP or n.type == MapNode.Type.EVENT or n.type == MapNode.Type.CHALLENGE:
+			assert(depth_count[n.depth] > 1, "Special node %d sits on a chokepoint (no parallel run)" % n.id)
+		# Challenge skip invariant (§1.5): post-boss-1 only, and its parallel run (the Skip
+		# path) must always exist — guaranteed by the same-depth sibling above.
+		if n.type == MapNode.Type.CHALLENGE:
+			assert(n.act >= 1, "Challenge node placed pre-boss-1 (act %d)" % n.act)
+			assert(depth_count[n.depth] > 1, "Challenge node %d has no parallel run (Skip impossible)" % n.id)
+	# Raised per-act PLACED-node budget (two runs per segment make acts larger than slice 1).
 	for a: int in per_act:
-		assert(per_act[a] >= 7 and per_act[a] <= 12, "Act %d node count %d outside 7–12 budget" % [a, per_act[a]])
+		assert(per_act[a] >= _cfg.act_node_budget_min and per_act[a] <= _cfg.act_node_budget_max,
+			"Act %d placed-node count %d outside [%d,%d] budget" % [a, per_act[a], _cfg.act_node_budget_min, _cfg.act_node_budget_max])
+	for a: int in boss_per_act:
+		assert(boss_per_act[a] == 1, "Act %d does not have exactly one boss" % a)
 
 
 # ── Traversal API (consumed by main.gd + MapView) ───────────────────────────

@@ -176,6 +176,11 @@ const CONSISTENCY_RARITY_TABLE: Array[Dictionary] = [
 	{"name": "Rare", "min_value": 8, "max_value": 10, "penalty": 5, "weight": 10, "color": Color(0.7, 0.3, 0.9)},
 ]
 
+# ── Event nodes (specs/map/03-events-impl.md §3) — the diagonal-swing trade ───
+# The rarity ramp + swing table live in EventRewards (a pure, headless-testable roller) so
+# the rolled distribution is unit-tested directly. Events reuse UPGRADE_TYPES + _apply_upgrade
+# here; EventRewards only rolls the rarity/gain/penalty into the upgrade-dict shape.
+
 # Flow state — tracks what the game is waiting for between throws
 var _awaiting_next_dart: bool = false
 var _awaiting_next_turn: bool = false
@@ -251,8 +256,18 @@ var _challenge_handicap: Boss = null
 ## (_continue_shop_after_pick) returns to the map instead of resuming a shop. §6.
 var _challenge_reward_pending: bool = false
 
+## True while an EVENT node's free 1-of-3 trade pick is pending (specs/map/03-events-impl.md).
+## Reuses the upgrade-card UI (accuracy) or the shop-pick UI (brush); this flag routes both
+## the selection and the skip back to the map (no shop resume, no bank touch) via the shared
+## pick chokepoints, exactly like _challenge_reward_pending but with no x01/board slide.
+var _event_pending: bool = false
+
 ## Run-scoped RNG for the arrival-time challenge target roll (§3). Randomized at run start.
 var _challenge_rng: RandomNumberGenerator = RandomNumberGenerator.new()
+
+## Run-scoped RNG for the event reward rolls (rarity ramp + swing table, 03 §3). Randomized
+## at run start; threaded into EventRewards so each event node rolls fresh.
+var _event_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 ## The modifier awaiting wedge picker configuration.
 var _pending_modifier: ScoringModifier = null
@@ -953,6 +968,13 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 	# A challenge re-clears an OLD number, so it never raises this (target ≤ highest).
 	_highest_cleared = maxi(_highest_cleared, int(response["target_score"]))
 
+	# Incremental map gen (slice 3 §3.6): a cleared boss that wasn't the run victory
+	# unlocks the next act. Append it now — against the LIVE run-state, so a state-gated
+	# event family (brush) is only placed where its prereq holds — BEFORE the map is next
+	# shown. A challenge race is not a boss, so it never triggers this.
+	if _boss_leg_just_cleared and _map_graph != null:
+		_map_graph.generate_next_act(_build_map_run_state())
+
 	# Accumulate this leg's unused darts into the persistent bank, trickling them
 	# into the rail's saved cache. For a won challenge race get_saved_darts() returns the
 	# unused deposit (budget − used), so the same line banks the leftover wager. §11.
@@ -974,10 +996,14 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 		hud.show_reward_choices(_current_rewards)
 		return
 
-	# Shops are no longer scheduled off the leg counter — they're their own map node,
-	# entered by choosing the shop node. Every leg win grants the accuracy/modifier
-	# pick; the map (shown when the player presses Next Leg) offers the next node.
-	_show_accuracy_pick()
+	# The per-leg free pick was REMOVED (03 §5b): that accuracy/modifier drip moved off
+	# "every leg" and onto the scarcer, weightier EVENT nodes (a bigger diagonal swing).
+	# A normal leg now ends at its leg-complete banner and returns to the map via the Next
+	# button — no upgrade panel. _show_accuracy_pick / _generate_upgrades stay in the file
+	# for the shop + (unchanged) boss-reward paths; events are their own sibling generator.
+	_leg_phase = ""
+	hud.score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [x01_game.current_leg, x01_game.target_score, x01_game.current_turn]
+	hud.next_leg_button.visible = true
 
 
 func _show_accuracy_pick() -> void:
@@ -1006,6 +1032,115 @@ func _show_accuracy_pick() -> void:
 		x01_game.current_turn,
 		_current_upgrades
 	)
+
+
+# ── Phase 03: event nodes (specs/map/03-events-impl.md) ──────────────────────
+
+## Arrive at an EVENT node: a menu moment (no board slide, no x01). Roll the 3 free
+## same-family trade options from the node's rolled family + its section (act) and show the
+## 1-of-3 pick UI. accuracy uses the upgrade-card surface (swing table); brush uses the
+## shop-pick surface (modifier-pool draw). The opportunity cost is purely spatial — the
+## forgone parallel run — so events never touch the bank (§4). §5a.
+func _enter_event(node: MapNode) -> void:
+	var family: StringName = node.event.reward_family if node.event != null else &"accuracy"
+	var section: int = node.act
+	_disable_hover()
+	# Residual arrival fallback (§2): if brush colors vanished between act-gen and arrival,
+	# downgrade to accuracy so the node never offers an empty family.
+	if family == &"brush":
+		_sync_brush_affinity()
+		if ModifierRegistry.available_brush_colors.is_empty():
+			family = &"accuracy"
+	var option_count: int = node.event.option_count if node.event != null else 3
+	if family == &"brush":
+		_enter_brush_event(section, option_count)
+	else:
+		_enter_accuracy_event(section)
+
+
+## The accuracy event surface: 3 distinct stat-axis swing trades on the upgrade-card UI. The
+## card UI is hardwired to 3 buttons (and the 6-axis pool always supplies 3 distinct), so this
+## surface is fixed at 3 regardless of option_count. Selection routes through
+## _on_upgrade_selected (which sees _event_pending and returns to the map without chaining the
+## per-leg modifier pick).
+func _enter_accuracy_event(section: int) -> void:
+	_event_pending = true
+	_leg_phase = "event_pick"
+	_current_upgrades = _generate_event_picks(&"accuracy", section)
+	# Cache stats so the card hover-preview reads the live throw stats (mirrors the pick).
+	var current_stats: Dictionary = {
+		"horizontal_range": throw_mechanic.horizontal_range,
+		"vertical_range": throw_mechanic.vertical_range,
+		"vertical_accuracy": throw_mechanic.vertical_accuracy,
+		"horizontal_accuracy": throw_mechanic.horizontal_accuracy,
+		"vertical_speed": throw_mechanic.vertical_speed,
+		"horizontal_speed": throw_mechanic.horizontal_speed,
+	}
+	var base_stats: Dictionary = {
+		"horizontal_range": _base_horizontal_range,
+		"vertical_range": _base_vertical_range,
+		"vertical_accuracy": _base_vertical_accuracy,
+		"horizontal_accuracy": _base_horizontal_accuracy,
+		"vertical_speed": _base_vertical_speed,
+		"horizontal_speed": _base_horizontal_speed,
+	}
+	hud.cache_stats(current_stats, base_stats)
+	hud.show_upgrade_choices(_current_upgrades)
+	hud.score_label.text = "EVENT — choose an Accuracy trade"
+
+
+## The brush event surface: a family-pure ScoringModifier draw at a section-ramp rarity,
+## reusing the challenge reward's pick generation + the shop-pick UI. Selection routes
+## through the shop-pick path (gated by _event_pending) back to the map. If the pool can't
+## supply any brush picks, fall back to the accuracy surface (the §2 residual guard).
+func _enter_brush_event(section: int, option_count: int = 3) -> void:
+	var rarity: ScoringEnums.Rarity = _event_rarity_enum(section)
+	# Ask for option_count distinct brushes; the pool may supply fewer (then we offer fewer,
+	# the §2 relax-distinctness note). If it can supply none, fall back to the accuracy surface.
+	var picks: Array[Dictionary] = _generate_challenge_reward_picks(ScoringEnums.Family.BRUSH, rarity, option_count)
+	if picks.is_empty():
+		_enter_accuracy_event(section)
+		return
+	_shop_pick_items = picks
+	_event_pending = true
+	_leg_phase = "event_pick"
+	var replacement_info: Array[String] = []
+	for item: Dictionary in picks:
+		replacement_info.append(_get_replacement_text(item["data"] as ScoringModifier))
+	hud.show_shop_pick_items(_shop_pick_items, _banked_darts, replacement_info)
+	hud.score_label.text = "EVENT — choose a Brush trade"
+
+
+## Generate the 3 free same-family options for an event. accuracy draws 3 distinct stat-axis
+## trades off the swing table (§3) via EventRewards; brush is handled at its own surface in
+## _enter_brush_event, so this only builds accuracy.
+func _generate_event_picks(family: StringName, section: int) -> Array[Dictionary]:
+	return EventRewards.generate_accuracy_picks(UPGRADE_TYPES, section, _event_rng)
+
+
+## The section-ramp rarity as a ScoringEnums.Rarity (for the brush modifier-pool draw).
+func _event_rarity_enum(section: int) -> ScoringEnums.Rarity:
+	match EventRewards.roll_rarity_index(section, _event_rng):
+		2:
+			return ScoringEnums.Rarity.RARE
+		1:
+			return ScoringEnums.Rarity.UNCOMMON
+		_:
+			return ScoringEnums.Rarity.COMMON
+
+
+## The event pick is resolved (accuracy applied or brush modifier added/declined) — clear
+## state and return to the map. No bank mutation ever happens here (§4).
+func _finish_event() -> void:
+	_event_pending = false
+	_shop_pick_items.clear()
+	_current_upgrades = []
+	_leg_phase = ""
+	_turn_score = 0
+	_turn_darts_scored = 0
+	hud.update_turn_score(0)
+	hud.upgrade_container.visible = false
+	_show_map()
 
 
 ## Start the next-dart delay timer. Called after the score tween finishes.
@@ -1108,6 +1243,8 @@ func _on_map_node_chosen(node: MapNode) -> void:
 		_start_shop(response)
 	elif node.type == MapNode.Type.CHALLENGE:
 		_enter_challenge(node)
+	elif node.type == MapNode.Type.EVENT:
+		_enter_event(node)
 	else:
 		_slide_to_leg_node(node)
 
@@ -1277,10 +1414,9 @@ func _finish_challenge_win() -> void:
 ## UI + selection path; the pick chokepoint returns to the map via _finish_challenge_reward.
 func _show_challenge_reward(family: ScoringEnums.Family, rarity: ScoringEnums.Rarity) -> void:
 	_sync_brush_affinity()
-	# Brush items are affinity-gated; if the player owns no colors, fall back to a Scoring
-	# pick rather than offer an empty family (§6 note).
-	if family == ScoringEnums.Family.BRUSH and ModifierRegistry.available_brush_colors.is_empty():
-		family = ScoringEnums.Family.SCORING
+	# Challenge families are FLAT board families only (SCORING / PLACEMENT) since the events
+	# slice moved the brush *trade* off the earned surface (03 §1.2). The old empty-brush
+	# fallback is therefore dead — a challenge can never roll BRUSH.
 	var picks: Array[Dictionary] = _generate_challenge_reward_picks(family, rarity)
 	if picks.is_empty():
 		_finish_challenge_reward()
@@ -1310,8 +1446,11 @@ func _rarity_name(rarity: ScoringEnums.Rarity) -> String:
 ## Build the typed reward picks: distinct modifiers whose family matches, at the earned
 ## rarity. Generated per-type (not via generate_distinct_at_rarity's weight overrides) so
 ## the offer stays family-PURE even for single-type families (its fallback would leak an
-## off-family type). Capped at shop_pick_count.
-func _generate_challenge_reward_picks(family: ScoringEnums.Family, rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
+## off-family type). Capped at `max_count` (default shop_pick_count; a brush event passes its
+## option_count). Offers fewer if the family pool can't supply that many distinct types.
+func _generate_challenge_reward_picks(family: ScoringEnums.Family, rarity: ScoringEnums.Rarity, max_count: int = -1) -> Array[Dictionary]:
+	if max_count < 0:
+		max_count = shop_pick_count
 	var family_types: Array = []
 	for type in ModifierRegistry.MODIFIER_TYPES:
 		var sample: ScoringModifier = type.generate(rarity)
@@ -1321,7 +1460,7 @@ func _generate_challenge_reward_picks(family: ScoringEnums.Family, rarity: Scori
 	var picks: Array[Dictionary] = []
 	var owned: Array[String] = _get_owned_fingerprints()
 	for type in family_types:
-		if picks.size() >= shop_pick_count:
+		if picks.size() >= max_count:
 			break
 		var mod: ScoringModifier = type.generate(rarity)
 		var attempts: int = 0
@@ -1450,6 +1589,18 @@ func _build_run_state() -> Dictionary:
 		"scoring_modifier_manager": scoring_modifier_manager,
 		"main": self,
 		"active_rewards": _active_rewards,
+	}
+
+
+## Build the snapshot MapGraph.generate_next_act consults for state-gated placement
+## (slice 3 §3.6): the currently-available brush colors (so a brush event only spawns
+## where it can pay off) and the highest score cleared. Syncs brush affinity first so the
+## colors reflect freshly-owned color modifiers.
+func _build_map_run_state() -> Dictionary:
+	_sync_brush_affinity()
+	return {
+		"available_brush_colors": ModifierRegistry.available_brush_colors.duplicate(),
+		"highest_cleared": _highest_cleared,
 	}
 
 
@@ -1933,6 +2084,11 @@ func _continue_shop_after_pick() -> void:
 		_shop_pick_items.clear()
 		_finish_challenge_reward()
 		return
+	# A brush event pick (or its decline / wedge-config tail) funnels here too — finish the
+	# event and return to the map rather than resuming a shop that isn't running. 03 §5.
+	if _event_pending:
+		_finish_event()
+		return
 	_leg_phase = "shop"
 	if _shop_darts_remaining <= 0:
 		_end_shop_delayed()
@@ -2302,6 +2458,7 @@ func _on_run_confirmed() -> void:
 	# climbs with every banked win; the roll RNG is run-scoped so each node anchors fresh.
 	_highest_cleared = x01_game.starting_target
 	_challenge_rng.randomize()
+	_event_rng.randomize()
 
 	# Debug: skip to the boss leg by jumping to the final leg's target
 	if debug_boss_immediately and _current_level != null:
@@ -2347,6 +2504,13 @@ func _on_upgrade_selected(index: int) -> void:
 	_apply_upgrade(_current_upgrades[index])
 	_update_stats_display()
 
+	# An EVENT accuracy pick is a standalone free trade — apply it and go straight back to
+	# the map (no per-leg modifier-pick chain; that drip was removed with the per-leg pick).
+	if _event_pending:
+		_recache_stats()
+		_finish_event()
+		return
+
 	# Move to Phase 2: modifier pick
 	_leg_phase = "modifier_pick"
 	_current_modifiers = []
@@ -2366,9 +2530,10 @@ func _on_upgrade_selected(index: int) -> void:
 
 ## Player picks a scoring modifier card.
 func _on_modifier_selected(index: int) -> void:
-	# Shop pick AND the challenge typed-reward pick both populate _shop_pick_items and
-	# reuse the shop selection path (the reward isn't in a shop, hence the extra flag). §6.
-	if _in_shop or _challenge_reward_pending:
+	# Shop pick, the challenge typed-reward pick, AND the brush event pick all populate
+	# _shop_pick_items and reuse the shop selection path (none but the shop is in a shop,
+	# hence the extra flags). §6 / 03 §5.
+	if _in_shop or _challenge_reward_pending or _event_pending:
 		_on_shop_pick_selected(index)
 		return
 
@@ -2413,9 +2578,9 @@ func _on_modifier_selected(index: int) -> void:
 
 ## Player skips the scoring modifier pick.
 func _on_modifier_skipped() -> void:
-	# Declining the earned typed reward is allowed; it funnels through the same chokepoint,
-	# which returns to the map (the reward was guaranteed, not forced). §6.
-	if _in_shop or _challenge_reward_pending:
+	# Declining the earned typed reward — or a free brush event trade — is allowed; it funnels
+	# through the same chokepoint, which returns to the map (the offer was free, not forced).
+	if _in_shop or _challenge_reward_pending or _event_pending:
 		_continue_shop_after_pick()
 		return
 	_leg_phase = ""
@@ -3126,9 +3291,9 @@ func _finish_picker() -> void:
 	hud.hide_picker()
 	_pending_modifier = null
 	_picker_selected_wedge = -1
-	# A challenge reward modifier that needed board config (Hotspot / Wedge Swap / Brush)
-	# finishes here too — route through the shared chokepoint so it returns to the map. §6.
-	if _in_shop or _challenge_reward_pending:
+	# A challenge reward OR brush event modifier that needed board config (Hotspot / Wedge
+	# Swap / Brush) finishes here too — route through the shared chokepoint back to the map.
+	if _in_shop or _challenge_reward_pending or _event_pending:
 		_continue_shop_after_pick()
 		return
 	_leg_phase = ""
