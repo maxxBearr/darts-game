@@ -26,6 +26,60 @@ var effective_wedge_colors: Array[Dictionary] = []
 ## but only PER_DART modifiers are called during process_score().
 var active_modifiers: Array[Resource] = []
 
+# ── GEOMETRY family substrate (see the geometry spec) ─────────────────────────
+# Computed board geometry, parallel to voided_rings / hotspot_rings: the manager owns it so
+# boss hooks can read and fight it, and it persists across legs like every other board
+# mutation. recompute_geometry() rebuilds all three from base constants + the active GEOMETRY
+# modifiers (read straight off active_modifiers) + the live values/colors, clamps the floors,
+# renormalizes, and emits geometry_changed. The dartboard mirrors these for hit detection +
+# rendering (per-wedge bounds + weighted wedge boundaries).
+
+## Emitted whenever recompute_geometry() rebuilds the board geometry. main mirrors the new
+## state onto the dartboard (which re-flows) and the board studs.
+signal geometry_changed
+
+## Per-wedge angular weights (20, default 1.0). Mean 1.0 (sum 20); a wedge's angular width is
+## weight/20 × 360° = weight × 18°. Parity Shift fattens matching wedges here; floors clamp.
+var effective_wedge_weights: Array[float] = []
+
+## Per-wedge normalized ring boundaries (20 entries). Each entry is a Dictionary keyed by ring
+## ("inner_single"/"triple"/"outer_single"/"double") → [inner_norm, outer_norm]. Seeded from the
+## RING_* base widths; Ring Trade + Color Territory reshape them per wedge (zero-sum per column).
+var effective_ring_bounds: Array[Dictionary] = []
+
+## Bull radii (normalized): "single_bull" and "double_bull" outer radii. The eight geometry
+## trades NEVER touch these — only the Bigger Bull boss-reward relic moves them, after which it
+## calls recompute_geometry() so the inner single re-pays the space the bull took.
+var bull_radii: Dictionary = {"single_bull": GEOM_SINGLE_BULL_OUTER, "double_bull": GEOM_DOUBLE_BULL_OUTER}
+
+# Base normalized ring radii — MUST mirror dartboard.gd's RING_* constants so the manager's
+# computed bounds and the board's hit detection agree.
+const GEOM_DOUBLE_BULL_OUTER: float = 0.032
+const GEOM_SINGLE_BULL_OUTER: float = 0.080
+const GEOM_INNER_SINGLE_OUTER: float = 0.480
+const GEOM_TRIPLE_OUTER: float = 0.530
+const GEOM_OUTER_SINGLE_OUTER: float = 0.760
+const GEOM_DOUBLE_OUTER: float = 0.830
+
+# Base band widths (with the bull at its base radius). inner_single's base is derived per
+# recompute from the live single-bull radius so the Bigger Bull relic composes (it eats into
+# the inner single). triple 0.050, double 0.070 per the spec; outer single 0.230.
+const GEOM_TRIPLE_BASE_WIDTH: float = GEOM_TRIPLE_OUTER - GEOM_INNER_SINGLE_OUTER          # 0.050
+const GEOM_OUTER_SINGLE_BASE_WIDTH: float = GEOM_OUTER_SINGLE_OUTER - GEOM_TRIPLE_OUTER     # 0.230
+const GEOM_DOUBLE_BASE_WIDTH: float = GEOM_DOUBLE_OUTER - GEOM_OUTER_SINGLE_OUTER           # 0.070
+
+## Ring order inside-out — the order ring bounds are laid down radially.
+const RING_ORDER: Array[String] = ["inner_single", "triple", "outer_single", "double"]
+
+## Minimum fraction of a ring band's BASE width it can be squeezed to by geometry items;
+## clamped after all rules apply, then the freed space is redistributed so the wedge's radial
+## span is conserved. Protects the singles — the board's brakes. Max's call to tune.
+@export var ring_band_floor: float = 0.45
+
+## Same, for a wedge's base 18° angular width: a wedge can't be narrowed below this fraction of
+## 18° by Parity Shift. Clamped last, then renormalized to 360°. Max's call to tune.
+@export var wedge_angle_floor: float = 0.45
+
 ## Segments voided by a boss this turn, keyed "<wedge_index>:<RingName>" (e.g.
 ## "3:Double"). A voided segment scores 0 no matter what modifiers would do to it.
 ## The Void boss sets this each turn; whole-void wedges (value zeroed) are included
@@ -63,6 +117,18 @@ var glass_cannon_active: bool = false:
 	set(value):
 		if glass_cannon_active != value:
 			glass_cannon_active = value
+			_bump_state_version()
+
+## Parity Out checkout restriction (geometry spec §9b). The out-rule narrows which wedge-based
+## finishes count by the wedge's CURRENT effective face value parity:
+##   -1 = no restriction (standard double-out), 0 = even-valued wedges only, 1 = odd-valued only.
+## The bull is EXEMPT ("the bull always outs" — 25 is odd, but exempting it keeps 50 finishable
+## under Even Out, §9b cond 3). DYNAMIC: validity reads effective_wedge_values, so a Wedge Value
+## +1 flips a dead double live mid-race. Set per-challenge by ParityOutBoss; -1 between races.
+var checkout_parity: int = -1:
+	set(value):
+		if checkout_parity != value:
+			checkout_parity = value
 			_bump_state_version()
 
 ## Hit history for the current turn (cleared every turn via reset_for_turn).
@@ -128,6 +194,123 @@ func _init_default_board_state() -> void:
 			"outer_single": single_color,
 			"double": multi_color,
 		})
+
+	# Seed the geometry substrate from the freshly-defaulted values/colors. recompute_geometry
+	# reads active_modifiers (empty here at run start) and the base constants, so this lands the
+	# canonical board geometry that the dartboard mirrors.
+	recompute_geometry()
+
+
+## Rebuild the board geometry from base constants, fold in the active GEOMETRY modifiers, clamp
+## the floors LAST, renormalize, and emit geometry_changed. DYNAMIC — recomputed against the
+## live board state (Color Territory tracks current paint, Parity Shift tracks current face
+## values), so geometry is contestable and composes with the painter/swap builds.
+##
+## Triggers (all funnel here): a geometry modifier acquired (add_modifier), brush apply / wedge
+## swap (apply_to_board, via add_modifier), Prism recolor-on-hit (prism_boss calls this between
+## darts), the Bigger Bull relic, and run/leg init. Order of folds: ring-trade dial, then
+## per-wedge color scaling, then parity weights — weights are multiplicative so the order is
+## irrelevant; floors are clamped last.
+func recompute_geometry() -> void:
+	# 1. Accumulate the active geometry rules off active_modifiers (run-scoped, so they persist
+	#    across legs — the family never lives in a leg-end reset path).
+	var dial: float = 0.0  # signed triple↔double width shift, summed across Ring Trade stacks.
+	var color_rules: Array[Dictionary] = []   # {color:int, growth:float}
+	var parity_rules: Array[Dictionary] = []  # {even:bool, factor:float}
+	for m: Resource in active_modifiers:
+		if m is RingTradeModifier:
+			dial += (m as RingTradeModifier).triple_shift
+		elif m is ColorTerritoryModifier:
+			var ct: ColorTerritoryModifier = m as ColorTerritoryModifier
+			color_rules.append({"color": int(ct.target_color), "growth": ct.growth_factor})
+		elif m is ParityShiftModifier:
+			var ps: ParityShiftModifier = m as ParityShiftModifier
+			parity_rules.append({"even": ps.grow_even, "factor": ps.weight_factor})
+
+	# 2–3. Delegate the zero-sum reshape MATH to the pure GeometrySolver (headless-testable; no
+	#       autoload deps). It folds the dial, per-wedge color scaling, and parity weights, clamps
+	#       the floors last, and renormalizes — returning the angular weights + per-wedge bounds.
+	var single_bull: float = float(bull_radii.get("single_bull", GEOM_SINGLE_BULL_OUTER))
+	var result: Dictionary = GeometrySolver.recompute(
+		dial, color_rules, parity_rules,
+		effective_wedge_values, effective_wedge_colors,
+		single_bull, ring_band_floor, wedge_angle_floor
+	)
+	effective_wedge_weights = result["weights"]
+	effective_ring_bounds = result["bounds"]
+
+	# Rebuild the O(1) fatness table from the freshly-computed geometry (see _fatness_cache).
+	_rebuild_fatness_cache()
+
+	geometry_changed.emit()
+
+
+## Recompute the per-(wedge, ring) fatness table = −(angular weight × annular area) from the
+## current geometry, so path ranking is a table lookup instead of per-comparison math.
+func _rebuild_fatness_cache() -> void:
+	_fatness_cache.clear()
+	for wi: int in range(20):
+		var weight: float = effective_wedge_weights[wi] if wi < effective_wedge_weights.size() else 1.0
+		var bounds: Dictionary = effective_ring_bounds[wi] if wi < effective_ring_bounds.size() else {}
+		var entry: Dictionary = {}
+		for rk: String in RING_ORDER:
+			if bounds.has(rk):
+				var inner: float = float(bounds[rk][0])
+				var outer: float = float(bounds[rk][1])
+				entry[rk] = -weight * maxf(outer * outer - inner * inner, 0.0)
+			else:
+				entry[rk] = 0.0
+		_fatness_cache.append(entry)
+
+
+## Active geometry rules for the board studs (one stud per rule). Returns {name, summary,
+## modifier} entries in acquisition order; summary is a live one-line effect description.
+func get_active_geometry_rules() -> Array[Dictionary]:
+	var rules: Array[Dictionary] = []
+	for m: Resource in active_modifiers:
+		if m is RingTradeModifier or m is ColorTerritoryModifier or m is ParityShiftModifier:
+			rules.append({
+				"name": (m as ScoringModifier).modifier_name,
+				"summary": _geometry_rule_summary(m),
+				"modifier": m,
+			})
+	return rules
+
+
+## All active board-rule stud entries: the geometry rules PLUS any non-geometry board law (today
+## just Parity Out, §9b cond 2 — the first non-geometry stud the generic {glyph, color} entry was
+## architected for). Each entry is {name, summary, glyph, color, modifier}; geometry entries omit
+## glyph/color so board_studs falls back to its per-class dispatch. main pushes this to the studs.
+func get_active_board_rules() -> Array[Dictionary]:
+	var rules: Array[Dictionary] = get_active_geometry_rules()
+	# Glass Cannon overrides Parity Out (any ring outs), so the parity stud would be misleading
+	# while it's active — suppress it (the §9b cond 4 mutual-exclusion, mirrored on the studs).
+	if checkout_parity != -1 and not glass_cannon_active:
+		var even: bool = checkout_parity == 0
+		rules.append({
+			"name": "%s Out" % ("Even" if even else "Odd"),
+			"summary": "Finish double must be on %s wedges" % ("even" if even else "odd"),
+			"glyph": "E" if even else "O",
+			"color": Color(0.95, 0.75, 0.35),   # amber — reads apart from the geometry hues
+			"modifier": null,
+		})
+	return rules
+
+
+## A short live-effect summary string for a geometry rule's stud tooltip.
+func _geometry_rule_summary(m: Resource) -> String:
+	if m is RingTradeModifier:
+		var s: float = (m as RingTradeModifier).triple_shift
+		if s >= 0.0:
+			return "Triples +%.0f%% width, doubles pay" % (s / GEOM_TRIPLE_BASE_WIDTH * 100.0)
+		return "Doubles +%.0f%% width, triples pay" % (absf(s) / GEOM_DOUBLE_BASE_WIDTH * 100.0)
+	if m is ColorTerritoryModifier:
+		var ct: ColorTerritoryModifier = m as ColorTerritoryModifier
+		return "%s bands +%.0f%%" % [ct.get_color_name(), ct.growth_factor * 100.0]
+	if m is ParityShiftModifier:
+		var ps: ParityShiftModifier = m as ParityShiftModifier
+		return "%s wedges ×%.2f angular" % ["Even" if ps.grow_even else "Odd", ps.weight_factor]
+	return ""
 
 
 ## Run a raw score result through all active PER_DART modifiers.
@@ -299,6 +482,10 @@ func add_modifier(modifier: Resource, config: Dictionary, explicit_replacement: 
 		# wedge values/colors, so register it here from the modifier's stored choice.
 		if modifier is HotspotModifier:
 			_register_hotspot(modifier as HotspotModifier)
+		# Geometry is computed from active_modifiers + live values/colors, so any ON_ACQUIRE
+		# board mutation (a geometry item, a brush paint, a wedge swap) can change it — recompute
+		# now. Cheap (20 wedges) and self-limiting when no geometry items are owned.
+		recompute_geometry()
 		_bump_state_version()
 
 	UnlockManager.on_item_acquired({
@@ -406,6 +593,9 @@ func reset_for_run() -> void:
 		ScoringEnums.StreakCategory.WEDGE: 1,
 		ScoringEnums.StreakCategory.COLOR: 1,
 	}
+	# Bull radii are run-scoped (the Bigger Bull relic is earned per run); reset to base before
+	# _init_default_board_state recomputes the geometry off them.
+	bull_radii = {"single_bull": GEOM_SINGLE_BULL_OUTER, "double_bull": GEOM_DOUBLE_BULL_OUTER}
 	_init_default_board_state()
 	# Drop the cached checkout-solver candidates and their derived caches. These are
 	# built from effective_wedge_values and only rebuilt when empty, so without this
@@ -497,6 +687,13 @@ func _score_through_modifiers(result: Dictionary, context: Dictionary) -> Dictio
 	#    no streak continuing, total is 0 → factor 1 → no change; e.g. one wedge streak at
 	#    count 2 → factor 2 (×2), not 2ⁿ across n streaks. Each streak still runs its own
 	#    continue/break + state update inside streak_contribution().
+	# Snapshot the settled additive baseline (ring + bonuses + Σhotspot) before the
+	# streak multiply, so display surfaces can show the two axes separately
+	# ("oS28 ×3×5" instead of an unreconstructable "×15"). Display-only fields —
+	# nothing in the pipeline reads them back.
+	result["board_multiplier"] = result["multiplier"]
+	result["streak_factor"] = 1
+
 	var streak_total: int = 0
 	var top_streak: ScoringModifier = null
 	var top_contribution: int = 0
@@ -513,6 +710,7 @@ func _score_through_modifiers(result: Dictionary, context: Dictionary) -> Dictio
 			top_streak = modifier as ScoringModifier
 	if streak_total > 0:
 		var streak_factor: int = 1 + streak_total
+		result["streak_factor"] = streak_factor
 		_apply_combined_streak_factor(result, streak_factor, top_streak)
 		result["streak_triggered"] = true
 		result["streak_name"] = top_streak.modifier_name if top_streak != null else "Streak"
@@ -707,8 +905,21 @@ func synthesize_result(target: Dictionary) -> Dictionary:
 ## Maximum checkout paths to return from the solver.
 @export var max_displayed_paths: int = 5
 
+## Hard ceiling on speculative-score evaluations per solve_checkout enumeration. The enumerator
+## fragments its cache by streak-hash, so a pathological board (deep checkout, many candidates)
+## can burn unbounded time producing few usable paths — this budgets the WORK, not the stored
+## path count, and bails with whatever partial results it has. Iterative deepening keeps real
+## solves far under this; it's a backstop, not the primary bound. 0 disables the cap.
+@export var solver_spec_call_budget: int = 15000
+
 ## Cached candidate targets for the solver (rebuilt when board state changes).
 var _solver_candidates: Array[Dictionary] = []
+
+## Per-(wedge, ring) fatness lookup (20 entries; ring_key → fatness float = −effective area).
+## Rebuilt on geometry change so path ranking reads an O(1) table instead of recomputing the
+## annular-sector area (dict access + float math) on every _compare comparison. Bull/off-board
+## fatness is computed inline (cheap constants).
+var _fatness_cache: Array[Dictionary] = []
 
 ## Cached preferred remainders for the setup solver.
 var _preferred_remainders: Array[int] = []
@@ -801,38 +1012,121 @@ func solve_checkout(remaining: int, darts_left: int) -> Array[Array]:
 	if _solver_candidates.is_empty():
 		_build_solver_candidates()
 
+	# #4 — arm the single-dart prune (remaining > max_single × darts_left) used by BOTH the
+	# deepening existence pass and the enumeration, so neither runs unpruned on a fresh board.
+	if _one_dart_finishable_dirty:
+		_compute_one_dart_finishable()
+
 	var _perf_start: int = Time.get_ticks_usec() if debug_perf_log else 0
 	var _perf_counters: Array[int] = [0, 0, 0, 0]
 
-	var cache: Dictionary = {}
-	var raw_paths: Array[Array] = _solve_recursive(remaining, darts_left, cache, _perf_counters)
+	# Iterative deepening (#1): find the MINIMAL checkout length k via the existence solver, then
+	# enumerate ONLY at depth k. Enumerating at the full darts_left would also build every padded
+	# longer finish (a 2-dart checkout fluffed to 4–5 darts) — that cross-product is the d=4/5
+	# explosion. Minimal-length path counts stay small, so full semantics are kept (a genuine
+	# 4-dart route at r=201 with 5 darts IS found) at roughly d=3 cost.
+	var exist_cache: Dictionary = {}
+	var k: int = 0
+	for d: int in range(1, darts_left + 1):
+		if _solve_first(remaining, d, exist_cache):
+			k = d
+			break
 
-	# Rank and limit
-	raw_paths.sort_custom(_compare_paths)
-	if raw_paths.size() > max_displayed_paths:
-		raw_paths.resize(max_displayed_paths)
+	var raw_paths: Array[Array] = []
+	if k > 0:
+		var enum_cache: Dictionary = {}
+		raw_paths = _solve_recursive(remaining, k, enum_cache, _perf_counters)
+
+	# Capture the enumeration size BEFORE the display trim — raw_count is the perf story; the
+	# trimmed size is always ≤ max_displayed_paths and hides it.
+	var raw_count: int = raw_paths.size()
+	var enum_ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0 if debug_perf_log else 0.0
+
+	# Rank + trim, decorating each path's fatness ONCE (#3) instead of recomputing it per
+	# comparison across an O(n log n) sort.
+	_rank_and_trim(raw_paths)
 
 	if debug_perf_log:
 		var ms: float = (Time.get_ticks_usec() - _perf_start) / 1000.0
-		_perf_log("solve_checkout r=%d d=%d  %.1fms  recursive_calls=%d  spec_calls=%d  cache_hits=%d  cache_misses=%d  paths=%d" % [remaining, darts_left, ms, _perf_counters[0], _perf_counters[1], _perf_counters[2], _perf_counters[3], raw_paths.size()])
+		_perf_log("solve_checkout r=%d d=%d k=%d  %.1fms (deepen+enum %.1fms, sort %.1fms)  recursive_calls=%d  spec_calls=%d  cache_hits=%d  cache_misses=%d  raw_paths=%d  shown=%d" % [remaining, darts_left, k, ms, enum_ms, ms - enum_ms, _perf_counters[0], _perf_counters[1], _perf_counters[2], _perf_counters[3], raw_count, raw_paths.size()])
 
 	return raw_paths
 
 
-## Check if a ring name is a valid checkout finish given current reward rules.
-func _is_valid_finish(ring_name: String) -> bool:
+## Decorate each path with (length, summed fatness, off-board count) ONCE, sort the decorations,
+## and trim `paths` in place to max_displayed_paths. Avoids _target_fatness being recomputed on
+## every comparison (the pre-change _compare_paths summed fatness inside the comparator). With
+## iterative deepening all paths share length k, so the tiebreaks (fatter, then fewer off-board)
+## do the ordering.
+func _rank_and_trim(paths: Array[Array]) -> void:
+	if paths.size() <= 1:
+		return
+	var decorated: Array = []
+	for p: Array in paths:
+		var fat: float = 0.0
+		var off: int = 0
+		for step: Dictionary in p:
+			fat += _target_fatness(step["target"])
+			if step["target"]["ring_name"] == "Off Board":
+				off += 1
+		decorated.append({"p": p, "len": p.size(), "fat": fat, "off": off})
+	decorated.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a["len"] != b["len"]:
+			return a["len"] < b["len"]
+		if not is_equal_approx(a["fat"], b["fat"]):
+			return a["fat"] < b["fat"]
+		return a["off"] < b["off"])
+	paths.clear()
+	for i: int in range(mini(decorated.size(), max_displayed_paths)):
+		paths.append(decorated[i]["p"] as Array)
+
+
+## Public wrapper for the finish-validity seam, so live consumers (main's bust preview /
+## checkout highlights) resolve checkouts through the SAME predicate the solver uses — no
+## drifting copies of the out-rule. wedge_index is needed for the parity predicate (-1 = bull /
+## no wedge, always exempt).
+func is_valid_finish(ring_name: String, wedge_index: int = -1) -> bool:
+	return _is_valid_finish(ring_name, wedge_index)
+
+
+## The finish-validity seam (geometry spec §9b cond 1): a generalized out-rule rather than a
+## hardcoded double-out. Composed of (a) which RING types finish — doubles always, triples when
+## allow_triple_checkout (the Triple Outs reward = superset; doubles-off is the natural future
+## flag, unused today), and (b) the Parity Out predicate that narrows wedge finishes by parity.
+## Glass Cannon takes precedence over everything: any ring (except off-board) outs. Because
+## Glass Cannon is a REWARD and Parity Out a HANDICAP, the spec's "they can't both hold"
+## mutual-exclusion (§9b cond 4) is resolved HERE at runtime — the reward wins — rather than via
+## the reward-to-reward excludes[] array (which only governs RuleModifierReward pairs).
+func _is_valid_finish(ring_name: String, wedge_index: int = -1) -> bool:
+	if ring_name == "Off Board":
+		return false
 	if glass_cannon_active:
-		return ring_name != "Off Board"
-	if ring_name == "Double" or ring_name == "Double Bull":
 		return true
+	# (a) Ring-type gate. Bull is a double for finish purposes; triples only when enabled.
+	var ring_ok: bool = ring_name == "Double" or ring_name == "Double Bull"
 	if allow_triple_checkout and ring_name == "Triple":
-		return true
-	return false
+		ring_ok = true
+	if not ring_ok:
+		return false
+	# (b) Parity Out narrowing. Only wedge-based finishes (wedge_index ≥ 0) are filtered; the
+	# bull (wedge_index -1) is always exempt. Parity reads the LIVE effective face value.
+	if checkout_parity != -1 and wedge_index >= 0 and wedge_index < effective_wedge_values.size():
+		var face_even: bool = (effective_wedge_values[wedge_index] % 2) == 0
+		var want_even: bool = checkout_parity == 0
+		if face_even != want_even:
+			return false
+	return true
 
 
 func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary, _pc: Array[int] = [0, 0, 0, 0]) -> Array[Array]:
 	_pc[0] += 1
 	if darts_left <= 0 or remaining <= 0:
+		return []
+
+	# Work budget (#2): bail this subtree once the speculative-score count is spent, so a
+	# pathological enumeration degrades to partial results instead of freezing the frame. NOT
+	# cached (the budget is global to the call, so caching a truncated [] would poison reuse).
+	if solver_spec_call_budget > 0 and _pc[1] >= solver_spec_call_budget:
 		return []
 
 	if _max_single_dart_score > 0 and remaining > _max_single_dart_score * darts_left:
@@ -865,12 +1159,16 @@ func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary, _pc: A
 
 		var step: Dictionary = {"target": target, "result": result}
 
-		if scored == remaining and _is_valid_finish(ring_name):
+		if scored == remaining and _is_valid_finish(ring_name, target.get("wedge_index", -1)):
 			# Checkout on this dart
 			paths.append([step])
 		elif scored < remaining and scored >= 0 and darts_left > 1:
 			var new_remaining: int = remaining - scored
-			# Prune: can't finish from 1 (unless Glass Cannon is active — any ring works)
+			# Prune the one UNIVERSALLY dead remainder: from 1 you can never finish (the minimum
+			# valid finish scores 2). Rule-specific dead remainders (e.g. Even Out stranding 2)
+			# need no extra prune — the recursion simply finds no valid finish there and returns
+			# [], and the setup solver steers around them via _one_dart_finishable (§9b cond 1).
+			# Glass Cannon makes 1 finishable (single 1), so it skips the prune.
 			if new_remaining != 1 or glass_cannon_active:
 				var sub_paths: Array[Array] = _solve_recursive(new_remaining, darts_left - 1, cache, _pc)
 				for sub: Array in sub_paths:
@@ -884,53 +1182,54 @@ func _solve_recursive(remaining: int, darts_left: int, cache: Dictionary, _pc: A
 	return paths
 
 
-## Rank a target by "fatness" — larger physical areas rank higher.
-## Returns a lower number for fatter (more reliable) targets.
-func _target_fatness(target: Dictionary) -> int:
-	var ring: String = target["ring_name"]
-	match ring:
-		"Outer Single":
-			return 0
-		"Inner Single":
-			return 1
-		"Double":
-			return 2
-		"Single Bull":
-			return 3
-		"Triple":
-			return 4
-		"Double Bull":
-			return 5
-		"Off Board":
-			return 6
-	return 7
+## Rank a target by "fatness" — larger physical areas rank as fatter (more reliable).
+## Returns a LOWER number for fatter targets (so path sorting prefers them). Reads the EFFECTIVE
+## annular-sector area off the live geometry (per-wedge weight × ring band radii) rather than the
+## old static ring assumption, so suggested paths prefer geometry-enlarged targets and avoid
+## floor-squeezed singles. Returns -area: fatter (bigger area) sorts first; off-board/unknowns
+## get the worst (highest) cost.
+func _target_fatness(target: Dictionary) -> float:
+	var ring: String = target.get("ring_name", "")
+	if ring == "Off Board" or ring == "":
+		return 1000.0
+	if ring == "Double Bull":
+		var rdb: float = float(bull_radii.get("double_bull", GEOM_DOUBLE_BULL_OUTER))
+		return -PI * rdb * rdb
+	if ring == "Single Bull":
+		var rsb: float = float(bull_radii.get("single_bull", GEOM_SINGLE_BULL_OUTER))
+		var rdb2: float = float(bull_radii.get("double_bull", GEOM_DOUBLE_BULL_OUTER))
+		return -PI * maxf(rsb * rsb - rdb2 * rdb2, 0.0)
+	# Wedge ring: O(1) lookup from the table rebuilt on each geometry change.
+	var wi: int = target.get("wedge_index", -1)
+	var key: String = _ring_name_to_key(ring)
+	if wi >= 0 and wi < _fatness_cache.size() and _fatness_cache[wi].has(key):
+		return _fatness_cache[wi][key]
+	# Fallback (cache not yet built / no wedge context): compute from the band directly.
+	var band: Array = _fatness_ring_band(wi, ring)
+	var weight: float = 1.0
+	if wi >= 0 and wi < effective_wedge_weights.size():
+		weight = effective_wedge_weights[wi]
+	return -weight * maxf(float(band[1]) * float(band[1]) - float(band[0]) * float(band[0]), 0.0)
 
 
-## Compare two paths for sorting: fewest darts, then fattest, then fewest off-board.
-func _compare_paths(a: Array, b: Array) -> bool:
-	# Fewest darts first
-	if a.size() != b.size():
-		return a.size() < b.size()
-
-	# Fattest reliable segment (sum of fatness scores — lower is fatter)
-	var fatness_a: int = 0
-	var fatness_b: int = 0
-	var offboard_a: int = 0
-	var offboard_b: int = 0
-	for step: Dictionary in a:
-		fatness_a += _target_fatness(step["target"])
-		if step["target"]["ring_name"] == "Off Board":
-			offboard_a += 1
-	for step: Dictionary in b:
-		fatness_b += _target_fatness(step["target"])
-		if step["target"]["ring_name"] == "Off Board":
-			offboard_b += 1
-
-	if fatness_a != fatness_b:
-		return fatness_a < fatness_b
-
-	# Fewest off-board darts
-	return offboard_a < offboard_b
+## Effective [inner, outer] normalized radii for a wedge ring, from the live geometry bounds if
+## available, else the base constants (no wedge context / geometry not yet computed).
+func _fatness_ring_band(wedge_index: int, ring_name: String) -> Array:
+	var key: String = _ring_name_to_key(ring_name)
+	if wedge_index >= 0 and wedge_index < effective_ring_bounds.size():
+		var bounds: Dictionary = effective_ring_bounds[wedge_index]
+		if bounds.has(key):
+			return [float(bounds[key][0]), float(bounds[key][1])]
+	match key:
+		"inner_single":
+			return [GEOM_SINGLE_BULL_OUTER, GEOM_INNER_SINGLE_OUTER]
+		"triple":
+			return [GEOM_INNER_SINGLE_OUTER, GEOM_TRIPLE_OUTER]
+		"outer_single":
+			return [GEOM_TRIPLE_OUTER, GEOM_OUTER_SINGLE_OUTER]
+		"double":
+			return [GEOM_OUTER_SINGLE_OUTER, GEOM_DOUBLE_OUTER]
+	return [0.0, 0.0]
 
 
 ## Check if a wedge's inner and outer singles produce different total_score
@@ -1062,7 +1361,7 @@ func _solve_first(remaining: int, darts_left: int, cache: Dictionary) -> bool:
 
 		var ring_name: String = target["ring_name"]
 
-		if scored == remaining and _is_valid_finish(ring_name):
+		if scored == remaining and _is_valid_finish(ring_name, target.get("wedge_index", -1)):
 			found = true
 		elif scored < remaining and scored >= 0 and darts_left > 1:
 			var new_remaining: int = remaining - scored
@@ -1077,9 +1376,13 @@ func _solve_first(remaining: int, darts_left: int, cache: Dictionary) -> bool:
 
 
 ## Compute the map of remainders that have a 1-dart checkout under the
-## current modifier configuration. Cheap — only runs the 22 double candidates
-## through the preview pipeline (no recursion). Maps remainder → fatness of
-## the best finishing target so setup ranking can prefer fatter finishes.
+## current modifier configuration. Cheap — only runs the VALID finishing ring candidates
+## (doubles, plus triples when allow_triple_checkout) through the preview pipeline (no
+## recursion). Maps remainder → fatness of the best finishing target so setup ranking can
+## prefer fatter finishes. Each candidate is gated by _is_valid_finish, so the Parity Out
+## out-rule automatically drops dead-parity wedges from the map — and the setup solver, which
+## steers toward 1-dart-finishable remainders, steers around the rule's dead remainders for free
+## (Even Out stranding remaining=2 falls out here, §9b cond 1). Bull stays exempt.
 func _compute_one_dart_finishable() -> void:
 	var _perf_start: int = Time.get_ticks_usec() if debug_perf_log else 0
 	_one_dart_finishable.clear()
@@ -1090,31 +1393,41 @@ func _compute_one_dart_finishable() -> void:
 		if modifier.has_method("reset_streak_state"):
 			modifier.reset_streak_state()
 
-	var double_fatness: int = _target_fatness({"ring_name": "Double"})
-	var double_bull_fatness: int = _target_fatness({"ring_name": "Double Bull"})
+	var double_bull_fatness: float = _target_fatness({"ring_name": "Double Bull"})
 
-	# 20 wedge doubles — what score does each produce under current modifiers?
+	# The wedge finishing rings to sweep: doubles always, triples only when they out. Each is
+	# still per-wedge parity-gated below via _is_valid_finish.
+	var finish_rings: Array[String] = ["Double"]
+	if allow_triple_checkout:
+		finish_rings.append("Triple")
+
+	# 20 wedges × valid finishing rings — what score does each produce under current modifiers?
 	for wedge_idx: int in range(20):
 		var face: int = effective_wedge_values[wedge_idx]
-		var color: int = ScoringEnums.SegmentColor.RED if wedge_idx % 2 == 0 else ScoringEnums.SegmentColor.GREEN
-		if effective_wedge_colors.size() == 20:
-			color = effective_wedge_colors[wedge_idx]["double"]
-		var synth: Dictionary = synthesize_result({
-			"wedge_index": wedge_idx, "ring_name": "Double",
-			"face_value": face, "multiplier": 2,
-			"segment_color": color, "is_bull": false,
-		})
-		# Preview mode — does NOT mutate streak state
-		var result: Dictionary = process_score(synth, true)
-		var score: int = result["total_score"]
-		if score > 0:
-			# Keep the fattest finishing target if multiple doubles produce
-			# the same score under modifiers
-			var current: int = _one_dart_finishable.get(score, 999)
-			if double_fatness < current:
-				_one_dart_finishable[score] = double_fatness
+		for ring_name: String in finish_rings:
+			if not _is_valid_finish(ring_name, wedge_idx):
+				continue   # dead under the out-rule (e.g. Parity Out drops the wrong parity)
+			var ring_key: String = _ring_name_to_key(ring_name)
+			var mult: int = 3 if ring_name == "Triple" else 2
+			var color: int = (ScoringEnums.SegmentColor.RED if wedge_idx % 2 == 0 else ScoringEnums.SegmentColor.GREEN)
+			if effective_wedge_colors.size() == 20:
+				color = effective_wedge_colors[wedge_idx][ring_key]
+			var synth: Dictionary = synthesize_result({
+				"wedge_index": wedge_idx, "ring_name": ring_name,
+				"face_value": face, "multiplier": mult,
+				"segment_color": color, "is_bull": false,
+			})
+			# Preview mode — does NOT mutate streak state
+			var result: Dictionary = process_score(synth, true)
+			var score: int = result["total_score"]
+			if score > 0:
+				# Keep the fattest finishing target if several produce the same score.
+				var fat: float = _target_fatness({"ring_name": ring_name, "wedge_index": wedge_idx})
+				var current: float = _one_dart_finishable.get(score, 999.0)
+				if fat < current:
+					_one_dart_finishable[score] = fat
 
-	# Double bull
+	# Double bull (always a valid finish — exempt from Parity Out)
 	var bull_synth: Dictionary = synthesize_result({
 		"wedge_index": -1, "ring_name": "Double Bull",
 		"face_value": 25, "multiplier": 2,
@@ -1123,7 +1436,7 @@ func _compute_one_dart_finishable() -> void:
 	var bull_result: Dictionary = process_score(bull_synth, true)
 	var bull_score: int = bull_result["total_score"]
 	if bull_score > 0:
-		var current: int = _one_dart_finishable.get(bull_score, 999)
+		var current: float = _one_dart_finishable.get(bull_score, 999.0)
 		if double_bull_fatness < current:
 			_one_dart_finishable[bull_score] = double_bull_fatness
 
@@ -1309,6 +1622,10 @@ func calculate_checkout_segments(remaining_score: int) -> Array[Dictionary]:
 			var mult: int = ring_info["multiplier"]
 			var ring_name: String = ring_info["ring_name"]
 			var ring_key: String = _ring_name_to_key(ring_name)
+			# Parity Out drops the wrong-parity wedges from the checkout highlight set so the
+			# board's gold finishes match what actually outs (and dead doubles read as dimmed).
+			if not _is_valid_finish(ring_name, wedge_idx):
+				continue
 			var synthetic_result: Dictionary = {
 				"face_value": face_value,
 				"multiplier": mult,
@@ -1369,7 +1686,7 @@ func find_equivalent_segments(target_score: int, is_finish: bool = false) -> Arr
 		var ring_name: String = candidate["ring_name"]
 		if ring_name == "Off Board":
 			continue
-		if is_finish and not _is_valid_finish(ring_name):
+		if is_finish and not _is_valid_finish(ring_name, candidate.get("wedge_index", -1)):
 			continue
 		var synth: Dictionary = synthesize_result(candidate)
 		var result: Dictionary = process_score(synth, true)

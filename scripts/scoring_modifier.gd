@@ -107,10 +107,26 @@ func get_streak_count() -> int:
 	return 0
 
 
-## Get a short display name for what this streak tracks (e.g., "Ring ×3").
+## Get a short display name for what this streak tracks (e.g., "Wedge +2").
 ## Override in streak modifier subclasses. Returns "" for non-streak modifiers.
 func get_streak_display() -> String:
 	return ""
+
+
+## This streak's CURRENT bonus contribution to the combined streak factor
+## (factor = 1 + Σ bonuses across all active streaks — bonuses ADD, they never
+## compound). 0 when the streak is idle or at count 1 (first hit scores plain).
+## Override in streak modifier subclasses. Returns 0 for non-streak modifiers.
+func get_streak_bonus() -> int:
+	return 0
+
+
+## The bonus this streak would contribute if the NEXT dart continues it
+## (i.e. at count + 1). This is the number the target-hover preview prices in,
+## so the HUD shows it next to the current bonus to keep the two surfaces
+## reconcilable. Override in streak modifier subclasses.
+func get_next_streak_bonus() -> int:
+	return 0
 
 
 ## Return true if hitting target would continue this modifier's active streak.

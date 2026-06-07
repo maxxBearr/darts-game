@@ -17,6 +17,9 @@ static var ALL_REWARDS: Array[RuleModifierReward] = [
 	preload("res://resources/rewards/glass_cannon.tres"),
 	preload("res://resources/rewards/all_in.tres"),
 	preload("res://resources/rewards/mirror_zone.tres"),
+	# Bigger Bull — the sanctioned flat for the bull (no other upgrade path); grows both bull
+	# radii into the inner single. Outside the geometry family/pool (earned-flat tier).
+	preload("res://resources/rewards/bigger_bull.tres"),
 ]
 
 

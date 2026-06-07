@@ -24,6 +24,9 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.PER_DART
 	config_type = ScoringEnums.ConfigType.NONE
 	streak_category = ScoringEnums.StreakCategory.COLOR
+	# STREAK family (geometry spec §10): the tag exists so the challenge draw can roll streaks as an
+	# earned prize — it does NOT enroll them in the board-item steering story (capacity-gated axis).
+	family = ScoringEnums.Family.STREAK
 
 
 func get_streak_state_hash() -> int:
@@ -90,9 +93,21 @@ func get_streak_count() -> int:
 	return _streak_count
 
 
+## Current bonus into the combined factor: (count − 1) × growth, floored at 0.
+func get_streak_bonus() -> int:
+	return maxi(0, _streak_count - 1) * streak_growth
+
+
+## Bonus if the next dart continues the streak (count + 1 → count × growth).
+func get_next_streak_bonus() -> int:
+	return _streak_count * streak_growth
+
+
+## Bonus-language display ("Red +2" = next-hit contribution) — see
+## StreakBonusModifier.get_streak_display for why bonuses, not factors.
 func get_streak_display() -> String:
 	var color_name: String = COLOR_NAMES.get(target_color, "Color")
-	return "%s ×%d" % [color_name, _streak_count]
+	return "%s +%d" % [color_name, get_next_streak_bonus()]
 
 
 const COLOR_NAMES: Dictionary = {

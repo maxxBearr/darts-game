@@ -65,13 +65,26 @@ enum StreakCategory {
 
 ## Player-facing taxonomy for board-modifying items, used by the shop / reward pool
 ## to steer offers (e.g. surface one of each). Distinct from ModifierKind, which is
-## about behavior (RELIC vs BOARD_MUTATION). Streaks are NOT a family — they live on
-## the separate multiplicative axis, acquired into component-gated slots.
+## about behavior (RELIC vs BOARD_MUTATION).
 enum Family {
-	NONE,       ## Not a board item (streaks, legacy/sidelined modifiers).
+	NONE,       ## Not a board item (legacy/sidelined modifiers).
 	SCORING,    ## Moves the face-value axis: Hotspot, Wedge Value.
-	PLACEMENT,  ## Moves things around: Wedge Swap (and deferred Tier-2 geometry edits).
+	PLACEMENT,  ## SIDELINED (geometry spec §9a) — its only item, Wedge Swap, was cut from the
+	            ## pool (fake trade + can't honor earned rarity). Enum value kept for save-data
+	            ## safety and the dormant class. Nothing in the live pool reports this family.
+	            ## Tier grammar (geometry spec §10): SCORING + STREAK = laddered (challenges + shop);
+	            ## GEOMETRY + BRUSH = rarity-less trades (events + shop); ACCURACY = component-stat
+	            ## trades (events). The family boundary IS the tier boundary.
 	BRUSH,      ## Recolor: Brush. Its own utility family because color drives color-streak builds.
+	GEOMETRY,   ## Board-wide, rarity-less, zero-sum reshapes of the physical layout: Ring Trade,
+	            ## Color Territory, Parity Shift. NOT Placement — geometry reshapes the whole board's
+	            ## risk profile (the family identity); Placement is single-target. See the geometry spec.
+	STREAK,     ## Wedge / Color streaks. Geometry spec §10 amends the 2026-06-03 "streaks excluded
+	            ## from the family taxonomy" decision: streaks stay OUT of the board-item *steering*
+	            ## story conceptually (they live on the separate multiplicative axis, acquired into
+	            ## component-gated slots — the shop never family-steers them). The value exists purely
+	            ## because the CHALLENGE draw filters by family, so streaks need a tag to be rollable
+	            ## as an earned prize. Plumbing, not taxonomy.
 }
 
 ## Which slot a dart component fits in.

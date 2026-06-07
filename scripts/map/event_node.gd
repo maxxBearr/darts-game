@@ -8,8 +8,9 @@ extends Resource
 ## the event payload (the 1-of-3 pick) is filled by the events slice.
 
 ## The trade-family this event offers (rolled from the eligible trade-families). Drives
-## the icon and the grant path. Launch families: &"accuracy" (always) and &"brush"
-## (only where available_brush_colors is non-empty). Later: &"geometry", &"scoring".
+## the icon and the grant path. Active families: &"accuracy" (always), &"brush" (only where
+## available_brush_colors is non-empty), and &"geometry" (always — its zero-sum trades are a
+## legal build-around even when currently inert). Later: &"scoring".
 @export var reward_family: StringName = &"accuracy"
 
 ## How many options the player chooses among on arrival. 3 per the locked model;

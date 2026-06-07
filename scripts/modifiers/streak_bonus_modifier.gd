@@ -23,6 +23,9 @@ func _init() -> void:
 	timing = ScoringEnums.ModifierTiming.PER_DART
 	config_type = ScoringEnums.ConfigType.NONE
 	streak_category = ScoringEnums.StreakCategory.WEDGE
+	# STREAK family (geometry spec §10): the tag exists so the challenge draw can roll streaks as an
+	# earned prize — it does NOT enroll them in the board-item steering story (capacity-gated axis).
+	family = ScoringEnums.Family.STREAK
 
 
 func get_streak_state_hash() -> int:
@@ -102,8 +105,23 @@ func get_streak_count() -> int:
 	return _streak_count
 
 
+## Current bonus into the combined factor: (count − 1) × growth, floored at 0.
+## Count 2 with growth 1 → +1 (alone that's ×2: the 1 base output + this bonus).
+func get_streak_bonus() -> int:
+	return maxi(0, _streak_count - 1) * streak_growth
+
+
+## Bonus if the next dart continues the streak (count + 1 → count × growth).
+## Idle (count 0) correctly yields 0: the first hit only STARTS the streak.
+func get_next_streak_bonus() -> int:
+	return _streak_count * streak_growth
+
+
+## Bonus-language display ("Wedge +2" = next-hit contribution), used in the
+## target-hover streak lines so they sum visibly into its streak factor
+## (factor = 1 + these). Factor-language ("×2") read as compounding — it isn't.
 func get_streak_display() -> String:
-	return "Wedge ×%d" % _streak_count
+	return "Wedge +%d" % get_next_streak_bonus()
 
 
 static func get_pool_weight() -> int:

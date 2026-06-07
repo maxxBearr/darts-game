@@ -98,6 +98,10 @@ func on_dart_landed(result: Dictionary, game_state: Dictionary) -> void:
 
 	smm._bump_state_version()
 	dartboard.effective_wedge_colors = smm.effective_wedge_colors
+	# Color Territory is DYNAMIC — recompute geometry against the freshly-repainted board so a
+	# grown color re-flows as Prism contests it (this fires at score resolution, between darts).
+	smm.recompute_geometry()
+	dartboard.set_geometry(smm.effective_wedge_weights, smm.effective_ring_bounds, smm.bull_radii)
 	dartboard.play_prism_recolor(segments)
 
 
@@ -126,6 +130,9 @@ func on_leg_end(game_state: Dictionary) -> void:
 		if i < _original_colors.size():
 			smm.effective_wedge_colors[i] = _original_colors[i].duplicate()
 	smm._bump_state_version()
+	# Restoring colors can revert a Color Territory grow — recompute so the geometry follows.
+	smm.recompute_geometry()
 
 	dartboard.effective_wedge_colors = smm.effective_wedge_colors
+	dartboard.set_geometry(smm.effective_wedge_weights, smm.effective_ring_bounds, smm.bull_radii)
 	dartboard.queue_redraw()

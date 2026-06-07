@@ -58,7 +58,8 @@ extends Resource
 @export var reward_family: ScoringEnums.Family = ScoringEnums.Family.NONE
 
 ## Which benched-boss effect handicaps the race (§8). Empty = a clean precision race.
-## One of the recycled aim handicaps: &"rotation", &"narrow_double", &"two_darts".
+## One of the aim handicaps: &"rotation", &"narrow_double", or the §9b Parity Out pair
+## &"even_out" / &"odd_out". (&"two_darts" stays benched — it would clobber the rolled dpt.)
 @export var handicap_id: StringName = &""
 
 

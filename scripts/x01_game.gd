@@ -31,6 +31,11 @@ var allow_triple_checkout: bool = false
 ## When true, any dart at exactly 0 wins (any ring), but busts end the run.
 var glass_cannon_active: bool = false
 
+## Parity Out checkout restriction (geometry spec §9b), mirrored from the ParityOutBoss handicap
+## so live win/bust agrees with the solver's _is_valid_finish: -1 = none, 0 = even-valued wedges
+## only, 1 = odd-valued only. The bull is always exempt. -1 between races.
+var checkout_parity: int = -1
+
 ## When false (Mirror-Zone relic), a would-be-bust no longer reverts or ends the
 ## turn — the player overshoots below 0 and keeps throwing. Negative remaining_score
 ## becomes a legal state. Default true preserves vanilla bust behavior exactly.
@@ -106,6 +111,28 @@ func start_challenge_race(new_target: int, race_dpt: int, deposit: int) -> void:
 	start_leg()
 
 
+## Whether a finishing dart is a valid checkout under the live out-rule. Mirrors
+## ScoringModifierManager._is_valid_finish so live win/bust stays in lockstep with the solver
+## (geometry spec §9b cond 1): doubles always finish, triples only with allow_triple_checkout,
+## Glass Cannon lets any ring finish (and wins precedence over a Parity Out handicap), and
+## Parity Out narrows wedge finishes to the matching face-value parity. The bull is always exempt.
+func _is_valid_finish_ring(ring_name: String, wedge_face: int, is_bull: bool) -> bool:
+	if ring_name == "Off Board":
+		return false
+	if glass_cannon_active:
+		return true
+	var ring_ok: bool = ring_name == "Double" or ring_name == "Double Bull"
+	if allow_triple_checkout and ring_name == "Triple":
+		ring_ok = true
+	if not ring_ok:
+		return false
+	if checkout_parity != -1 and not is_bull:
+		var want_even: bool = checkout_parity == 0
+		if (wedge_face % 2 == 0) != want_even:
+			return false
+	return true
+
+
 ## Process a single dart throw. Returns a dictionary describing what happened.
 ## result is the dictionary from dartboard.calculate_score() containing:
 ## face_value, multiplier, total_score, ring_name.
@@ -124,11 +151,9 @@ func process_throw(result: Dictionary) -> Dictionary:
 	var points: int = result["total_score"]
 	var new_remaining: int = remaining_score - points
 
-	# Determine if this dart landed on a valid finishing ring
+	# Determine if this dart landed on a valid finishing ring (the out-rule seam, §9b).
 	var ring_name: String = result["ring_name"]
-	var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
-	var is_triple: bool = ring_name == "Triple"
-	var is_valid_finish: bool = is_double or (allow_triple_checkout and is_triple) or glass_cannon_active
+	var is_valid_finish: bool = _is_valid_finish_ring(ring_name, int(result.get("face_value", 0)), result.get("is_bull", false))
 
 	# Check win condition: exactly 0 remaining AND valid finish ring
 	var is_leg_won: bool = new_remaining == 0 and is_valid_finish
@@ -150,7 +175,12 @@ func process_throw(result: Dictionary) -> Dictionary:
 			bust_reason = "Can't finish on 1"
 		elif new_remaining == 0 and not is_valid_finish:
 			is_bust = true
-			bust_reason = "Must finish on a double"
+			# Under Parity Out, a double on the WRONG-parity wedge reads as a closer miss than
+			# "not a double", so name it precisely when the parity rule is what rejected it.
+			if checkout_parity != -1 and (ring_name == "Double" or ring_name == "Triple") and not result.get("is_bull", false):
+				bust_reason = "Must finish on a %s-valued wedge" % ("even" if checkout_parity == 0 else "odd")
+			else:
+				bust_reason = "Must finish on a double"
 
 	# Apply score changes
 	if is_bust:

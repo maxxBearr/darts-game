@@ -6,10 +6,15 @@ extends RefCounted
 
 const _WedgeValue = preload("res://scripts/modifiers/wedge_value_modifier.gd")
 const _StreakBonus = preload("res://scripts/modifiers/streak_bonus_modifier.gd")
+# Sidelined (geometry spec §9a) — kept preloaded so the class stays compiled/usable for the
+# dormant PICK_TWO_WEDGES plumbing, but deliberately absent from MODIFIER_TYPES (never rolled).
 const _WedgeSwap = preload("res://scripts/modifiers/wedge_swap_modifier.gd")
 const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
 const _ColorStreak = preload("res://scripts/modifiers/color_streak_modifier.gd")
 const _Hotspot = preload("res://scripts/modifiers/hotspot_modifier.gd")
+const _RingTrade = preload("res://scripts/modifiers/ring_trade_modifier.gd")
+const _ColorTerritory = preload("res://scripts/modifiers/color_territory_modifier.gd")
+const _ParityShift = preload("res://scripts/modifiers/parity_shift_modifier.gd")
 
 ## Rarity weight shift applied to all modifier rolls during the current run.
 ## Set from main.gd based on LevelDefinition.rarity_weight_shift.
@@ -35,22 +40,50 @@ static func _shifted_weights(weights: Array[int]) -> Array[int]:
 	return result
 
 
-## The live item pool after the scoring-on-the-board migration. Three board-item
-## families (Scoring / Placement / Brush) plus the two streak axes:
+## The live item pool after the scoring-on-the-board migration. Board-item families plus the
+## two streak axes:
 ##   Scoring:   Hotspot, Wedge Value
-##   Placement: Wedge Swap
 ##   Brush:     Brush (affinity-gated — weight 0 until the player owns a color)
+##   Geometry:  Ring Trade, Color Territory, Parity Shift (rarity-less trades)
 ##   Streaks:   Wedge Streak (shaft-gated), Color Streak (barrel-gated)
 ## Dropped from the pool: ColorBonus, OddEvenBonus, Even/Odd/Parity streaks (anti-spatial
-## globals/parity). Sidelined: FlipSign (class + Mirror-Zone relic kept, just unlisted).
+## globals/parity). Sidelined: FlipSign (class + Mirror-Zone relic kept, just unlisted) and —
+## as of the geometry spec §9a — Wedge Swap (the _WedgeSwap preload + PICK_TWO_WEDGES plumbing
+## stay dormant exactly like FlipSign). Wedge Swap fails two family laws at once: its generate()
+## hardcodes [100,0,0] so it can't honor the challenge channel's earned rarity, and it's a fake
+## trade (swapping 1/5 away from the 20 buys out the board's native punishment — a disguised
+## accuracy flat). No honest channel ⇒ cut from the pool, not re-homed.
+## The GEOMETRY family enters the pool as three classes (eight variants total — Ring Trade ×2
+## directions, Color Territory ×4 colors, Parity Shift ×2 parities). Each class's pool weight is
+## ~8 per variant so every one of the eight starts at the spec's 8–10 weight; generate() rolls a
+## random variant, and get_config_fingerprint() keys on the variant so distinctness logic treats
+## them as eight separate entries. Geometry is rarity-less (its rarity_weights are [100,0,0]).
 const MODIFIER_TYPES: Array = [
 	_Hotspot,
 	_WedgeValue,
-	_WedgeSwap,
 	_Brush,
 	_StreakBonus,
 	_ColorStreak,
+	_RingTrade,
+	_ColorTerritory,
+	_ParityShift,
 ]
+
+
+## Enumerate all eight concrete GEOMETRY pool entries (rarity-less). Used by the event
+## geometry surface (draw 3 distinct of the eight) and the geometry tests, where we need the
+## variants by hand rather than via weighted random rolls. Order is stable for tests.
+static func geometry_pool() -> Array[ScoringModifier]:
+	var pool: Array[ScoringModifier] = []
+	pool.append(_RingTrade.make(true))
+	pool.append(_RingTrade.make(false))
+	pool.append(_ColorTerritory.make(ScoringEnums.SegmentColor.RED))
+	pool.append(_ColorTerritory.make(ScoringEnums.SegmentColor.GREEN))
+	pool.append(_ColorTerritory.make(ScoringEnums.SegmentColor.WHITE))
+	pool.append(_ColorTerritory.make(ScoringEnums.SegmentColor.BLACK))
+	pool.append(_ParityShift.make(true))
+	pool.append(_ParityShift.make(false))
+	return pool
 
 
 ## Generate a fully random modifier: pick a type from the pool (weighted),

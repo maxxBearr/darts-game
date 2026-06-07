@@ -251,8 +251,8 @@ var _challenge_deposit: int = 0
 ## darts_per_turn captured before the race's dpt override, restored when the race ends.
 var _challenge_prev_dpt: int = 3
 
-## The instantiated handicap boss effect for this race (rotation / narrow_double), or
-## null for a clean precision race. Driven directly (not via boss_manager) so it doesn't
+## The instantiated handicap boss effect for this race (rotation / narrow_double / parity out),
+## or null for a clean precision race. Driven directly (not via boss_manager) so it doesn't
 ## draw from the level boss pool. §8.
 var _challenge_handicap: Boss = null
 
@@ -265,6 +265,12 @@ var _challenge_reward_pending: bool = false
 ## the selection and the skip back to the map (no shop resume, no bank touch) via the shared
 ## pick chokepoints, exactly like _challenge_reward_pending but with no x01/board slide.
 var _event_pending: bool = false
+
+## True while the pending event is specifically a GEOMETRY trade — its pick plays the board's
+## re-flow tween on screen (the reshape IS the reward) before returning to the map, whereas
+## accuracy/brush events return instantly. Set in _enter_geometry_event, consumed in
+## _continue_shop_after_pick, cleared in _finish_event.
+var _geometry_event_pending: bool = false
 
 ## Run-scoped RNG for the arrival-time challenge target roll (§3). Randomized at run start.
 var _challenge_rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -363,6 +369,10 @@ var all_in_active: bool = false
 ## was cut in round 3 — the leg intro carries that transition now — so this drives only
 ## _start_challenge_race, which has no intro and needs the slide as its sole transition.)
 @export var leg_transition_duration: float = 0.5
+
+## After a GEOMETRY event pick, how long the reshaped board lingers on screen once its re-flow
+## tween settles, before the map slides back — a short beat so the new layout registers.
+@export var geometry_event_linger: float = 0.5
 
 @export_group("Score Animation")
 
@@ -1060,8 +1070,49 @@ func _enter_event(node: MapNode) -> void:
 	var option_count: int = node.event.option_count if node.event != null else 3
 	if family == &"brush":
 		_enter_brush_event(section, option_count)
+	elif family == &"geometry":
+		_enter_geometry_event(option_count)
 	else:
 		_enter_accuracy_event(section)
+
+
+## The geometry event surface: a GEOMETRY-family draw of `option_count` distinct of the eight
+## rarity-less trades, on the shop-pick UI (reused as-is). No rarity is rolled (conservation eats
+## the rarity axis — the section ramp does not apply); selection routes through the shop-pick
+## path back to the map via _event_pending. Geometry items configure instantly (ConfigType.NONE).
+func _enter_geometry_event(option_count: int = 3) -> void:
+	var picks: Array[Dictionary] = _generate_geometry_event_picks(option_count)
+	if picks.is_empty():
+		_enter_accuracy_event(0)
+		return
+	_shop_pick_items = picks
+	_event_pending = true
+	# Geometry picks reshape the board, and that reshape is the reward — flag so the pick plays the
+	# re-flow on screen before the map returns (see _finish_geometry_event).
+	_geometry_event_pending = true
+	_leg_phase = "event_pick"
+	var replacement_info: Array[String] = []
+	for item: Dictionary in picks:
+		replacement_info.append(_get_replacement_text(item["data"] as ScoringModifier))
+	hud.show_shop_pick_items(_shop_pick_items, _banked_darts, replacement_info)
+	hud.score_label.text = "EVENT — choose a Geometry trade"
+
+
+## Draw `count` distinct of the eight rarity-less GEOMETRY pool entries (Ring Trade ×2, Color
+## Territory ×4, Parity Shift ×2). Distinctness is by config fingerprint (direction/color/parity),
+## and owned entries are skipped so a repeat isn't offered. No rarity field is set.
+func _generate_geometry_event_picks(count: int) -> Array[Dictionary]:
+	var pool: Array[ScoringModifier] = ModifierRegistry.geometry_pool()
+	pool.shuffle()
+	var owned: Array[String] = _get_owned_fingerprints()
+	var picks: Array[Dictionary] = []
+	for mod: ScoringModifier in pool:
+		if picks.size() >= count:
+			break
+		if mod.get_config_fingerprint() in owned:
+			continue
+		picks.append({"type": "modifier", "data": mod})
+	return picks
 
 
 ## The accuracy event surface: 3 distinct stat-axis swing trades on the upgrade-card UI. The
@@ -1139,6 +1190,7 @@ func _event_rarity_enum(section: int) -> ScoringEnums.Rarity:
 ## state and return to the map. No bank mutation ever happens here (§4).
 func _finish_event() -> void:
 	_event_pending = false
+	_geometry_event_pending = false
 	_shop_pick_items.clear()
 	_current_upgrades = []
 	_leg_phase = ""
@@ -1147,6 +1199,26 @@ func _finish_event() -> void:
 	hud.update_turn_score(0)
 	hud.upgrade_container.visible = false
 	_show_map()
+
+
+## A geometry event pick: let the board's re-flow play on screen (the reshape IS the reward), then
+## return to the map. The board is already visible (events only hide the map overlay, never the
+## dartboard) and the pick already mutated geometry, so the re-flow tween is mid-flight — hide the
+## pick UI, await the tween, linger briefly, then funnel through _finish_event (state cleanup +
+## _show_map). If the pick produced no visible change (an inert trade — e.g. Grow Red on a board
+## with no red — so set_geometry's churn guard skipped the tween), fall straight through to the map
+## rather than stranding the player on a board with no map.
+func _finish_geometry_event() -> void:
+	_geometry_event_pending = false
+	hud.hide_event_pick_ui()   # clear the cards so the board reshape is unobstructed
+	var reflow: Tween = dartboard.get_active_reflow_tween()
+	if reflow == null:
+		_finish_event()
+		return
+	await reflow.finished
+	# Brief linger so the settled layout registers before the map slides back.
+	await get_tree().create_timer(geometry_event_linger).timeout
+	_finish_event()
 
 
 ## Start the next-dart delay timer. Called after the score tween finishes.
@@ -1389,7 +1461,9 @@ func _apply_handicap(id: StringName) -> void:
 	if script == null:
 		return
 	_challenge_handicap = script.new() as Boss
-	_challenge_handicap.configure({})
+	# Pass the id so a handicap script shared across variants (ParityOutBoss serves both
+	# even_out and odd_out) can self-configure; single-variant handicaps ignore the key.
+	_challenge_handicap.configure({"handicap_id": id})
 	var gs: Dictionary = _build_game_state()
 	_challenge_handicap.on_leg_start(gs)
 	_challenge_handicap.on_turn_start(gs)
@@ -1414,6 +1488,8 @@ func _handicap_script_for(id: StringName) -> GDScript:
 			return load("res://scripts/bosses/rotation_boss.gd")
 		&"narrow_double":
 			return load("res://scripts/bosses/narrow_double_ring_boss.gd")
+		&"even_out", &"odd_out":
+			return load("res://scripts/bosses/parity_out_boss.gd")
 		_:
 			return null
 
@@ -1437,9 +1513,10 @@ func _finish_challenge_win() -> void:
 ## UI + selection path; the pick chokepoint returns to the map via _finish_challenge_reward.
 func _show_challenge_reward(family: ScoringEnums.Family, rarity: ScoringEnums.Rarity) -> void:
 	_sync_brush_affinity()
-	# Challenge families are FLAT board families only (SCORING / PLACEMENT) since the events
-	# slice moved the brush *trade* off the earned surface (03 §1.2). The old empty-brush
-	# fallback is therefore dead — a challenge can never roll BRUSH.
+	# Challenge families are LADDERED families only — SCORING and (geometry spec §10) STREAK; the
+	# events slice keeps the BRUSH/GEOMETRY *trades* on the free event surface (03 §1.2). The old
+	# empty-brush fallback is therefore dead — a challenge can never roll BRUSH. A STREAK draw is
+	# family-pure too: _generate_challenge_reward_picks offers one of each streak class (two picks).
 	var picks: Array[Dictionary] = _generate_challenge_reward_picks(family, rarity)
 	if picks.is_empty():
 		_finish_challenge_reward()
@@ -1731,6 +1808,7 @@ func _reset_run_state() -> void:
 	x01_game.dart_budget = 0
 	x01_game.allow_triple_checkout = false
 	x01_game.glass_cannon_active = false
+	x01_game.checkout_parity = -1
 	x01_game.bust_ends_turn = true
 	# Base per-category streak capacity; the equipped build re-applies its grants on run
 	# start (see _on_run_confirmed). reset_for_run() also resets this.
@@ -1740,6 +1818,7 @@ func _reset_run_state() -> void:
 	}
 	scoring_modifier_manager.allow_triple_checkout = false
 	scoring_modifier_manager.glass_cannon_active = false
+	scoring_modifier_manager.checkout_parity = -1
 	shop_cadence = _default_shop_cadence
 	shop_pick_count = 2
 	ModifierRegistry.current_rarity_shift = 0.0
@@ -2118,7 +2197,13 @@ func _continue_shop_after_pick() -> void:
 	# A brush event pick (or its decline / wedge-config tail) funnels here too — finish the
 	# event and return to the map rather than resuming a shop that isn't running. 03 §5.
 	if _event_pending:
-		_finish_event()
+		# A geometry pick has already mutated the board (add_scoring_modifier → _sync_board_state →
+		# dartboard.set_geometry started the re-flow tween). Play that reshape on screen before the
+		# map returns; every other event family returns instantly.
+		if _geometry_event_pending:
+			_finish_geometry_event()
+		else:
+			_finish_event()
 		return
 	_leg_phase = "shop"
 	if _shop_darts_remaining <= 0:
@@ -2468,8 +2553,10 @@ func _on_run_confirmed() -> void:
 	x01_game.darts_per_turn = 3
 	x01_game.allow_triple_checkout = false
 	x01_game.glass_cannon_active = false
+	x01_game.checkout_parity = -1
 	scoring_modifier_manager.allow_triple_checkout = false
 	scoring_modifier_manager.glass_cannon_active = false
+	scoring_modifier_manager.checkout_parity = -1
 	ModifierRegistry.current_rarity_shift = _current_level.rarity_weight_shift if _current_level != null else 0.0
 	UnlockManager.bind_registry(dart_component_registry)
 	UnlockManager.on_run_started()
@@ -3054,10 +3141,9 @@ func _would_bust(result: Dictionary) -> bool:
 		return true
 	if new_remaining == 0:
 		var ring_name: String = result.get("ring_name", "")
-		var is_double: bool = ring_name == "Double" or ring_name == "Double Bull"
-		var is_triple: bool = ring_name == "Triple"
-		var is_valid: bool = is_double or (x01_game.allow_triple_checkout and is_triple) or x01_game.glass_cannon_active
-		if not is_valid:
+		# Route through the manager's finish-validity seam so the bust preview honors the live
+		# out-rule (triple-out, Glass Cannon, Parity Out) exactly as the engine and solver do.
+		if not scoring_modifier_manager.is_valid_finish(ring_name, result.get("wedge_index", -1)):
 			return true
 	return false
 
@@ -3095,6 +3181,20 @@ func _sync_board_state() -> void:
 	dartboard.effective_wedge_colors = scoring_modifier_manager.effective_wedge_colors
 	dartboard.flipped_wedges = scoring_modifier_manager.get_flipped_wedge_indices()
 	dartboard.hotspot_rings = scoring_modifier_manager.hotspot_rings
+	# Mirror the manager's computed GEOMETRY (per-wedge ring bounds, angular weights, bull radii)
+	# to the dartboard, which re-flows toward it. Hit detection reads the settled values; only the
+	# visuals tween. Studs show one reminder per active geometry rule on the surround.
+	dartboard.set_geometry(
+		scoring_modifier_manager.effective_wedge_weights,
+		scoring_modifier_manager.effective_ring_bounds,
+		scoring_modifier_manager.bull_radii
+	)
+	# Parity Out (§9b): the board dims dead-parity doubles, and the studs gain a non-geometry
+	# reminder, so push both off the manager's live out-rule. Glass Cannon overrides parity (any
+	# ring outs), so suppress the visual dimming while it's active — nothing is a dead finish then.
+	var visual_parity: int = -1 if scoring_modifier_manager.glass_cannon_active else scoring_modifier_manager.checkout_parity
+	dartboard.set_checkout_parity(visual_parity)
+	dartboard.set_geometry_studs(scoring_modifier_manager.get_active_board_rules())
 	dartboard.queue_redraw()
 
 

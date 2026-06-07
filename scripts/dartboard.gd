@@ -193,8 +193,53 @@ var _hotspot_label_material: ShaderMaterial = null
 var board_rotation_offset: float = 0.0
 
 ## Scale factor for the double ring width. 1.0 = normal, 0.5 = half width.
-## Set by the Narrow Double Ring boss. Moves the inner boundary outward.
+## Set by the Narrow Double Ring boss. Moves the inner boundary outward. This is the
+## dartboard-side FINAL multiplier, applied AFTER the manager's per-wedge bounds + floors — a
+## handicap may legitimately narrow the double below the geometry floor (chosen friction).
 var double_ring_width_scale: float = 1.0
+
+## Parity Out checkout restriction for board legibility (geometry spec §9b cond 2): -1 = none,
+## 0 = even-valued wedges out, 1 = odd-valued out. A rule change is otherwise invisible on the
+## board (unlike narrow-double), so the dead-parity doubles (and triples) get desaturated for the
+## race. Mirrored from ScoringModifierManager.checkout_parity by main._sync_board_state — this is
+## a VISUAL-ONLY mirror; hit detection / win validity live in the out-rule seam, not here.
+var checkout_parity: int = -1
+
+## How far to desaturate a dead-parity double toward grey (0 = unchanged, 1 = fully grey).
+@export var dead_parity_desaturation: float = 0.72
+
+# ── GEOMETRY substrate (mirrored from ScoringModifierManager) ─────────────────
+# Two copies of the board geometry. The SETTLED copy is the manager's current target and is
+# what HIT DETECTION reads (calculate_score / scoring), so a dart landing mid-reflow scores
+# against the final geometry — never the tween's in-between. The DRAW copy is tweened toward
+# the settled values on a geometry change so the resize reads (an instant snap is illegible);
+# all RENDERING + visual hover/picker highlights read it. When not animating the two are equal.
+#
+# Per-wedge ring bounds: 20 dicts keyed "inner_single"/"triple"/"outer_single"/"double" →
+# [inner_norm, outer_norm]. Wedge weights: 20 floats, mean 1.0. Bull radii: {single_bull,
+# double_bull}. _wedge_bounds_deg: 21 cumulative wedge boundary degrees (pre-rotation), anchored
+# so the 20-wedge (index 0) is centered at the top. Seeded to the canonical board in _ready so a
+# dartboard with no geometry pushed to it (mini-boards) renders the standard layout.
+var _geo_bounds: Array[Dictionary] = []
+var _geo_weights: Array[float] = []
+var _geo_bull: Dictionary = {}
+var _wedge_bounds_deg: Array[float] = []
+
+var _geo_bounds_draw: Array[Dictionary] = []
+var _geo_weights_draw: Array[float] = []
+var _geo_bull_draw: Dictionary = {}
+var _wedge_bounds_deg_draw: Array[float] = []
+
+# Reflow tween state (start snapshot lerped toward the settled target by _reflow_t).
+var _reflow_start_bounds: Array[Dictionary] = []
+var _reflow_start_weights: Array[float] = []
+var _reflow_start_bull: Dictionary = {}
+var _reflow_tween: Tween = null
+
+## Duration of the geometry re-flow tween (a dynamic resize — e.g. a Prism recolor shrinking a
+## grown red triple — animates to read; an instant snap is illegible). Hover/scoring read the
+## settled values; only the visuals tween.
+@export var geometry_reflow_duration: float = 0.6
 
 ## Whether hover highlighting is currently enabled. Controlled by main.gd.
 var hover_enabled: bool = false
@@ -307,6 +352,10 @@ const RING_BOUNDS: Dictionary = {
 	"Outer Single": [RING_TRIPLE_OUTER, RING_OUTER_SINGLE_OUTER],
 	"Double": [RING_OUTER_SINGLE_OUTER, RING_DOUBLE_OUTER],
 }
+
+## Display ring names inside-out — a stable iteration order for overlay draws that previously
+## iterated RING_BOUNDS (Dictionary key order is insertion order, but this is explicit).
+const RING_ORDER_DISPLAY: Array[String] = ["Inner Single", "Triple", "Outer Single", "Double"]
 
 ## Child node for shop spot rendering — lets a shader apply to just the spots.
 var _shop_overlay: Node2D
@@ -504,7 +553,19 @@ var _prism_burst_tween: Tween = null
 @export_group("")
 
 
+## Board-rule reminder studs on the surround (one per active geometry rule). Child of the board.
+var _board_studs: Node2D = null
+const _BOARD_STUDS_SCRIPT: Script = preload("res://scripts/board_studs.gd")
+
+
 func _ready() -> void:
+	# Seed canonical geometry so a board nobody pushes state to renders/scoring as standard.
+	_seed_default_geometry()
+
+	# Geometry rule studs on the surround. Created here so the dartboard owns its surround art.
+	_board_studs = _BOARD_STUDS_SCRIPT.new()
+	add_child(_board_studs)
+
 	_shop_overlay = Node2D.new()
 	_shop_overlay.draw.connect(_draw_shop_overlay)
 	var shader: Shader = load("res://shaders/shop_spot.gdshader")
@@ -575,7 +636,7 @@ func _draw() -> void:
 	# Draw each wedge's rings from outermost to innermost
 	for wedge_idx: int in range(20):
 		var start_angle_deg: float = _wedge_start_deg(wedge_idx)
-		var end_angle_deg: float = start_angle_deg + WEDGE_ANGLE_DEG
+		var end_angle_deg: float = _wedge_end_deg(wedge_idx)
 
 		var double_color: Color
 		var outer_single_color: Color
@@ -608,40 +669,49 @@ func _draw() -> void:
 			outer_single_color = _apply_prism_burst(wedge_idx, "outer_single", outer_single_color)
 			double_color = _apply_prism_burst(wedge_idx, "double", double_color)
 
+		# Parity Out legibility (§9b cond 2): grey out the DOUBLE of dead-parity wedges so the
+		# halved out-set reads at a glance. Only the double — it is the universal finish ring;
+		# triples never out under standard play, so dimming them would mislead.
+		if _is_dead_parity_wedge(wedge_idx):
+			double_color = _desaturate_dead(double_color)
+
+		# Each ring band reads THIS wedge's draw bounds (Ring Trade / Color Territory reshape
+		# them per wedge; double_ring_width_scale folds in via _band_draw).
+		var d_band: Array = _band_draw(wedge_idx, "double")
+		var os_band: Array = _band_draw(wedge_idx, "outer_single")
+		var t_band: Array = _band_draw(wedge_idx, "triple")
+		var is_band: Array = _band_draw(wedge_idx, "inner_single")
+
 		# Double ring (inner boundary narrows when Narrow Double Ring boss is active)
-		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_DOUBLE_OUTER, _effective_double_inner(), double_color)
-
-		# Outer single (expands outward to fill the gap when double ring is narrowed)
-		_draw_segment(start_angle_deg, end_angle_deg,
-			_effective_double_inner(), RING_TRIPLE_OUTER, outer_single_color)
-
+		_draw_segment(start_angle_deg, end_angle_deg, d_band[1], d_band[0], double_color)
+		# Outer single (expands outward to fill the gap when the double ring is narrowed)
+		_draw_segment(start_angle_deg, end_angle_deg, os_band[1], os_band[0], outer_single_color)
 		# Triple ring
-		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, triple_color)
-
+		_draw_segment(start_angle_deg, end_angle_deg, t_band[1], t_band[0], triple_color)
 		# Inner single
-		_draw_segment(start_angle_deg, end_angle_deg,
-			RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, inner_single_color)
+		_draw_segment(start_angle_deg, end_angle_deg, is_band[1], is_band[0], inner_single_color)
 
-	# Bullseyes drawn on top as filled circles
-	draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, bull_single_color)
-	draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, bull_double_color)
+	# Bullseyes drawn on top as filled circles (draw radii so they re-flow with Bigger Bull)
+	draw_circle(Vector2.ZERO, board_radius * _single_bull_draw(), bull_single_color)
+	draw_circle(Vector2.ZERO, board_radius * _double_bull_draw(), bull_double_color)
 
-	# Draw wire lines along ring boundaries
-	_draw_ring_wire(RING_DOUBLE_BULL_OUTER)
-	_draw_ring_wire(RING_SINGLE_BULL_OUTER)
-	_draw_ring_wire(RING_INNER_SINGLE_OUTER)
-	_draw_ring_wire(RING_TRIPLE_OUTER)
-	_draw_ring_wire(_effective_double_inner())
+	# Wires: the bull rings are concentric (full circles, still valid). The ring-band boundaries
+	# now vary per wedge, so they're drawn as per-wedge arcs + radial spokes at the weighted
+	# wedge boundaries (a full-circle wire would no longer track a resized ring).
+	_draw_ring_wire(_double_bull_draw())
+	_draw_ring_wire(_single_bull_draw())
 	_draw_ring_wire(RING_DOUBLE_OUTER)
-
-	# Draw wire lines along wedge boundaries
 	for wedge_idx: int in range(20):
-		var angle_deg: float = _wedge_start_deg(wedge_idx)
-		var angle_rad: float = deg_to_rad(angle_deg)
+		var ws: float = _wedge_start_deg(wedge_idx)
+		var we: float = _wedge_end_deg(wedge_idx)
+		# Per-wedge boundary arcs at the three internal ring boundaries.
+		_draw_boundary_arc(ws, we, _band_draw(wedge_idx, "inner_single")[1])
+		_draw_boundary_arc(ws, we, _band_draw(wedge_idx, "triple")[1])
+		_draw_boundary_arc(ws, we, _effective_double_inner_w(wedge_idx))
+		# Radial spoke along the wedge's start boundary.
+		var angle_rad: float = deg_to_rad(ws)
 		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
-		var inner_point: Vector2 = direction * board_radius * RING_SINGLE_BULL_OUTER
+		var inner_point: Vector2 = direction * board_radius * _single_bull_draw()
 		var outer_point: Vector2 = direction * board_radius * RING_DOUBLE_OUTER
 		draw_line(inner_point, outer_point, wire_color, wire_thickness)
 
@@ -679,8 +749,9 @@ func _draw() -> void:
 	# Uses effective_wedge_values if available, so modified values are shown
 	var font: Font = ThemeDB.fallback_font
 	for wedge_idx: int in range(20):
-		# Center angle of this wedge (rotation offset applied for Rotation boss)
-		var angle_deg: float = wedge_idx * WEDGE_ANGLE_DEG + board_rotation_offset
+		# Center angle of this wedge (weighted center — Parity Shift varies wedge widths — with
+		# the rotation offset applied for the Rotation boss).
+		var angle_deg: float = _wedge_center_deg(wedge_idx)
 		var angle_rad: float = deg_to_rad(angle_deg)
 		# Position along that angle at the number radius
 		var direction: Vector2 = Vector2(sin(angle_rad), -cos(angle_rad))
@@ -728,30 +799,15 @@ func _draw() -> void:
 ## or is_bust = true for a bust (red shockwave).
 func flash_segment(global_hit_position: Vector2, is_winning_dart: bool = false, is_bust: bool = false) -> void:
 	var relative: Vector2 = global_hit_position - global_position
-	var distance: float = relative.length()
-	var normalized_distance: float = distance / board_radius
 
-	# Determine which ring was hit
-	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
-		_flash_ring_name = "double_bull"
-	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
-		_flash_ring_name = "single_bull"
-	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
-		_flash_ring_name = "inner_single"
-	elif normalized_distance <= RING_TRIPLE_OUTER:
-		_flash_ring_name = "triple"
-	elif normalized_distance <= _effective_double_inner():
-		_flash_ring_name = "outer_single"
-	elif normalized_distance <= RING_DOUBLE_OUTER:
-		_flash_ring_name = "double"
-	else:
-		# Off board — no flash
-		_flash_ring_name = ""
-		return
+	# Determine which ring was hit (draw geometry — the flash should match the rendered board).
+	_flash_ring_name = _classify_ring_key_draw(relative)
+	if _flash_ring_name == "":
+		return  # Off board — no flash.
 
 	# Determine which wedge index (not needed for bullseyes)
 	if _flash_ring_name != "double_bull" and _flash_ring_name != "single_bull":
-		_flash_wedge_idx = _get_wedge_index(relative)
+		_flash_wedge_idx = _get_wedge_index_draw(relative)
 
 	# Animate the flash: start bright, tween alpha to 0
 	_flash_alpha = flash_color.a
@@ -820,58 +876,36 @@ func _process(delta: float) -> void:
 		set_process(false)
 
 
-## Draw the flash overlay for the currently flashing segment.
+## Draw the flash overlay for the currently flashing segment (draw geometry).
 func _draw_flash_segment(color: Color) -> void:
-	match _flash_ring_name:
-		"double_bull":
-			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, color)
-		"single_bull":
-			# Draw the single bull ring (donut shape) using the segment helper
-			# Approximate as a full circle overlay for simplicity
-			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, color)
-		"inner_single":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, color)
-		"triple":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, color)
-		"outer_single":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, color)
-		"double":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), color)
+	if _flash_ring_name == "double_bull":
+		draw_circle(Vector2.ZERO, board_radius * _double_bull_draw(), color)
+		return
+	if _flash_ring_name == "single_bull":
+		draw_circle(Vector2.ZERO, board_radius * _single_bull_draw(), color)
+		return
+	var band: Array = _band_draw_by_name(_flash_wedge_idx, _flash_ring_name)
+	if band[1] <= 0.0:
+		return
+	var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
+	var end_deg: float = _wedge_end_deg(_flash_wedge_idx)
+	_draw_segment(start_deg, end_deg, band[1], band[0], color)
 
 
-## Draw a border outline around the currently flashing segment.
+## Draw a border outline around the currently flashing segment (draw geometry).
 func _draw_flash_border(color: Color) -> void:
-	match _flash_ring_name:
-		"double_bull":
-			var pts: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(pts, color, flash_border_thickness)
-		"single_bull":
-			var pts: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-			draw_polyline(pts, color, flash_border_thickness)
-		"inner_single":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, color, flash_border_thickness)
-		"triple":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, color, flash_border_thickness)
-		"outer_single":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, color, flash_border_thickness)
-		"double":
-			var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), color, flash_border_thickness)
+	if _flash_ring_name == "double_bull":
+		draw_polyline(_make_circle_points(_double_bull_draw()), color, flash_border_thickness)
+		return
+	if _flash_ring_name == "single_bull":
+		draw_polyline(_make_circle_points(_single_bull_draw()), color, flash_border_thickness)
+		return
+	var band: Array = _band_draw_by_name(_flash_wedge_idx, _flash_ring_name)
+	if band[1] <= 0.0:
+		return
+	var start_deg: float = _wedge_start_deg(_flash_wedge_idx)
+	var end_deg: float = _wedge_end_deg(_flash_wedge_idx)
+	_draw_segment_border(start_deg, end_deg, band[1], band[0], color, flash_border_thickness)
 
 
 ## Draw a single arc segment (wedge slice of a ring).
@@ -895,6 +929,18 @@ func _draw_segment(start_deg: float, end_deg: float, outer_norm: float, inner_no
 		points.append(direction * inner_r)
 
 	draw_colored_polygon(points, color)
+
+
+## Draw a wire arc at a normalized radius spanning a single wedge's angular range. Used for the
+## ring-band boundaries that now vary per wedge (a full-circle wire would not track a resized ring).
+func _draw_boundary_arc(start_deg: float, end_deg: float, normalized_radius: float) -> void:
+	var r: float = board_radius * normalized_radius
+	var pts: PackedVector2Array = PackedVector2Array()
+	for i: int in range(arc_points + 1):
+		var t: float = float(i) / float(arc_points)
+		var a: float = deg_to_rad(lerpf(start_deg, end_deg, t))
+		pts.append(Vector2(sin(a), -cos(a)) * r)
+	draw_polyline(pts, wire_color, wire_thickness)
 
 
 ## Draw a circular wire line at a given normalized radius.
@@ -927,46 +973,51 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 	var segment_color: int = -1
 	var is_bull: bool = false
 
-	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
+	# Bull checks first (concentric, read the settled bull radii), THEN the wedge index, THEN
+	# the ring classification against THAT wedge's settled bounds (per-wedge bounds invert the
+	# old ring-first order). Scoring reads the settled geometry, never the reflow tween.
+	if normalized_distance <= _double_bull_settled():
 		ring_name = "Double Bull"
 		face_value = 25
 		multiplier = 2
 		is_bull = true
 		segment_color = ScoringEnums.SegmentColor.RED
-	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
+	elif normalized_distance <= _single_bull_settled():
 		ring_name = "Single Bull"
 		face_value = 25
 		multiplier = 1
 		is_bull = true
 		segment_color = ScoringEnums.SegmentColor.GREEN
-	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
-		ring_name = "Inner Single"
-		multiplier = 1
-		wedge_index = _get_wedge_index(relative)
-		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, "inner_single")
-	elif normalized_distance <= RING_TRIPLE_OUTER:
-		ring_name = "Triple"
-		multiplier = 3
-		wedge_index = _get_wedge_index(relative)
-		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, "triple")
-	elif normalized_distance <= _effective_double_inner():
-		ring_name = "Outer Single"
-		multiplier = 1
-		wedge_index = _get_wedge_index(relative)
-		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, "outer_single")
-	elif normalized_distance <= RING_DOUBLE_OUTER:
-		ring_name = "Double"
-		multiplier = 2
-		wedge_index = _get_wedge_index(relative)
-		face_value = _lookup_wedge_value(wedge_index)
-		segment_color = _lookup_segment_color(wedge_index, "double")
 	else:
-		ring_name = "Off Board"
-		face_value = 0
-		multiplier = 0
+		wedge_index = _get_wedge_index(relative)
+		var inner_single_outer: float = _band_raw_settled(wedge_index, "inner_single")[1]
+		var triple_outer: float = _band_raw_settled(wedge_index, "triple")[1]
+		var double_inner: float = _effective_double_inner_settled(wedge_index)
+		if normalized_distance <= inner_single_outer:
+			ring_name = "Inner Single"
+			multiplier = 1
+			face_value = _lookup_wedge_value(wedge_index)
+			segment_color = _lookup_segment_color(wedge_index, "inner_single")
+		elif normalized_distance <= triple_outer:
+			ring_name = "Triple"
+			multiplier = 3
+			face_value = _lookup_wedge_value(wedge_index)
+			segment_color = _lookup_segment_color(wedge_index, "triple")
+		elif normalized_distance <= double_inner:
+			ring_name = "Outer Single"
+			multiplier = 1
+			face_value = _lookup_wedge_value(wedge_index)
+			segment_color = _lookup_segment_color(wedge_index, "outer_single")
+		elif normalized_distance <= RING_DOUBLE_OUTER:
+			ring_name = "Double"
+			multiplier = 2
+			face_value = _lookup_wedge_value(wedge_index)
+			segment_color = _lookup_segment_color(wedge_index, "double")
+		else:
+			ring_name = "Off Board"
+			face_value = 0
+			multiplier = 0
+			wedge_index = -1
 
 	# Boss voids: a whole-void wedge already scores 0 (its value is zeroed), but a
 	# drifted ring void sits on a wedge with a live value, so zero it here.
@@ -990,24 +1041,41 @@ func calculate_score(global_hit_position: Vector2) -> Dictionary:
 	}
 
 
-## Determine which wedge index (0-19) a board-relative position falls in.
-## This is the physical position on the board, not the face value.
+## Determine which wedge index (0-19) a board-relative position falls in, using the SETTLED
+## weighted wedge boundaries (so scoring agrees with the final geometry, not a mid-reflow tween).
 func _get_wedge_index(relative: Vector2) -> int:
-	# atan2(x, -y) gives angle from 12 o'clock, clockwise positive
-	var angle_rad: float = atan2(relative.x, -relative.y)
-	var angle_deg: float = rad_to_deg(angle_rad)
+	return _wedge_index_from(relative, _wedge_bounds_deg)
 
-	# Normalize to 0-360 range
-	if angle_deg < 0.0:
+
+## As above but against the DRAW boundaries — for visual highlights that should match the
+## currently-rendered (possibly tweening) board.
+func _get_wedge_index_draw(relative: Vector2) -> int:
+	return _wedge_index_from(relative, _wedge_bounds_deg_draw)
+
+
+## Core: which wedge interval [bounds_deg[i], bounds_deg[i+1]) the position's angle falls in.
+## Boundaries vary in width (Parity Shift), so this walks them rather than dividing by 18°.
+func _wedge_index_from(relative: Vector2, bounds_deg: Array[float]) -> int:
+	# atan2(x, -y) gives angle from 12 o'clock, clockwise positive.
+	var angle_deg: float = rad_to_deg(atan2(relative.x, -relative.y))
+	# Undo the board rotation so the angle is in the same frame as bounds_deg.
+	angle_deg -= board_rotation_offset
+	if bounds_deg.size() != 21:
+		# Fallback: uniform division (matches the legacy layout).
+		angle_deg = fmod(angle_deg - WEDGE_OFFSET_DEG, 360.0)
+		if angle_deg < 0.0:
+			angle_deg += 360.0
+		return int(angle_deg / WEDGE_ANGLE_DEG) % 20
+	# Shift the angle into [bounds_deg[0], bounds_deg[0] + 360) so the walk below resolves it.
+	var lo: float = bounds_deg[0]
+	while angle_deg < lo:
 		angle_deg += 360.0
-
-	# Apply the 9-degree offset and rotation offset so wedge boundaries align
-	angle_deg = fmod(angle_deg - WEDGE_OFFSET_DEG - board_rotation_offset, 360.0)
-	if angle_deg < 0.0:
-		angle_deg += 360.0
-
-	# Determine wedge index
-	return int(angle_deg / WEDGE_ANGLE_DEG) % 20
+	while angle_deg >= lo + 360.0:
+		angle_deg -= 360.0
+	for i: int in range(20):
+		if angle_deg < bounds_deg[i + 1]:
+			return i
+	return 19
 
 
 ## Look up the effective face value for a wedge index.
@@ -1054,29 +1122,12 @@ func get_segment_centroid(wedge_index: int, ring_name: String) -> Vector2:
 	if ring_name == "Single Bull" or ring_name == "single_bull":
 		return global_position
 
-	# For wedge segments, compute center angle and midpoint radius
-	var center_angle_deg: float = wedge_index * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + board_rotation_offset
-	var center_angle_rad: float = deg_to_rad(center_angle_deg)
+	# For wedge segments, aim at the wedge's weighted CENTER angle and the ring's midpoint radius
+	# (both track the live geometry, so auto-aim follows a resized/widened wedge).
+	var center_angle_rad: float = deg_to_rad(_wedge_center_deg(wedge_index))
 	var direction: Vector2 = Vector2(sin(center_angle_rad), -cos(center_angle_rad))
-
-	# Determine inner and outer normalized radius for this ring
-	var inner_norm: float = 0.0
-	var outer_norm: float = 0.0
-	match ring_name:
-		"Inner Single", "inner_single":
-			inner_norm = RING_SINGLE_BULL_OUTER
-			outer_norm = RING_INNER_SINGLE_OUTER
-		"Triple", "triple":
-			inner_norm = RING_INNER_SINGLE_OUTER
-			outer_norm = RING_TRIPLE_OUTER
-		"Outer Single", "outer_single":
-			inner_norm = RING_TRIPLE_OUTER
-			outer_norm = _effective_double_inner()
-		"Double", "double":
-			inner_norm = _effective_double_inner()
-			outer_norm = RING_DOUBLE_OUTER
-
-	var mid_r: float = board_radius * (inner_norm + outer_norm) / 2.0
+	var band: Array = _band_draw_by_name(wedge_index, ring_name)
+	var mid_r: float = board_radius * (float(band[0]) + float(band[1])) / 2.0
 	return global_position + direction * mid_r
 
 
@@ -1102,24 +1153,10 @@ func update_hover(global_mouse_pos: Vector2) -> Dictionary:
 		return {}
 
 	var relative: Vector2 = global_mouse_pos - global_position
-	var distance: float = relative.length()
-	var normalized_distance: float = distance / board_radius
 
-	# Determine which ring the mouse is in
-	var new_ring_name: String = ""
-	if normalized_distance <= RING_DOUBLE_BULL_OUTER:
-		new_ring_name = "double_bull"
-	elif normalized_distance <= RING_SINGLE_BULL_OUTER:
-		new_ring_name = "single_bull"
-	elif normalized_distance <= RING_INNER_SINGLE_OUTER:
-		new_ring_name = "inner_single"
-	elif normalized_distance <= RING_TRIPLE_OUTER:
-		new_ring_name = "triple"
-	elif normalized_distance <= _effective_double_inner():
-		new_ring_name = "outer_single"
-	elif normalized_distance <= RING_DOUBLE_OUTER:
-		new_ring_name = "double"
-	else:
+	# Determine which ring the mouse is in (draw geometry — the highlight tracks the rendered board).
+	var new_ring_name: String = _classify_ring_key_draw(relative)
+	if new_ring_name == "":
 		# Off board — clear hover
 		_clear_hover()
 		return {}
@@ -1127,7 +1164,7 @@ func update_hover(global_mouse_pos: Vector2) -> Dictionary:
 	# Determine wedge index (not needed for bullseyes)
 	var new_wedge_idx: int = -1
 	if new_ring_name != "double_bull" and new_ring_name != "single_bull":
-		new_wedge_idx = _get_wedge_index(relative)
+		new_wedge_idx = _get_wedge_index_draw(relative)
 
 	# Only redraw if the hovered segment actually changed
 	if new_ring_name != _hover_ring_name or new_wedge_idx != _hover_wedge_idx:
@@ -1158,37 +1195,22 @@ func _clear_hover() -> void:
 
 ## Draw a subtle highlight on the currently hovered segment.
 func _draw_hover_segment() -> void:
-	match _hover_ring_name:
-		"double_bull":
-			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, hover_highlight_color)
-			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(points, hover_border_color, hover_border_thickness)
-		"single_bull":
-			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, hover_highlight_color)
-			var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-			draw_polyline(outer_points, hover_border_color, hover_border_thickness)
-			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(inner_points, hover_border_color, hover_border_thickness)
-		"inner_single":
-			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, hover_border_color, hover_border_thickness)
-		"triple":
-			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, hover_border_color, hover_border_thickness)
-		"outer_single":
-			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, hover_border_color, hover_border_thickness)
-		"double":
-			var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), hover_highlight_color)
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), hover_border_color, hover_border_thickness)
+	if _hover_ring_name == "double_bull":
+		draw_circle(Vector2.ZERO, board_radius * _double_bull_draw(), hover_highlight_color)
+		draw_polyline(_make_circle_points(_double_bull_draw()), hover_border_color, hover_border_thickness)
+		return
+	if _hover_ring_name == "single_bull":
+		draw_circle(Vector2.ZERO, board_radius * _single_bull_draw(), hover_highlight_color)
+		draw_polyline(_make_circle_points(_single_bull_draw()), hover_border_color, hover_border_thickness)
+		draw_polyline(_make_circle_points(_double_bull_draw()), hover_border_color, hover_border_thickness)
+		return
+	var band: Array = _band_draw_by_name(_hover_wedge_idx, _hover_ring_name)
+	if band[1] <= 0.0:
+		return
+	var start_deg: float = _wedge_start_deg(_hover_wedge_idx)
+	var end_deg: float = _wedge_end_deg(_hover_wedge_idx)
+	_draw_segment(start_deg, end_deg, band[1], band[0], hover_highlight_color)
+	_draw_segment_border(start_deg, end_deg, band[1], band[0], hover_border_color, hover_border_thickness)
 
 
 ## Draw a highlight on the declared target segment.
@@ -1199,51 +1221,28 @@ func _draw_target_highlight() -> void:
 
 	if is_bull:
 		if ring_name == "Double Bull":
-			draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, target_highlight_color)
-			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(points, target_highlight_border_color, hover_border_thickness)
+			draw_circle(Vector2.ZERO, board_radius * _double_bull_draw(), target_highlight_color)
+			draw_polyline(_make_circle_points(_double_bull_draw()), target_highlight_border_color, hover_border_thickness)
 		elif ring_name == "Single Bull":
-			draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, target_highlight_color)
-			var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-			draw_polyline(outer_points, target_highlight_border_color, hover_border_thickness)
-			var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(inner_points, target_highlight_border_color, hover_border_thickness)
+			draw_circle(Vector2.ZERO, board_radius * _single_bull_draw(), target_highlight_color)
+			draw_polyline(_make_circle_points(_single_bull_draw()), target_highlight_border_color, hover_border_thickness)
+			draw_polyline(_make_circle_points(_double_bull_draw()), target_highlight_border_color, hover_border_thickness)
 	elif wedge_idx >= 0:
 		var start_deg: float = _wedge_start_deg(wedge_idx)
-		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-		var inner_norm: float = 0.0
-		var outer_norm: float = 0.0
-		match ring_name:
-			"Inner Single":
-				inner_norm = RING_SINGLE_BULL_OUTER
-				outer_norm = RING_INNER_SINGLE_OUTER
-			"Triple":
-				inner_norm = RING_INNER_SINGLE_OUTER
-				outer_norm = RING_TRIPLE_OUTER
-			"Outer Single":
-				inner_norm = RING_TRIPLE_OUTER
-				outer_norm = _effective_double_inner()
-			"Double":
-				inner_norm = _effective_double_inner()
-				outer_norm = RING_DOUBLE_OUTER
-		if outer_norm > 0.0:
-			_draw_segment(start_deg, end_deg, outer_norm, inner_norm, target_highlight_color)
-			_draw_segment_border(start_deg, end_deg, outer_norm, inner_norm, target_highlight_border_color, hover_border_thickness)
+		var end_deg: float = _wedge_end_deg(wedge_idx)
+		var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+		if band[1] > 0.0:
+			_draw_segment(start_deg, end_deg, band[1], band[0], target_highlight_color)
+			_draw_segment_border(start_deg, end_deg, band[1], band[0], target_highlight_border_color, hover_border_thickness)
 
 
-## Normalized (inner, outer) radii for a wedge ring by display name. Returns ZERO for an
-## unknown ring. Shared by the hotspot indicator; mirrors the mapping in _draw_target_highlight.
-func _ring_norms(ring_name: String) -> Vector2:
-	match ring_name:
-		"Inner Single":
-			return Vector2(RING_SINGLE_BULL_OUTER, RING_INNER_SINGLE_OUTER)
-		"Triple":
-			return Vector2(RING_INNER_SINGLE_OUTER, RING_TRIPLE_OUTER)
-		"Outer Single":
-			return Vector2(RING_TRIPLE_OUTER, _effective_double_inner())
-		"Double":
-			return Vector2(_effective_double_inner(), RING_DOUBLE_OUTER)
-	return Vector2.ZERO
+## Draw (inner, outer) radii for a wedge ring by display name. Returns ZERO for an unknown ring.
+## Shared by the hotspot indicator; reads the wedge's draw bounds so the indicator tracks resizes.
+func _ring_norms(wedge_idx: int, ring_name: String) -> Vector2:
+	var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+	if band[1] <= 0.0:
+		return Vector2.ZERO
+	return Vector2(band[0], band[1])
 
 
 ## Draw a persistent, high-contrast indicator on every hotspot ring with its bonus value
@@ -1261,20 +1260,19 @@ func _draw_hotspot_indicators(font: Font) -> void:
 		var wedge_idx: int = int(parts[0])
 		if wedge_idx < 0 or wedge_idx >= 20:
 			continue
-		var norms: Vector2 = _ring_norms(parts[1])
+		var norms: Vector2 = _ring_norms(wedge_idx, parts[1])
 		if norms == Vector2.ZERO:
 			continue
 
 		var start_deg: float = _wedge_start_deg(wedge_idx)
-		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+		var end_deg: float = _wedge_end_deg(wedge_idx)
 
 		# Persistent outline so the hot ring's location reads at a glance.
 		_draw_segment_border(start_deg, end_deg, norms.y, norms.x, hotspot_indicator_color, hotspot_indicator_thickness)
 
-		# Value baked at the ring's mid-radius / mid-angle.
+		# Value baked at the ring's mid-radius / mid-angle (weighted wedge center).
 		var mid_norm: float = (norms.x + norms.y) * 0.5
-		# start_deg (via _wedge_start_deg) already includes board_rotation_offset.
-		var mid_rad: float = deg_to_rad(start_deg + WEDGE_ANGLE_DEG * 0.5)
+		var mid_rad: float = deg_to_rad(_wedge_center_deg(wedge_idx))
 		var direction: Vector2 = Vector2(sin(mid_rad), -cos(mid_rad))
 		var center: Vector2 = direction * board_radius * mid_norm
 		var label: String = "+%d" % bonus
@@ -1308,12 +1306,12 @@ func _rebuild_hotspot_shader_layer() -> void:
 		if wedge_idx < 0 or wedge_idx >= 20:
 			continue
 		var ring_name: String = parts[1]
-		var norms: Vector2 = _ring_norms(ring_name)
+		var norms: Vector2 = _ring_norms(wedge_idx, ring_name)
 		if norms == Vector2.ZERO:
 			continue
 
 		var start_deg: float = _wedge_start_deg(wedge_idx)
-		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+		var end_deg: float = _wedge_end_deg(wedge_idx)
 
 		# Smoke polygon shaped exactly to the ring slice (same geometry as the segment fills).
 		var poly: Polygon2D = Polygon2D.new()
@@ -1335,7 +1333,7 @@ func _rebuild_hotspot_shader_layer() -> void:
 
 		# "+N" value label, kept above the smoke (z_index) so the number stays legible.
 		var mid_norm: float = (norms.x + norms.y) * 0.5
-		var mid_rad: float = deg_to_rad(start_deg + WEDGE_ANGLE_DEG * 0.5)
+		var mid_rad: float = deg_to_rad(_wedge_center_deg(wedge_idx))
 		var direction: Vector2 = Vector2(sin(mid_rad), -cos(mid_rad))
 		var center: Vector2 = direction * board_radius * mid_norm
 		var lbl: Label = Label.new()
@@ -1435,14 +1433,30 @@ func set_picker_mode(enabled: bool) -> void:
 	queue_redraw()
 
 
-## Get the wedge index at a global position, or -1 if off the wedge area.
+## Get the wedge index at a global position, or -1 if off the wedge area (draw geometry).
 func get_wedge_at_position(global_pos: Vector2) -> int:
 	var relative: Vector2 = global_pos - global_position
-	var distance: float = relative.length()
-	var normalized: float = distance / board_radius
-	if normalized > RING_DOUBLE_OUTER or normalized < RING_SINGLE_BULL_OUTER:
+	var normalized: float = relative.length() / board_radius
+	if normalized > RING_DOUBLE_OUTER or normalized < _single_bull_draw():
 		return -1
-	return _get_wedge_index(relative)
+	return _get_wedge_index_draw(relative)
+
+
+## Classify a board-relative position into {wedge_index, ring_key} for the segment picker, using
+## the DRAW geometry. Returns {} when off the wedge band area (inside the bull or off-board).
+func _segment_at_draw(relative: Vector2) -> Dictionary:
+	var nd: float = relative.length() / board_radius
+	if nd <= _single_bull_draw() or nd > RING_DOUBLE_OUTER:
+		return {}
+	var w: int = _get_wedge_index_draw(relative)
+	var ring_key: String = "double"
+	if nd <= _band_draw(w, "inner_single")[1]:
+		ring_key = "inner_single"
+	elif nd <= _band_draw(w, "triple")[1]:
+		ring_key = "triple"
+	elif nd <= _effective_double_inner_w(w):
+		ring_key = "outer_single"
+	return {"wedge_index": w, "ring_key": ring_key}
 
 
 ## Update picker hover and return the hovered wedge index.
@@ -1473,56 +1487,27 @@ func set_segment_picker_mode(enabled: bool) -> void:
 ## Update segment picker hover and return {wedge_index, ring_key} or empty dict.
 func update_segment_picker_hover(global_pos: Vector2) -> Dictionary:
 	var relative: Vector2 = global_pos - global_position
-	var distance: float = relative.length()
-	var normalized: float = distance / board_radius
-
-	var ring_key: String = ""
-	if normalized <= RING_SINGLE_BULL_OUTER or normalized > RING_DOUBLE_OUTER:
+	var seg: Dictionary = _segment_at_draw(relative)
+	if seg.is_empty():
 		if _segment_picker_hover_ring != "":
 			_segment_picker_hover_wedge = -1
 			_segment_picker_hover_ring = ""
 			queue_redraw()
 		return {}
 
-	if normalized <= RING_INNER_SINGLE_OUTER:
-		ring_key = "inner_single"
-	elif normalized <= RING_TRIPLE_OUTER:
-		ring_key = "triple"
-	elif normalized <= _effective_double_inner():
-		ring_key = "outer_single"
-	elif normalized <= RING_DOUBLE_OUTER:
-		ring_key = "double"
-
-	var wedge: int = _get_wedge_index(relative)
-
+	var wedge: int = seg["wedge_index"]
+	var ring_key: String = seg["ring_key"]
 	if wedge != _segment_picker_hover_wedge or ring_key != _segment_picker_hover_ring:
 		_segment_picker_hover_wedge = wedge
 		_segment_picker_hover_ring = ring_key
 		queue_redraw()
 
-	return {"wedge_index": wedge, "ring_key": ring_key}
+	return seg
 
 
 ## Get the segment at a global position for segment picker click. Returns same format as hover.
 func get_segment_at_position(global_pos: Vector2) -> Dictionary:
-	var relative: Vector2 = global_pos - global_position
-	var distance: float = relative.length()
-	var normalized: float = distance / board_radius
-
-	if normalized <= RING_SINGLE_BULL_OUTER or normalized > RING_DOUBLE_OUTER:
-		return {}
-
-	var ring_key: String = ""
-	if normalized <= RING_INNER_SINGLE_OUTER:
-		ring_key = "inner_single"
-	elif normalized <= RING_TRIPLE_OUTER:
-		ring_key = "triple"
-	elif normalized <= _effective_double_inner():
-		ring_key = "outer_single"
-	elif normalized <= RING_DOUBLE_OUTER:
-		ring_key = "double"
-
-	return {"wedge_index": _get_wedge_index(relative), "ring_key": ring_key}
+	return _segment_at_draw(global_pos - global_position)
 
 
 ## Draw picker highlights — selected wedges and hovered wedge.
@@ -1536,21 +1521,20 @@ func _draw_picker_highlights() -> void:
 ## Draw a highlight overlay covering all rings of a single wedge.
 func _draw_full_wedge_highlight(wedge_idx: int, fill_color: Color, border_col: Color) -> void:
 	var start_deg: float = _wedge_start_deg(wedge_idx)
-	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-	_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, fill_color)
-	_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, RING_SINGLE_BULL_OUTER, border_col, hover_border_thickness)
+	var end_deg: float = _wedge_end_deg(wedge_idx)
+	_draw_segment(start_deg, end_deg, RING_DOUBLE_OUTER, _single_bull_draw(), fill_color)
+	_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _single_bull_draw(), border_col, hover_border_thickness)
 
 
 ## Draw a highlight on the segment under the cursor in segment picker mode.
 func _draw_segment_picker_highlight() -> void:
-	var ring_name: String = _segment_picker_hover_ring
-	if not RING_BOUNDS.has(_ring_key_to_display(ring_name)):
+	var band: Array = _band_draw(_segment_picker_hover_wedge, _segment_picker_hover_ring)
+	if band[1] <= 0.0:
 		return
-	var bounds: Array = RING_BOUNDS[_ring_key_to_display(ring_name)]
 	var start_deg: float = _wedge_start_deg(_segment_picker_hover_wedge)
-	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-	_draw_segment(start_deg, end_deg, bounds[1], bounds[0], picker_highlight_color)
-	_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], picker_border_color, hover_border_thickness)
+	var end_deg: float = _wedge_end_deg(_segment_picker_hover_wedge)
+	_draw_segment(start_deg, end_deg, band[1], band[0], picker_highlight_color)
+	_draw_segment_border(start_deg, end_deg, band[1], band[0], picker_border_color, hover_border_thickness)
 
 
 ## Map a per-ring dict key to the RING_BOUNDS display name.
@@ -1576,33 +1560,7 @@ func _draw_checkout_pulses() -> void:
 	var pulse_color: Color = Color(checkout_pulse_color, alpha)
 
 	for segment: Dictionary in _checkout_segments:
-		var segment_type: String = segment["type"]
-
-		if segment_type == "double_bull":
-			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(points, pulse_color, checkout_border_thickness)
-		elif segment_type == "single_bull":
-			var points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-			draw_polyline(points, pulse_color, checkout_border_thickness)
-		elif segment_type == "wedge":
-			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = _wedge_start_deg(wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), pulse_color, checkout_border_thickness)
-		elif segment_type == "triple_wedge":
-			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = _wedge_start_deg(wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, pulse_color, checkout_border_thickness)
-		elif segment_type == "single_wedge":
-			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = _wedge_start_deg(wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			var ring_key: String = segment.get("ring_key", "outer_single")
-			if ring_key == "inner_single":
-				_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, pulse_color, checkout_border_thickness)
-			else:
-				_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, pulse_color, checkout_border_thickness)
+		_draw_descriptor_border(segment, pulse_color, checkout_border_thickness)
 
 
 ## Draw pulsing border outlines for path illumination (selected checkout step equivalents).
@@ -1613,33 +1571,33 @@ func _draw_illumination_outlines() -> void:
 	var pulse_color: Color = Color(base_color, alpha)
 
 	for segment: Dictionary in _illumination_segments:
-		var segment_type: String = segment["type"]
+		_draw_descriptor_border(segment, pulse_color, illumination_border_thickness)
 
-		if segment_type == "double_bull":
-			var points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-			draw_polyline(points, pulse_color, illumination_border_thickness)
-		elif segment_type == "single_bull":
-			var points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-			draw_polyline(points, pulse_color, illumination_border_thickness)
-		elif segment_type == "wedge":
-			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = _wedge_start_deg(wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner(), pulse_color, illumination_border_thickness)
-		elif segment_type == "triple_wedge":
-			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = _wedge_start_deg(wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			_draw_segment_border(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER, pulse_color, illumination_border_thickness)
-		elif segment_type == "single_wedge":
-			var wedge_idx: int = segment["wedge_idx"]
-			var start_deg: float = _wedge_start_deg(wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			var ring_key: String = segment.get("ring_key", "outer_single")
-			if ring_key == "inner_single":
-				_draw_segment_border(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER, pulse_color, illumination_border_thickness)
-			else:
-				_draw_segment_border(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER, pulse_color, illumination_border_thickness)
+
+## Draw a border outline for a segment DESCRIPTOR ({type, wedge_idx, ring_key}) using the draw
+## geometry. Shared by the checkout pulse + path illumination passes. Segment types match the
+## solver's _candidate_to_segment_descriptor output (double_bull / single_bull / wedge /
+## triple_wedge / single_wedge).
+func _draw_descriptor_border(segment: Dictionary, color: Color, thickness: float) -> void:
+	var segment_type: String = segment["type"]
+	if segment_type == "double_bull":
+		draw_polyline(_make_circle_points(_double_bull_draw()), color, thickness)
+		return
+	if segment_type == "single_bull":
+		draw_polyline(_make_circle_points(_single_bull_draw()), color, thickness)
+		return
+	var wedge_idx: int = segment["wedge_idx"]
+	var ring_key: String = "double"
+	if segment_type == "triple_wedge":
+		ring_key = "triple"
+	elif segment_type == "single_wedge":
+		ring_key = segment.get("ring_key", "outer_single")
+	var band: Array = _band_draw(wedge_idx, ring_key)
+	if band[1] <= 0.0:
+		return
+	var start_deg: float = _wedge_start_deg(wedge_idx)
+	var end_deg: float = _wedge_end_deg(wedge_idx)
+	_draw_segment_border(start_deg, end_deg, band[1], band[0], color, thickness)
 
 
 # ── Tutorial highlight API ──────────────────────────────────────────────────
@@ -1669,13 +1627,14 @@ func _draw_tutorial_highlights() -> void:
 		match highlight_type:
 			"all_wedges_ring":
 				var ring_name: String = spec.get("ring_name", "")
-				if RING_BOUNDS.has(ring_name):
-					var bounds: Array = RING_BOUNDS[ring_name]
-					for wedge_idx: int in range(20):
-						var start_deg: float = _wedge_start_deg(wedge_idx)
-						var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-						_draw_segment(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_color)
-						_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
+				for wedge_idx: int in range(20):
+					var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+					if band[1] <= 0.0:
+						continue
+					var start_deg: float = _wedge_start_deg(wedge_idx)
+					var end_deg: float = _wedge_end_deg(wedge_idx)
+					_draw_segment(start_deg, end_deg, band[1], band[0], tutorial_highlight_color)
+					_draw_segment_border(start_deg, end_deg, band[1], band[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
 
 			"single_wedge_all":
 				var wedge_idx: int = spec.get("wedge_index", 0)
@@ -1684,23 +1643,21 @@ func _draw_tutorial_highlights() -> void:
 			"single_segment":
 				var wedge_idx: int = spec.get("wedge_index", 0)
 				var ring_name: String = spec.get("ring_name", "")
-				if RING_BOUNDS.has(ring_name):
-					var bounds: Array = RING_BOUNDS[ring_name]
+				var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+				if band[1] > 0.0:
 					var start_deg: float = _wedge_start_deg(wedge_idx)
-					var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-					_draw_segment(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_color)
-					_draw_segment_border(start_deg, end_deg, bounds[1], bounds[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
+					var end_deg: float = _wedge_end_deg(wedge_idx)
+					_draw_segment(start_deg, end_deg, band[1], band[0], tutorial_highlight_color)
+					_draw_segment_border(start_deg, end_deg, band[1], band[0], tutorial_highlight_border_color, tutorial_highlight_thickness)
 
 			"bullseye":
 				var which: String = spec.get("which", "both")
 				if which == "inner" or which == "both":
-					draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, tutorial_highlight_color)
-					var inner_points: PackedVector2Array = _make_circle_points(RING_DOUBLE_BULL_OUTER)
-					draw_polyline(inner_points, tutorial_highlight_border_color, tutorial_highlight_thickness)
+					draw_circle(Vector2.ZERO, board_radius * _double_bull_draw(), tutorial_highlight_color)
+					draw_polyline(_make_circle_points(_double_bull_draw()), tutorial_highlight_border_color, tutorial_highlight_thickness)
 				if which == "outer" or which == "both":
-					draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, tutorial_highlight_color)
-					var outer_points: PackedVector2Array = _make_circle_points(RING_SINGLE_BULL_OUTER)
-					draw_polyline(outer_points, tutorial_highlight_border_color, tutorial_highlight_thickness)
+					draw_circle(Vector2.ZERO, board_radius * _single_bull_draw(), tutorial_highlight_color)
+					draw_polyline(_make_circle_points(_single_bull_draw()), tutorial_highlight_border_color, tutorial_highlight_thickness)
 
 
 ## Push exported shader values into the ShaderMaterial.
@@ -1801,14 +1758,13 @@ func _draw_shop_overlay() -> void:
 		var ring_name: String = spot["ring_name"]
 		var wedge_idx: int = spot["wedge_index"]
 
-		if not RING_BOUNDS.has(ring_name):
+		var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+		if band[1] <= 0.0:
 			continue
-
-		var bounds: Array = RING_BOUNDS[ring_name]
-		var inner_norm: float = bounds[0]
-		var outer_norm: float = bounds[1]
+		var inner_norm: float = band[0]
+		var outer_norm: float = band[1]
 		var start_deg: float = _wedge_start_deg(wedge_idx)
-		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+		var end_deg: float = _wedge_end_deg(wedge_idx)
 
 		# Build segment polygon and draw on the overlay
 		var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
@@ -1832,14 +1788,13 @@ func _draw_shop_dissolve_overlay() -> void:
 	var ring_name: String = _shop_dissolve_spot["ring_name"]
 	var wedge_idx: int = _shop_dissolve_spot["wedge_index"]
 
-	if not RING_BOUNDS.has(ring_name):
+	var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+	if band[1] <= 0.0:
 		return
-
-	var bounds: Array = RING_BOUNDS[ring_name]
-	var inner_norm: float = bounds[0]
-	var outer_norm: float = bounds[1]
+	var inner_norm: float = band[0]
+	var outer_norm: float = band[1]
 	var start_deg: float = _wedge_start_deg(wedge_idx)
-	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+	var end_deg: float = _wedge_end_deg(wedge_idx)
 
 	var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
 	_shop_dissolve_overlay.draw_colored_polygon(points, fill_color)
@@ -2063,14 +2018,319 @@ func set_double_ring_scale(scale: float, animate: bool = true) -> void:
 	, double_ring_width_scale, scale, 0.5).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
 
 
-## Compute the effective inner boundary of the double ring, accounting for narrowing.
-func _effective_double_inner() -> float:
-	return RING_DOUBLE_OUTER - (RING_DOUBLE_OUTER - RING_OUTER_SINGLE_OUTER) * double_ring_width_scale
+## Push the active geometry rules to the surround studs (one reminder per rule).
+func set_geometry_studs(rules: Array[Dictionary]) -> void:
+	if _board_studs != null:
+		_board_studs.set_rules(rules)
 
 
-## Compute the angle for a wedge start position, including rotation offset.
+## Set the Parity Out checkout restriction for board dimming (§9b). Visual only; -1 = none.
+func set_checkout_parity(parity: int) -> void:
+	if checkout_parity == parity:
+		return
+	checkout_parity = parity
+	queue_redraw()
+
+
+## True if `wedge_idx`'s double/triple is a DEAD finish under the live Parity Out rule (wrong
+## parity), so _draw desaturates it. False when no rule is active or the wedge matches.
+func _is_dead_parity_wedge(wedge_idx: int) -> bool:
+	if checkout_parity == -1:
+		return false
+	if wedge_idx < 0 or wedge_idx >= effective_wedge_values.size():
+		return false
+	var face_even: bool = (effective_wedge_values[wedge_idx] % 2) == 0
+	var want_even: bool = checkout_parity == 0
+	return face_even != want_even
+
+
+## Desaturate a finish-ring color toward grey to mark a dead-parity (un-outable) wedge.
+func _desaturate_dead(color: Color) -> Color:
+	var grey: float = color.get_luminance()
+	return color.lerp(Color(grey, grey, grey, color.a), dead_parity_desaturation)
+
+
+## Seed the geometry substrate (both settled + draw copies) to the canonical board. Called in
+## _ready so a dartboard nobody pushes geometry to (mini-boards, fresh boot) renders standard.
+func _seed_default_geometry() -> void:
+	var bounds: Array[Dictionary] = []
+	var weights: Array[float] = []
+	for _i: int in range(20):
+		weights.append(1.0)
+		bounds.append({
+			"inner_single": [RING_SINGLE_BULL_OUTER, RING_INNER_SINGLE_OUTER],
+			"triple": [RING_INNER_SINGLE_OUTER, RING_TRIPLE_OUTER],
+			"outer_single": [RING_TRIPLE_OUTER, RING_OUTER_SINGLE_OUTER],
+			"double": [RING_OUTER_SINGLE_OUTER, RING_DOUBLE_OUTER],
+		})
+	var bull: Dictionary = {"single_bull": RING_SINGLE_BULL_OUTER, "double_bull": RING_DOUBLE_BULL_OUTER}
+	_geo_weights = weights
+	_geo_bounds = bounds
+	_geo_bull = bull
+	_geo_weights_draw = weights.duplicate()
+	_geo_bounds_draw = _dup_bounds(bounds)
+	_geo_bull_draw = bull.duplicate()
+	_wedge_bounds_deg = _compute_wedge_bounds_deg(_geo_weights)
+	_wedge_bounds_deg_draw = _wedge_bounds_deg.duplicate()
+
+
+## Deep-duplicate a per-wedge bounds array (each ring band is its own [inner, outer] array).
+func _dup_bounds(src: Array[Dictionary]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for entry: Dictionary in src:
+		var d: Dictionary = {}
+		for k: String in entry:
+			d[k] = [float(entry[k][0]), float(entry[k][1])]
+		out.append(d)
+	return out
+
+
+## Receive new board geometry from the manager (via main._sync_board_state). Updates the SETTLED
+## copy immediately (hit detection reads it), and re-flows the DRAW copy toward it — animated when
+## `animate` and the change is real, snapped otherwise (run/leg init).
+func set_geometry(weights: Array[float], bounds: Array[Dictionary], bull: Dictionary, animate: bool = true) -> void:
+	if weights.size() != 20 or bounds.size() != 20:
+		return
+	# Drive-by churn guard: _sync_board_state pushes geometry on every sync (boss turns, toggles,
+	# etc.), almost always unchanged. Skip the kill/create-Tween + redraw when the incoming
+	# settled geometry already matches the current settled target AND nothing is mid-reflow.
+	if not _geometry_changed(weights, bounds, bull) and (_reflow_tween == null or not _reflow_tween.is_valid()):
+		return
+	_geo_weights = weights.duplicate()
+	_geo_bounds = _dup_bounds(bounds)
+	_geo_bull = bull.duplicate()
+	_wedge_bounds_deg = _compute_wedge_bounds_deg(_geo_weights)
+
+	if _reflow_tween != null and _reflow_tween.is_valid():
+		_reflow_tween.kill()
+
+	if not animate or _geo_bounds_draw.size() != 20:
+		_geo_weights_draw = _geo_weights.duplicate()
+		_geo_bounds_draw = _dup_bounds(_geo_bounds)
+		_geo_bull_draw = _geo_bull.duplicate()
+		_wedge_bounds_deg_draw = _wedge_bounds_deg.duplicate()
+		queue_redraw()
+		return
+
+	# Snapshot the current draw state as the tween's start, then lerp toward the settled target.
+	_reflow_start_weights = _geo_weights_draw.duplicate()
+	_reflow_start_bounds = _dup_bounds(_geo_bounds_draw)
+	_reflow_start_bull = _geo_bull_draw.duplicate()
+	_reflow_tween = create_tween()
+	_reflow_tween.tween_method(_apply_reflow, 0.0, 1.0, geometry_reflow_duration).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+
+
+## The geometry re-flow tween if one is currently animating, else null. Lets a caller (the
+## geometry-event beat in main) await the board reshape before moving on. Returns null when the
+## last set_geometry produced no visible change (the churn guard skipped the tween) so the caller
+## never strands itself awaiting a finish that won't come.
+func get_active_reflow_tween() -> Tween:
+	if _reflow_tween != null and _reflow_tween.is_valid() and _reflow_tween.is_running():
+		return _reflow_tween
+	return null
+
+
+## Lerp the draw geometry from the start snapshot toward the settled target by t∈[0,1].
+func _apply_reflow(t: float) -> void:
+	if _reflow_start_weights.size() != 20 or _geo_weights.size() != 20:
+		return
+	var w: Array[float] = []
+	for i: int in range(20):
+		w.append(lerpf(_reflow_start_weights[i], _geo_weights[i], t))
+	_geo_weights_draw = w
+
+	var b: Array[Dictionary] = []
+	for i: int in range(20):
+		var d: Dictionary = {}
+		var start_d: Dictionary = _reflow_start_bounds[i]
+		var tgt_d: Dictionary = _geo_bounds[i]
+		for k: String in tgt_d:
+			var s0: float = float(start_d[k][0]) if start_d.has(k) else float(tgt_d[k][0])
+			var s1: float = float(start_d[k][1]) if start_d.has(k) else float(tgt_d[k][1])
+			d[k] = [lerpf(s0, float(tgt_d[k][0]), t), lerpf(s1, float(tgt_d[k][1]), t)]
+		b.append(d)
+	_geo_bounds_draw = b
+
+	_geo_bull_draw = {
+		"single_bull": lerpf(float(_reflow_start_bull.get("single_bull", RING_SINGLE_BULL_OUTER)), float(_geo_bull.get("single_bull", RING_SINGLE_BULL_OUTER)), t),
+		"double_bull": lerpf(float(_reflow_start_bull.get("double_bull", RING_DOUBLE_BULL_OUTER)), float(_geo_bull.get("double_bull", RING_DOUBLE_BULL_OUTER)), t),
+	}
+	_wedge_bounds_deg_draw = _compute_wedge_bounds_deg(_geo_weights_draw)
+	queue_redraw()
+	if _boss_overlay != null:
+		_boss_overlay.queue_redraw()
+
+
+## Whether incoming geometry differs from the current SETTLED target (beyond float noise). Used
+## to skip needless reflow tweens when _sync_board_state pushes unchanged geometry.
+func _geometry_changed(weights: Array[float], bounds: Array[Dictionary], bull: Dictionary) -> bool:
+	if _geo_weights.size() != 20 or _geo_bounds.size() != 20:
+		return true
+	if not is_equal_approx(float(bull.get("single_bull", RING_SINGLE_BULL_OUTER)), float(_geo_bull.get("single_bull", RING_SINGLE_BULL_OUTER))):
+		return true
+	if not is_equal_approx(float(bull.get("double_bull", RING_DOUBLE_BULL_OUTER)), float(_geo_bull.get("double_bull", RING_DOUBLE_BULL_OUTER))):
+		return true
+	for i: int in range(20):
+		if not is_equal_approx(weights[i], _geo_weights[i]):
+			return true
+		var nb: Dictionary = bounds[i]
+		var cb: Dictionary = _geo_bounds[i]
+		for rk: String in nb:
+			if not cb.has(rk):
+				return true
+			if not is_equal_approx(float(nb[rk][0]), float(cb[rk][0])) or not is_equal_approx(float(nb[rk][1]), float(cb[rk][1])):
+				return true
+	return false
+
+
+## Cumulative wedge boundary degrees (size 21, pre-rotation) from per-wedge angular weights.
+## Each wedge's width = weight × 18° after renormalizing the weights to a 360° total; the walk is
+## anchored so wedge 0 (the 20) is centered at the top (its start = −width₀/2), generalizing the
+## old uniform WEDGE_OFFSET_DEG of −9°.
+func _compute_wedge_bounds_deg(weights: Array[float]) -> Array[float]:
+	var widths: Array[float] = []
+	var total: float = 0.0
+	for i: int in range(20):
+		var wd: float = weights[i] * WEDGE_ANGLE_DEG
+		widths.append(wd)
+		total += wd
+	if total > 0.0:
+		for i: int in range(20):
+			widths[i] = widths[i] * 360.0 / total
+	var bounds: Array[float] = []
+	bounds.resize(21)
+	bounds[0] = -widths[0] / 2.0
+	for i: int in range(20):
+		bounds[i + 1] = bounds[i] + widths[i]
+	return bounds
+
+
+## Compute the effective inner boundary of the double ring for a wedge (draw geometry), applying
+## the dartboard-side double_ring_width_scale handicap AFTER the manager's bounds.
+func _effective_double_inner_w(wedge_idx: int) -> float:
+	var b: Array = _band_raw_draw(wedge_idx, "double")
+	return RING_DOUBLE_OUTER - (RING_DOUBLE_OUTER - b[0]) * double_ring_width_scale
+
+
+## Raw [inner, outer] band for a wedge from the DRAW bounds (no scale handicap). Falls back to
+## base constants if geometry isn't seeded yet.
+func _band_raw_draw(wedge_idx: int, ring_key: String) -> Array:
+	if wedge_idx >= 0 and wedge_idx < _geo_bounds_draw.size() and _geo_bounds_draw[wedge_idx].has(ring_key):
+		var e: Array = _geo_bounds_draw[wedge_idx][ring_key]
+		return [float(e[0]), float(e[1])]
+	return _base_band(ring_key)
+
+
+## Raw [inner, outer] band for a wedge from the SETTLED bounds (no scale handicap), for hit
+## detection. Falls back to base constants if geometry isn't seeded yet.
+func _band_raw_settled(wedge_idx: int, ring_key: String) -> Array:
+	if wedge_idx >= 0 and wedge_idx < _geo_bounds.size() and _geo_bounds[wedge_idx].has(ring_key):
+		var e: Array = _geo_bounds[wedge_idx][ring_key]
+		return [float(e[0]), float(e[1])]
+	return _base_band(ring_key)
+
+
+func _base_band(ring_key: String) -> Array:
+	match ring_key:
+		"inner_single":
+			return [RING_SINGLE_BULL_OUTER, RING_INNER_SINGLE_OUTER]
+		"triple":
+			return [RING_INNER_SINGLE_OUTER, RING_TRIPLE_OUTER]
+		"outer_single":
+			return [RING_TRIPLE_OUTER, RING_OUTER_SINGLE_OUTER]
+		"double":
+			return [RING_OUTER_SINGLE_OUTER, RING_DOUBLE_OUTER]
+	return [0.0, 0.0]
+
+
+## DRAW band [inner, outer] for a wedge ring, with the double_ring_width_scale handicap folded in
+## (double inner moves out, outer single extends to fill). Used by all rendering + visual hover.
+func _band_draw(wedge_idx: int, ring_key: String) -> Array:
+	var b: Array = _band_raw_draw(wedge_idx, ring_key)
+	if ring_key == "double":
+		return [_effective_double_inner_w(wedge_idx), b[1]]
+	if ring_key == "outer_single":
+		return [b[0], _effective_double_inner_w(wedge_idx)]
+	return b
+
+
+## SETTLED double inner for a wedge (scale handicap applied). For hit detection.
+func _effective_double_inner_settled(wedge_idx: int) -> float:
+	var b: Array = _band_raw_settled(wedge_idx, "double")
+	return RING_DOUBLE_OUTER - (RING_DOUBLE_OUTER - b[0]) * double_ring_width_scale
+
+
+## Single-bull outer radius for hit detection (settled) / rendering (draw).
+func _single_bull_settled() -> float:
+	return float(_geo_bull.get("single_bull", RING_SINGLE_BULL_OUTER)) if not _geo_bull.is_empty() else RING_SINGLE_BULL_OUTER
+
+
+func _double_bull_settled() -> float:
+	return float(_geo_bull.get("double_bull", RING_DOUBLE_BULL_OUTER)) if not _geo_bull.is_empty() else RING_DOUBLE_BULL_OUTER
+
+
+func _single_bull_draw() -> float:
+	return float(_geo_bull_draw.get("single_bull", RING_SINGLE_BULL_OUTER)) if not _geo_bull_draw.is_empty() else RING_SINGLE_BULL_OUTER
+
+
+func _double_bull_draw() -> float:
+	return float(_geo_bull_draw.get("double_bull", RING_DOUBLE_BULL_OUTER)) if not _geo_bull_draw.is_empty() else RING_DOUBLE_BULL_OUTER
+
+
+## Angle (deg, rotation applied) of a wedge's start / end / center boundary, using DRAW weights
+## for rendering. Wedge widths vary, so callers must use _wedge_end_deg(i) instead of
+## start + WEDGE_ANGLE_DEG.
 func _wedge_start_deg(wedge_idx: int) -> float:
+	if _wedge_bounds_deg_draw.size() == 21:
+		return _wedge_bounds_deg_draw[wedge_idx] + board_rotation_offset
 	return wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + board_rotation_offset
+
+
+func _wedge_end_deg(wedge_idx: int) -> float:
+	if _wedge_bounds_deg_draw.size() == 21:
+		return _wedge_bounds_deg_draw[wedge_idx + 1] + board_rotation_offset
+	return wedge_idx * WEDGE_ANGLE_DEG + WEDGE_OFFSET_DEG + WEDGE_ANGLE_DEG + board_rotation_offset
+
+
+func _wedge_center_deg(wedge_idx: int) -> float:
+	return (_wedge_start_deg(wedge_idx) + _wedge_end_deg(wedge_idx)) * 0.5
+
+
+## DRAW [inner, outer] band for a wedge by DISPLAY ring name ("Inner Single"/"Triple"/...).
+## Convenience for the overlay/highlight draws that key off display names. Returns ZERO-width
+## for unknown names.
+func _band_draw_by_name(wedge_idx: int, ring_name: String) -> Array:
+	match ring_name:
+		"Inner Single", "inner_single":
+			return _band_draw(wedge_idx, "inner_single")
+		"Triple", "triple":
+			return _band_draw(wedge_idx, "triple")
+		"Outer Single", "outer_single":
+			return _band_draw(wedge_idx, "outer_single")
+		"Double", "double":
+			return _band_draw(wedge_idx, "double")
+	return [0.0, 0.0]
+
+
+## Classify a board-relative position into a ring KEY using the DRAW geometry (for visual
+## highlights / flash that should match the rendered board). Returns one of double_bull /
+## single_bull / inner_single / triple / outer_single / double, or "" when off-board.
+func _classify_ring_key_draw(relative: Vector2) -> String:
+	var nd: float = relative.length() / board_radius
+	if nd <= _double_bull_draw():
+		return "double_bull"
+	if nd <= _single_bull_draw():
+		return "single_bull"
+	var w: int = _get_wedge_index_draw(relative)
+	if nd <= _band_draw(w, "inner_single")[1]:
+		return "inner_single"
+	if nd <= _band_draw(w, "triple")[1]:
+		return "triple"
+	if nd <= _effective_double_inner_w(w):
+		return "outer_single"
+	if nd <= RING_DOUBLE_OUTER:
+		return "double"
+	return ""
 
 
 ## Draw boss overlay effects (voided wedges with transition support).
@@ -2114,41 +2374,49 @@ func _draw_boss_overlay() -> void:
 
 func _draw_void_wedge(wedge_idx: int, alpha: float) -> void:
 	var start_deg: float = _wedge_start_deg(wedge_idx)
-	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
+	var end_deg: float = _wedge_end_deg(wedge_idx)
 	var fill: Color = Color(void_fill_color.r, void_fill_color.g, void_fill_color.b, void_fill_color.a * alpha)
 	var border: Color = Color(void_border_color.r, void_border_color.g, void_border_color.b, void_border_color.a * alpha)
 
-	for ring_name: String in RING_BOUNDS:
-		var bounds: Array = RING_BOUNDS[ring_name]
-		var inner_norm: float = bounds[0]
-		var outer_norm: float = bounds[1]
-
-		var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, outer_norm, inner_norm)
+	for ring_name: String in RING_ORDER_DISPLAY:
+		var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+		if band[1] <= 0.0:
+			continue
+		var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, band[1], band[0])
 		_boss_overlay.draw_colored_polygon(points, fill)
 
-		var border_pts: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
+		var border_pts: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, band[1], band[0])
 		_boss_overlay.draw_polyline(border_pts, border, void_border_thickness)
 
 
-## Draw a single voided ring from a "<wedge>:<RingName>" key (Void boss drift).
+## Draw a single voided ring from a "<wedge>:<RingName>" key (Void boss drift), using that
+## wedge's angular span + ring band (so it tracks any geometry resize).
 func _draw_void_ring_from_key(key: String, alpha: float) -> void:
 	var sep: int = key.find(":")
 	if sep < 0:
 		return
 	var wedge_idx: int = key.substr(0, sep).to_int()
 	var ring_name: String = key.substr(sep + 1)
-	_draw_void_ring_segment(_wedge_start_deg(wedge_idx), ring_name, alpha)
+	var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+	if band[1] <= 0.0:
+		return
+	_draw_void_ring_band(_wedge_start_deg(wedge_idx), _wedge_end_deg(wedge_idx), band, alpha)
 
 
-## Draw one void ring band at an arbitrary angular start (used by both keyed static
-## rings and the migrating rings sliding between wedges during the drift phase).
+## Draw one void ring band sliding at an arbitrary angular start (the drift phase, where the
+## ring migrates between wedges so there's no fixed wedge index). Uses base band widths and the
+## canonical 18° span — a transient sliding visual, so an approximation is acceptable.
 func _draw_void_ring_segment(start_deg: float, ring_name: String, alpha: float) -> void:
 	if not RING_BOUNDS.has(ring_name):
 		return
-	var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-	var bounds: Array = RING_BOUNDS[ring_name]
-	var inner_norm: float = bounds[0]
-	var outer_norm: float = bounds[1]
+	_draw_void_ring_band(start_deg, start_deg + WEDGE_ANGLE_DEG, RING_BOUNDS[ring_name], alpha)
+
+
+## Fill + border a single void ring band given explicit start/end degrees and an [inner, outer]
+## normalized band. Shared by the static keyed rings and the sliding drift rings.
+func _draw_void_ring_band(start_deg: float, end_deg: float, band: Array, alpha: float) -> void:
+	var inner_norm: float = band[0]
+	var outer_norm: float = band[1]
 	var fill: Color = Color(void_fill_color.r, void_fill_color.g, void_fill_color.b, void_fill_color.a * alpha)
 	var border: Color = Color(void_border_color.r, void_border_color.g, void_border_color.b, void_border_color.a * alpha)
 
@@ -2170,10 +2438,12 @@ func set_boss_recession_wedges(wedges: Array[int]) -> void:
 func _draw_recession_overlay_cb() -> void:
 	for wedge_idx: int in _boss_recession_wedges:
 		var start_deg: float = _wedge_start_deg(wedge_idx)
-		var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-		for ring_name: String in RING_BOUNDS:
-			var bounds: Array = RING_BOUNDS[ring_name]
-			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, bounds[1], bounds[0])
+		var end_deg: float = _wedge_end_deg(wedge_idx)
+		for ring_name: String in RING_ORDER_DISPLAY:
+			var band: Array = _band_draw_by_name(wedge_idx, ring_name)
+			if band[1] <= 0.0:
+				continue
+			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, band[1], band[0])
 			_recession_overlay.draw_colored_polygon(points, recession_overlay_color)
 
 
@@ -2238,28 +2508,16 @@ func _draw_shockwave_overlay() -> void:
 
 	var base_color: Color = Color(0.0, 0.0, 0.0, 1.0)
 
-	match _shockwave_ring_name:
-		"double_bull":
-			_shockwave_overlay.draw_circle(Vector2.ZERO, board_radius * RING_DOUBLE_BULL_OUTER, base_color)
-		"single_bull":
-			_shockwave_overlay.draw_circle(Vector2.ZERO, board_radius * RING_SINGLE_BULL_OUTER, base_color)
-		"inner_single":
-			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, RING_INNER_SINGLE_OUTER, RING_SINGLE_BULL_OUTER)
-			_shockwave_overlay.draw_colored_polygon(points, base_color)
-		"triple":
-			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, RING_TRIPLE_OUTER, RING_INNER_SINGLE_OUTER)
-			_shockwave_overlay.draw_colored_polygon(points, base_color)
-		"outer_single":
-			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, _effective_double_inner(), RING_TRIPLE_OUTER)
-			_shockwave_overlay.draw_colored_polygon(points, base_color)
-		"double":
-			var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
-			var end_deg: float = start_deg + WEDGE_ANGLE_DEG
-			var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, RING_DOUBLE_OUTER, _effective_double_inner())
-			_shockwave_overlay.draw_colored_polygon(points, base_color)
+	if _shockwave_ring_name == "double_bull":
+		_shockwave_overlay.draw_circle(Vector2.ZERO, board_radius * _double_bull_draw(), base_color)
+		return
+	if _shockwave_ring_name == "single_bull":
+		_shockwave_overlay.draw_circle(Vector2.ZERO, board_radius * _single_bull_draw(), base_color)
+		return
+	var band: Array = _band_draw_by_name(_shockwave_wedge_idx, _shockwave_ring_name)
+	if band[1] <= 0.0:
+		return
+	var start_deg: float = _wedge_start_deg(_shockwave_wedge_idx)
+	var end_deg: float = _wedge_end_deg(_shockwave_wedge_idx)
+	var points: PackedVector2Array = _build_segment_points(start_deg, end_deg, band[1], band[0])
+	_shockwave_overlay.draw_colored_polygon(points, base_color)

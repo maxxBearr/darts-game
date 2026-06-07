@@ -100,6 +100,15 @@ signal challenge_lost_dismissed
 ## Corner radius of upgrade/modifier pick buttons in pixels.
 @export_range(0.0, 16.0, 1.0) var upgrade_button_corner_radius: float = 6.0
 
+## Fixed width (px) of each event/shop pick card. Long geometry descriptions wrap inside this
+## width instead of growing the button off screen; three cards at this width must fit across the
+## UpgradeContainer (3×240 + separators sits well within the viewport).
+@export var upgrade_card_width: float = 240.0
+
+## Minimum height (px) of each pick card. Autowrapped text grows downward from this floor, so the
+## cards keep a constant footprint regardless of how long the description is.
+@export var upgrade_card_min_height: float = 132.0
+
 @export_group("Checkout Helper")
 
 ## Font size for checkout path lines.
@@ -1043,6 +1052,13 @@ func hide_all_buttons() -> void:
 	new_run_button.visible = false
 
 
+## Hide the 1-of-3 pick surface (cards + skip button). Used by the geometry-event re-flow beat so
+## the board is unobstructed while it reshapes, before the map returns.
+func hide_event_pick_ui() -> void:
+	upgrade_container.visible = false
+	_skip_modifier_button.visible = false
+
+
 func _on_action_button_visibility_changed(btn: Button) -> void:
 	if btn.visible:
 		_start_button_pulse(btn)
@@ -1334,6 +1350,14 @@ func _speed_to_display(speed: float) -> int:
 
 ## Apply a StyleBoxFlat to an upgrade button for controllable opacity and corners.
 func _apply_upgrade_button_style(button: Button) -> void:
+	# Fixed footprint + word-wrap: long geometry descriptions wrap to new lines INSIDE the card
+	# rather than widening it off screen. The fixed min width is what the autowrap wraps against;
+	# in the HBoxContainer (no EXPAND flag) the button takes exactly this width, so all three cards
+	# stay a constant size whatever the description length. Full text still lives in the tooltip.
+	button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	button.clip_text = false
+	button.custom_minimum_size = Vector2(upgrade_card_width, upgrade_card_min_height)
+
 	var style: StyleBoxFlat = StyleBoxFlat.new()
 	style.bg_color = Color(0.15, 0.15, 0.2, upgrade_button_opacity)
 	style.set_corner_radius_all(int(upgrade_button_corner_radius))
@@ -1459,11 +1483,21 @@ func show_hover_tooltip(result: Dictionary, original_wedge_order: Array[int], sc
 	# Build simplified prefix (S/D/T/SB/DB)
 	var prefix: String = _get_hover_prefix(ring_name)
 
-	# Build the compact tooltip text
+	# Build the compact tooltip text. When a streak factor is in play, show the two
+	# scoring axes separately — "oS28 ×3×5" (board baseline × streak factor) — so the
+	# combined multiplier is reconstructable from what's on screen. A flat "×15" reads
+	# as unexplainable; the split is the legibility half of the 1+Σ streak law.
 	var text: String
 	var base_multiplier: int = _get_base_multiplier(ring_name)
 	var bonus_mult: int = multiplier - base_multiplier
-	if bonus_mult > 0:
+	var board_multiplier: int = result.get("board_multiplier", multiplier)
+	var streak_factor: int = result.get("streak_factor", 1)
+	# Only split when the parts provably recompose the whole (flip/void edge cases fall
+	# back to the combined number rather than showing a lying breakdown).
+	var can_split: bool = streak_factor > 1 and board_multiplier * streak_factor == multiplier
+	if can_split:
+		text = "Target: %s%d ×%d×%d = %d" % [prefix, face_value, board_multiplier, streak_factor, total_score]
+	elif bonus_mult > 0:
 		text = "Target: %s%d ×%d = %d" % [prefix, face_value, multiplier, total_score]
 	else:
 		text = "Target: %s%d = %d" % [prefix, face_value, total_score]
@@ -1634,7 +1668,17 @@ func update_streak_section(streak_modifiers: Array, effective_wedge_values: Arra
 		var line: HBoxContainer = HBoxContainer.new()
 		line.add_theme_constant_override("separation", 4)
 		line.mouse_filter = Control.MOUSE_FILTER_STOP
-		line.tooltip_text = "%s\n%s" % [streak_mod.modifier_name, streak_mod.description]
+		# Tooltip teaches the combination rule in bonus language: every streak's bonus
+		# ADDS into one shared multiplier (×(1 + total)) — streaks never compound.
+		var growth: int = 1
+		var growth_value: Variant = streak_mod.get("streak_growth")
+		if growth_value is int:
+			growth = growth_value
+		line.tooltip_text = (
+			"%s\n%s\n\nEach consecutive hit raises this streak's bonus by +%d.\n"
+			+ "All streak bonuses add into ONE multiplier: ×(1 + total bonuses).\n"
+			+ "Streaks add together — they never multiply each other."
+		) % [streak_mod.modifier_name, streak_mod.description, growth]
 
 		# Small icon
 		var icon: ModifierIcon = ModifierIcon.new()
@@ -1665,11 +1709,17 @@ func update_streak_section(streak_modifiers: Array, effective_wedge_values: Arra
 		scope_label.modulate = streak_mod.rarity_color
 		line.add_child(scope_label)
 
-		# Count label
-		var count_label: Label = Label.new()
-		count_label.text = ": x%d" % streak_mod.get_streak_count()
-		count_label.add_theme_font_size_override("font_size", 13)
-		line.add_child(count_label)
+		# Bonus label — bonus language, not factor language ("x2" read as a multiplier
+		# you own, so two streaks read as x2·x2; "+1" sums visibly into the Total line).
+		# Shows the current contribution plus what the next continuing hit would pay,
+		# matching the number the target-hover preview prices in.
+		var bonus_label: Label = Label.new()
+		if streak_mod.get_streak_count() == 0:
+			bonus_label.text = ": +0"
+		else:
+			bonus_label.text = ": +%d (next +%d)" % [streak_mod.get_streak_bonus(), streak_mod.get_next_streak_bonus()]
+		bonus_label.add_theme_font_size_override("font_size", 13)
+		line.add_child(bonus_label)
 
 		# Set opacity based on state
 		if streak_mod.get_streak_count() == 0:
@@ -1678,6 +1728,24 @@ func update_streak_section(streak_modifiers: Array, effective_wedge_values: Arra
 			line.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
 		_streak_section.add_child(line)
+
+	# Combined-total line — the bridge from per-streak bonuses to the single factor
+	# that actually multiplies the dart: ×(1 + Σ current bonuses). This is where the
+	# "extra one" lives (the base output), so the per-streak lines can stay pure "+N".
+	var total_bonus: int = 0
+	for mod: Resource in streak_modifiers:
+		if mod is ScoringModifier:
+			total_bonus += (mod as ScoringModifier).get_streak_bonus()
+	var total_line: Label = Label.new()
+	total_line.text = "Total: ×%d" % (1 + total_bonus)
+	total_line.add_theme_font_size_override("font_size", 13)
+	total_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	total_line.mouse_filter = Control.MOUSE_FILTER_STOP
+	total_line.tooltip_text = "The one multiplier applied to your dart:\n×(1 + all streak bonuses). The 1 is the dart's base output."
+	# Dim when no streak is paying yet (×1 = no effect), same idle treatment as the lines.
+	if total_bonus == 0:
+		total_line.modulate = Color(1.0, 1.0, 1.0, streak_idle_opacity)
+	_streak_section.add_child(total_line)
 
 
 ## Clear the streak section entirely.
@@ -2029,11 +2097,17 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 
 		if item["type"] == "modifier":
 			var modifier: Resource = item["data"]
-			button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+			# GEOMETRY items are rarity-less (conservation eats the rarity axis) — render with no
+			# rarity label or rarity tint; use a neutral geometry frame instead (geometry spec §3/§6).
+			if modifier.family == ScoringEnums.Family.GEOMETRY:
+				button_text = "%s\n%s" % [modifier.modifier_name, modifier.description]
+				button_color = Color(0.55, 0.80, 0.55)  # matches EventFamilyIcons' geometry green.
+			else:
+				button_text = "%s\n%s\n%s" % [modifier.rarity, modifier.modifier_name, modifier.description]
+				button_color = modifier.rarity_color
 			if modifier.timing == ScoringEnums.ModifierTiming.PER_DART and modifier.streak_category == ScoringEnums.StreakCategory.NONE:
 				var lock_tag: String = "[OPEN] Toggleable" if modifier.toggleable else "[ALWAYS ON]"
 				button_text += "\n%s" % lock_tag
-			button_color = modifier.rarity_color
 			buttons[i].tooltip_text = modifier.description
 		else:
 			var upgrade: Dictionary = item["data"]

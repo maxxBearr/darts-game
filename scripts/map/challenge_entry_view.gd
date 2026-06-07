@@ -133,6 +133,8 @@ func _handicap_name(id: StringName) -> String:
 	match id:
 		&"rotation": return "Rotating board"
 		&"narrow_double": return "Narrowed double ring"
+		&"even_out": return "Even Out (finish on even-valued wedges)"
+		&"odd_out": return "Odd Out (finish on odd-valued wedges)"
 		_: return "None (clean race)"
 
 

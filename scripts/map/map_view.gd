@@ -32,6 +32,18 @@ signal node_chosen(node: MapNode)
 ## Colour of edges leaving the current node (the legal next moves).
 @export var edge_reachable_color: Color = Color(0.95, 0.85, 0.45, 0.95)
 
+## Seconds for one full pulse cycle (dim → bright → dim) of the selectable next nodes. The
+## reachable picks pulse so it reads which widgets are clickable; current/visited/locked stay static.
+@export var pulse_period: float = 1.4
+
+## Modulate multiplier at the DIM end of the pulse — slightly below the default 1.0 so the trough
+## reads as a dip, not the resting state.
+@export var pulse_dim: float = 0.72
+
+## Modulate multiplier at the BRIGHT end of the pulse — above the default 1.0 to draw the eye to
+## the clickable next nodes.
+@export var pulse_bright: float = 1.30
+
 # --- Type palette (flat grey-rect placeholders; reskinned later) ---
 @export var color_leg: Color = Color(0.45, 0.48, 0.55)
 @export var color_shop: Color = Color(0.30, 0.55, 0.45)
@@ -51,6 +63,11 @@ var _buttons: Dictionary = {}     ## id -> Button
 var _positions: Dictionary = {}   ## id -> Vector2 (widget centre)
 var _title: Label
 var _display_act: int = 0         ## the act currently drawn (incremental gen renders one act)
+
+## Looping tween that pulses the selectable next nodes, plus the buttons it drives. Rebuilt from
+## scratch every _refresh_reachability so stale tweens never stack or touch freed widgets.
+var _pulse_tween: Tween = null
+var _pulse_buttons: Array[Button] = []
 
 
 func _ready() -> void:
@@ -195,16 +212,51 @@ func _on_node_pressed(id: int) -> void:
 ## node and visited history so the player can read where they are.
 func _refresh_reachability() -> void:
 	var reach: Array[int] = graph.reachable_from(graph.current_id)
+	var reachable_btns: Array[Button] = []
 	for id: int in _buttons:
 		var btn: Button = _buttons[id]
 		var n: MapNode = graph.nodes[id]
 		var is_reach: bool = reach.has(id)
 		btn.disabled = not is_reach
 		_style_button(btn, n, is_reach, id == graph.current_id)
+		# The selectable next nodes (reachable, and never the current node — current is never in
+		# its own forward edges) pulse to read as clickable.
+		if is_reach and id != graph.current_id:
+			reachable_btns.append(btn)
+	_restart_pulse(reachable_btns)
 	queue_redraw()
 
 
+## (Re)build the looping modulate pulse on the selectable next nodes. Kills any prior tween first
+## so refreshes never stack pulses or leave a tween driving freed buttons. Current/visited/locked
+## widgets keep their static modulate (reset to white in _style_button).
+func _restart_pulse(reachable_btns: Array[Button]) -> void:
+	if _pulse_tween != null and _pulse_tween.is_valid():
+		_pulse_tween.kill()
+	_pulse_tween = null
+	_pulse_buttons = reachable_btns
+	if _pulse_buttons.is_empty() or not is_inside_tree():
+		return
+	# One tween drives a shared brightness float (dim → bright → dim) applied to every reachable
+	# button each step, looping forever. SINE ease gives a smooth breathing cadence.
+	_pulse_tween = create_tween().set_loops()
+	_pulse_tween.tween_method(_apply_pulse, pulse_dim, pulse_bright, pulse_period * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_pulse_tween.tween_method(_apply_pulse, pulse_bright, pulse_dim, pulse_period * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+## Apply the current pulse brightness to every selectable-next button. Guards against freed
+## widgets (a _rebuild frees buttons; the kill in _restart_pulse normally beats this, but stay safe).
+func _apply_pulse(brightness: float) -> void:
+	for btn: Button in _pulse_buttons:
+		if is_instance_valid(btn):
+			btn.modulate = Color(brightness, brightness, brightness, 1.0)
+
+
 func _style_button(btn: Button, n: MapNode, is_reach: bool, is_current: bool) -> void:
+	# Reset modulate to the resting value; the pulse tween (re)applies a breathing modulate to the
+	# reachable buttons after styling, and a node that was reachable last refresh but isn't now must
+	# fall back to a static white modulate here.
+	btn.modulate = Color.WHITE
 	var base: Color = _color_for(n)
 	if not is_reach and not is_current:
 		base = Color(base.r * 0.45, base.g * 0.45, base.b * 0.45, 0.85)

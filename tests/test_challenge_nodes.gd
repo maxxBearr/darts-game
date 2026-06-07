@@ -30,6 +30,10 @@ func _init() -> void:
 	_test_engine_saved_darts_on_win()
 	_test_rarity_bands_standalone()
 	_test_ice_tray_standalone()
+	_test_challenge_family_rarities()
+	_test_challenge_family_spread()
+	_test_streak_supply_wrinkle()
+	_test_parity_out_finish()
 	print("\nChallengeNodes test: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -384,6 +388,147 @@ func _test_engine_saved_darts_on_win() -> void:
 	bank -= deposit                       # withheld for the race
 	bank += x01.get_saved_darts()         # unused returned on win
 	_check(bank == 50 - x01.darts_used_in_leg, "win: net bank delta == -darts_used (lean win banks more)", -1)
+
+
+# ── §9a regression: every challenge-draw family generates at all three rarities ──
+
+## The bug (geometry spec §9a): a flat family whose only item ignored the requested rarity
+## (Wedge Swap's generate() forced [100,0,0]) made the challenge channel's earned-rarity ladder
+## structurally unfulfillable. Guard the STRUCTURE going forward: every family the challenge draw
+## can roll must produce at least one pool item AT each of the three rarities (the same family ==
+## sample.family + rarity_tier == rarity match _generate_challenge_reward_picks uses). The
+## draw_families list mirrors map_graph._roll_challenge_node — keep them in sync. §10 added STREAK
+## (both streak classes ladder 50/30/20, so they satisfy this as-is).
+func _test_challenge_family_rarities() -> void:
+	print("— §9a/§10 challenge-draw families generate at all three rarities")
+	var draw_families: Array[ScoringEnums.Family] = [ScoringEnums.Family.SCORING, ScoringEnums.Family.STREAK]
+	var rarities: Array[ScoringEnums.Rarity] = [
+		ScoringEnums.Rarity.COMMON, ScoringEnums.Rarity.UNCOMMON, ScoringEnums.Rarity.RARE]
+	for family: ScoringEnums.Family in draw_families:
+		for rarity: ScoringEnums.Rarity in rarities:
+			var found: bool = false
+			for type in ModifierRegistry.MODIFIER_TYPES:
+				var sample: ScoringModifier = type.generate(rarity)
+				if sample != null and sample.family == family and sample.rarity_tier == rarity:
+					found = true
+					break
+			_check(found, "family %d has a pool item honoring rarity %d" % [family, rarity], -1)
+	# And the sidelined item is truly gone from the live pool (never rolled again).
+	var placement_in_pool: bool = false
+	for type in ModifierRegistry.MODIFIER_TYPES:
+		var s: ScoringModifier = type.generate(ScoringEnums.Rarity.COMMON)
+		if s != null and s.family == ScoringEnums.Family.PLACEMENT:
+			placement_in_pool = true
+	_check(not placement_in_pool, "PLACEMENT (Wedge Swap) is no longer in the live pool", -1)
+
+
+# ── §10: streaks join the challenge draw (Family.STREAK) ──────────────────────
+
+## Over the seed grid the challenge draw must roll BOTH [SCORING, STREAK] families with REAL
+## spread — not just one occurrence of each (the [[feedback-rolled-generator-spread]] lesson: a
+## family present once isn't proof the roll isn't pinned). With a uniform 2-way roll each family
+## should claim a healthy share; assert each is at least a quarter of all challenge draws and that
+## NOTHING off the list ever lands on the earned surface.
+func _test_challenge_family_spread() -> void:
+	print("— §10 challenge draw rolls SCORING and STREAK with spread")
+	var level: LevelDefinition = load("res://resources/levels/level_1501.tres")   # 3 acts → most challenges
+	var family_counts: Dictionary = {}
+	var total: int = 0
+	for seed_value: int in range(SEEDS_PER_LEVEL):
+		var g: MapGraph = _generate_full(level, seed_value)
+		for id: int in g.nodes:
+			var n: MapNode = g.get_node_by_id(id)
+			if n.type != MapNode.Type.CHALLENGE or n.challenge == null:
+				continue
+			var fam: int = n.challenge.reward_family
+			family_counts[fam] = family_counts.get(fam, 0) + 1
+			total += 1
+	_check(total > 0, "challenge nodes exist to sample families from", -1)
+	var scoring_n: int = family_counts.get(ScoringEnums.Family.SCORING, 0)
+	var streak_n: int = family_counts.get(ScoringEnums.Family.STREAK, 0)
+	# Membership: BOTH families appear.
+	_check(scoring_n > 0, "challenge draw rolls SCORING (got %d)" % scoring_n, -1)
+	_check(streak_n > 0, "challenge draw rolls STREAK (got %d)" % streak_n, -1)
+	# Spread: each family is a real share of the draw, not a token single.
+	_check(float(scoring_n) / float(total) >= 0.25, "SCORING is a real share (%d/%d)" % [scoring_n, total], -1)
+	_check(float(streak_n) / float(total) >= 0.25, "STREAK is a real share (%d/%d)" % [streak_n, total], -1)
+	# Purity: nothing off the [SCORING, STREAK] list ever lands on the earned challenge surface.
+	for fam: int in family_counts:
+		_check(fam == ScoringEnums.Family.SCORING or fam == ScoringEnums.Family.STREAK,
+			"challenge family %d is on the [SCORING, STREAK] list" % fam, -1)
+	print("   challenge family spread over %d seeds: SCORING=%d STREAK=%d (total %d)" % [SEEDS_PER_LEVEL, scoring_n, streak_n, total])
+
+
+## The supply wrinkle (§10): STREAK has only two classes, so a family-pure draw offers TWO distinct
+## picks (one Wedge + one Color), never padded from another family. Replicates the core of
+## _generate_challenge_reward_picks (main.gd can't load headless — it references autoloads): keep
+## the pool classes whose sample is STREAK and generate one instance of each.
+func _test_streak_supply_wrinkle() -> void:
+	print("— §10 STREAK supplies two distinct family-pure picks")
+	var rarity: ScoringEnums.Rarity = ScoringEnums.Rarity.UNCOMMON
+	var picks: Array[ScoringModifier] = []
+	for type in ModifierRegistry.MODIFIER_TYPES:
+		var sample: ScoringModifier = type.generate(rarity)
+		if sample != null and sample.family == ScoringEnums.Family.STREAK:
+			picks.append(type.generate(rarity))
+	# Two streak classes → exactly two picks; every one family-pure STREAK (no off-family padding).
+	_check(picks.size() == 2, "STREAK draw offers two picks (got %d)" % picks.size(), -1)
+	for p: ScoringModifier in picks:
+		_check(p.family == ScoringEnums.Family.STREAK, "every streak pick is family-pure STREAK", -1)
+	# Distinct fingerprints at the fixed rarity, so the two cards never read as the same item (the
+	# two classes differ by script path; Wedge's scope is rarity-fixed, Color carries its color).
+	if picks.size() == 2:
+		_check(picks[0].get_config_fingerprint() != picks[1].get_config_fingerprint(),
+			"the two streak picks have distinct fingerprints", -1)
+
+
+# ── §9b: Parity Out finish-validity (the out-rule seam, driven through the engine) ──
+
+## The handicap halves the out-set by the finishing wedge's CURRENT face value parity. Drives the
+## real x01_game finish-validity (which mirrors ScoringModifierManager._is_valid_finish): a
+## matching-parity double checks out, a wrong-parity double busts, and the bull is always exempt.
+func _test_parity_out_finish() -> void:
+	print("— §9b Parity Out checkout restriction")
+	# Even Out (parity 0): even-valued wedge doubles finish.
+	var x01: Node = _make_x01()
+	x01.checkout_parity = 0
+	x01.start_leg_with(40, 5)
+	var win: Dictionary = x01.process_throw({"total_score": 40, "ring_name": "Double", "face_value": 20, "is_bull": false})
+	_check(win["is_leg_won"], "Even Out: D20 (even) checks out 40", -1)
+
+	# Even Out: an odd-valued wedge double does NOT finish (and busts on the checkout attempt).
+	var x02: Node = _make_x01()
+	x02.checkout_parity = 0
+	x02.start_leg_with(2, 5)
+	var bust: Dictionary = x02.process_throw({"total_score": 2, "ring_name": "Double", "face_value": 1, "is_bull": false})
+	_check(not bust["is_leg_won"], "Even Out: D1 (odd) does NOT check out 2", -1)
+	_check(bust["is_bust"], "Even Out: a wrong-parity finish busts", -1)
+
+	# Bull is exempt — 25 is odd, but D-Bull still outs under Even Out (keeps 50 finishable).
+	var x03: Node = _make_x01()
+	x03.checkout_parity = 0
+	x03.start_leg_with(50, 5)
+	var bullwin: Dictionary = x03.process_throw({"total_score": 50, "ring_name": "Double Bull", "face_value": 25, "is_bull": true})
+	_check(bullwin["is_leg_won"], "Even Out: bull exempt — D-Bull checks out 50", -1)
+
+	# Odd Out (parity 1): mirror.
+	var x04: Node = _make_x01()
+	x04.checkout_parity = 1
+	x04.start_leg_with(38, 5)
+	var oddwin: Dictionary = x04.process_throw({"total_score": 38, "ring_name": "Double", "face_value": 19, "is_bull": false})
+	_check(oddwin["is_leg_won"], "Odd Out: D19 (odd) checks out 38", -1)
+
+	var x05: Node = _make_x01()
+	x05.checkout_parity = 1
+	x05.start_leg_with(40, 5)
+	var oddbust: Dictionary = x05.process_throw({"total_score": 40, "ring_name": "Double", "face_value": 20, "is_bull": false})
+	_check(not oddbust["is_leg_won"], "Odd Out: D20 (even) does NOT check out 40", -1)
+
+	# No restriction (default -1): any double outs, parity ignored.
+	var x06: Node = _make_x01()
+	x06.start_leg_with(40, 5)
+	var normal: Dictionary = x06.process_throw({"total_score": 40, "ring_name": "Double", "face_value": 20, "is_bull": false})
+	_check(normal["is_leg_won"], "No rule: D20 checks out 40 normally", -1)
 
 
 func _check(condition: bool, label: String, seed_value: int) -> void:

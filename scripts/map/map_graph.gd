@@ -45,6 +45,14 @@ var _depth_act: Dictionary = {}       ## depth -> act (each depth sits in exactl
 var _cfg: MapGenConfig = null          ## the tuning config, captured at run start
 var _level: LevelDefinition = null     ## the level, captured at run start (max target / acts)
 var _rng: RandomNumberGenerator = null ## the SEEDED generator, threaded across act gens
+
+## A dedicated sub-RNG for COSMETIC-only rolls (the event reward family) so they never perturb
+## the structural _rng stream. Event family choice doesn't affect graph STRUCTURE (placement,
+## depth, lane runs), so it must not ride the structural stream — otherwise adding an eligible
+## family (e.g. geometry) shifts every downstream structural roll and changes the generated map.
+## Lazily seeded from _rng.seed (read-only — doesn't consume _rng's state), so it stays
+## deterministic per run while leaving the structural stream byte-identical. See _roll_event_node.
+var _family_rng: RandomNumberGenerator = null
 var _generated_acts: int = 0           ## how many acts have been appended so far
 var _prev_boss_id: int = -1            ## the most-recently generated boss (the frontier sink)
 var _next_depth: int = 0               ## the running global depth counter (next free column)
@@ -454,7 +462,15 @@ func _roll_event_node(run_state: Dictionary) -> EventNode:
 	var brush_colors: Variant = run_state.get("available_brush_colors", null)
 	if brush_colors is Array and not (brush_colors as Array).is_empty():
 		families.append(&"brush")
-	e.reward_family = families[_rng.randi_range(0, families.size() - 1)]
+	# Geometry is ALWAYS eligible: its trades are zero-sum board reshapes, and even a currently
+	# inert option (e.g. Grow Red on a board with no red) is a legal build-around purchase, so it
+	# needs no state gate (geometry spec §6). Roll the family off the COSMETIC sub-RNG so adding
+	# it never perturbs the structural _rng stream (which would reshape the generated map).
+	families.append(&"geometry")
+	if _family_rng == null:
+		_family_rng = RandomNumberGenerator.new()
+		_family_rng.seed = _rng.seed ^ 0x9E3779B9  # read-only on _rng — doesn't consume its state.
+	e.reward_family = families[_family_rng.randi_range(0, families.size() - 1)]
 	return e
 
 
@@ -466,25 +482,32 @@ func _roll_challenge_node(rng: RandomNumberGenerator, cfg: MapGenConfig) -> Chal
 	var c: ChallengeNode = ChallengeNode.new()
 	# darts-per-turn ∈ [dpt_min, dpt_max], the bust-grain shown up front (§5).
 	c.darts_per_turn = rng.randi_range(c.dpt_min, c.dpt_max)
-	# Offer one high-impact FLAT board family (Scoring / Placement) — the typed pick the
-	# player earns; rarity comes from finish-efficiency at win time (§6). Brush was dropped
-	# here in the events slice (03 §1.2): brush is a *trade*, so it now lives on the free
-	# event surface, not the earned challenge surface — challenge and event never share a
-	# family, so there is no cross-surface rarity ceiling to enforce.
+	# Offer one LADDERED family — the typed pick the player earns; rarity comes from
+	# finish-efficiency at win time (§6). The earned surface only carries families that climb a
+	# rarity ladder (generate at all three rarities): SCORING (Hotspot / Wedge Value) and, as of
+	# the geometry spec §10, STREAK (Wedge / Color streaks — a capacity-gated climb, the natural
+	# match for a race that proves repeatable precision). BRUSH and GEOMETRY are rarity-less
+	# *trades* and live on the free event surface, not here; PLACEMENT was sidelined in §9a (its
+	# only item, Wedge Swap, can't honor earned rarity). Challenge and event never share a family,
+	# so there is no cross-surface rarity ceiling. STREAK has only two classes, so a streak draw
+	# offers two distinct picks (Wedge + one Color) rather than three — the events-slice "offer
+	# fewer" relaxation; the reward UI hides the unused card.
 	var families: Array[ScoringEnums.Family] = [
 		ScoringEnums.Family.SCORING,
-		ScoringEnums.Family.PLACEMENT,
+		ScoringEnums.Family.STREAK,
 	]
 	c.reward_family = families[rng.randi_range(0, families.size() - 1)]
 	# Optionally handicap the race with a recycled benched-boss aim effect (§8); empty
 	# = a clean precision race. The handicap raises darts-used, nudging rarity down a
 	# band on its own (§6/§8 implicit balancing).
-	# Only the pure AIM handicaps are used (they test precision, the §8 verb). two_darts
-	# is excluded: it mutates darts_per_turn, which would clobber the rolled dpt the
-	# player saw before wagering (§5) and is anyway redundant with a dpt=2 roll. Its code
-	# stays benched. rotation / narrow_double don't touch the dart economy.
+	# The aim handicaps test precision (the §8 verb) without touching the dart economy:
+	# rotation, narrow_double, and the §9b Parity Out pair (even_out / odd_out — the finishing
+	# double must sit on a wedge whose CURRENT face value matches the parity; route-rewiring,
+	# not the same checkout made harder). two_darts is excluded: it mutates darts_per_turn,
+	# which would clobber the rolled dpt the player saw before wagering (§5) and is anyway
+	# redundant with a dpt=2 roll. Its code stays benched.
 	if rng.randf() < cfg.challenge_handicap_chance:
-		var handicaps: Array[StringName] = [&"rotation", &"narrow_double"]
+		var handicaps: Array[StringName] = [&"rotation", &"narrow_double", &"even_out", &"odd_out"]
 		c.handicap_id = handicaps[rng.randi_range(0, handicaps.size() - 1)]
 	return c
 

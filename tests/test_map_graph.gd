@@ -255,8 +255,10 @@ func _assert_topology_invariants(level: LevelDefinition, g: MapGraph, seed_value
 				detour_challenges_per_act[n.act] = detour_challenges_per_act.get(n.act, 0) + 1
 		if n.type == MapNode.Type.EVENT:
 			_check(n.event != null, "event node carries an EventNode resource", seed_value)
-			# Accuracy-only run-state (default) ⇒ the only eligible family is accuracy.
-			_check(n.event.reward_family == &"accuracy", "event family is accuracy under empty run-state", seed_value)
+			# Empty run-state ⇒ brush is ineligible (no colors), but accuracy AND geometry both
+			# are (geometry's zero-sum trades are always eligible, even when currently inert).
+			_check(n.event.reward_family == &"accuracy" or n.event.reward_family == &"geometry",
+				"event family is accuracy or geometry under empty run-state", seed_value)
 	for a: int in detour_challenges_per_act:
 		_check(detour_challenges_per_act[a] <= 1, "act %d has ≤1 detour challenge (got %d)" % [a, detour_challenges_per_act[a]], seed_value)
 	for a: int in per_act:

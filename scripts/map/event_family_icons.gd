@@ -6,9 +6,9 @@ extends Resource
 ## `fallback_colors`. See specs/map/03-events-impl.md §2.
 ##
 ## Scaffolded for ALL four families now (exactly like the relics' first-pass icons) so the
-## map renders a distinct glyph the moment a family activates. Only `accuracy` + `brush`
-## are active reward paths at launch; `geometry` + `scoring` are placeholders awaiting
-## their items / make-it-a-trade retrofit (§7).
+## map renders a distinct glyph the moment a family activates. `accuracy`, `brush`, and
+## `geometry` are active reward paths; `scoring` remains a placeholder awaiting its
+## make-it-a-trade retrofit (§7).
 
 ## Real per-family textures, dropped in by Max later. Empty ⇒ the view uses the fallback.
 @export var icons: Dictionary = {}            ## StringName family -> Texture2D
