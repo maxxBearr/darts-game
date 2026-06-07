@@ -3,6 +3,8 @@ extends CanvasLayer
 
 signal next_dart_pressed
 signal next_turn_pressed
+## Emitted by the post-leg/shop button (labelled "Return to Map", round 3 item 4). Node name
+## and signal kept as next_leg_* to avoid scene churn; it returns to the run map.
 signal next_leg_pressed
 signal new_run_pressed
 signal upgrade_selected(index: int)
@@ -16,6 +18,10 @@ signal throw_aim_pressed
 ## Fired when the leg-intro presentation (flying readouts + fronted-rail fill) has fully
 ## finished. main.gd awaits this before starting the leg's first throw.
 signal leg_intro_finished
+
+## Fired when the player dismisses the challenge-lost banner with a click. main.gd awaits
+## this before returning to the map, so a race loss gets a real beat instead of a cut.
+signal challenge_lost_dismissed
 
 @onready var score_label: Label = %ScoreLabel
 @onready var instruction_label: Label = %InstructionLabel
@@ -290,8 +296,35 @@ var _intro_step_tween: Tween = null
 var _intro_reveal_last_count: int = 0
 
 ## Full-screen invisible control shown during the intro: swallows clicks so gameplay UI
-## beneath can't fire, and turns each click into a per-step skip.
+## beneath can't fire, and turns each click into a per-step skip. Reused (with its own
+## active flag below) by the challenge-lost banner's click-to-dismiss.
 var _intro_blocker: Control = null
+
+@export_group("Challenge Lost Banner")
+
+## Font size of the "CHALLENGE LOST" headline.
+@export var challenge_lost_font_size: int = 46
+
+## Font size of the "Wager forfeit / Bank" sub-line.
+@export var challenge_lost_sub_font_size: int = 20
+
+## Headline colour (red-leaning — a loss, not a win).
+@export var challenge_lost_color: Color = Color(0.92, 0.32, 0.28)
+
+## Sub-line colour.
+@export var challenge_lost_sub_color: Color = Color(0.85, 0.8, 0.78)
+
+## Duration of the banner's scale-in.
+@export var challenge_lost_scale_in_duration: float = 0.3
+
+## Duration of the banner's fade-out after the player clicks to dismiss.
+@export var challenge_lost_fade_out_duration: float = 0.35
+
+## True while the challenge-lost banner is up and holding for a dismiss click.
+var _challenge_lost_active: bool = false
+
+## The held challenge-lost banner node (a VBox), kept so the dismiss click can fade + free it.
+var _challenge_lost_banner: Control = null
 
 
 func _ready() -> void:
@@ -515,26 +548,29 @@ func conceal_for_leg_intro() -> void:
 
 ## Leg-intro presentation (normal + boss legs; challenge races keep their own entry flow):
 ## each info-column readout prints large at screen centre, holds, then flies + shrinks
-## onto its real label's slot (the real label is revealed as the flyer lands). The
-## fronted-darts rail trickle-fills row by row alongside the flights. Emits
-## leg_intro_finished once every step AND the rail fill are done. While active, a click
-## fast-forwards only the CURRENT step (per-step skip, no on-screen hint).
+## onto its real label's slot (the real label is revealed as the flyer lands). THEN the
+## fronted-darts rail trickle-fills row by row as the final beat. Emits leg_intro_finished
+## once every step is done. While active, a click fast-forwards only the CURRENT step
+## (per-step skip, no on-screen hint).
 func play_leg_intro(leg: int, target: int, turns: int, darts_per_turn: int) -> void:
 	_leg_intro_active = true
 	_intro_blocker.visible = true
 	# Keep the blocker on top of everything the HUD spawned after _ready (banners etc.).
 	_intro_blocker.move_to_front()
 
-	# Rail fill runs alongside the label flights — overlapping keeps the intro short.
-	dart_indicator.play_intro_fill()
-
 	# The three readouts fly home in order; each await is one skippable step.
 	await _fly_intro_label("Leg %d — %d" % [leg, target], leg_label)
 	await _fly_intro_label("Turns granted: %d" % turns, turn_label)
 	await _fly_intro_label("Darts per turn: %d" % darts_per_turn, dart_label)
 
-	# If the rail trickle outlasts the flights (long turn budgets), it becomes the final
-	# skippable step; otherwise it already finished in parallel and we fall straight through.
+	# Rail fill is the FINAL step, AFTER the readouts (Max 2026-06-06: the rationale inverted).
+	# The trickle is the payoff being *presented* — the fronted dart budget filling in — so it
+	# earns its own beat instead of running hidden under the flights; sequential beats short.
+	# A click still skips it: once the last flight's _intro_step_tween is null, the blocker's
+	# skip routes to skip_intro_fill(). Zero-row safety: a hidden rail / zero-turn leg finishes
+	# the fill SYNCHRONOUSLY (play_intro_fill emits at once), so guard the await on
+	# is_intro_fill_active() — awaiting an already-emitted signal would hang the intro.
+	dart_indicator.play_intro_fill()
 	if dart_indicator.is_intro_fill_active():
 		await dart_indicator.intro_fill_finished
 
@@ -621,12 +657,16 @@ func _reveal_intro_ratio(ratio: float, flyer: Label) -> void:
 		AuidoManager.play_text_print(leg_intro_print_pitch_min, leg_intro_print_pitch_max, leg_intro_print_volume_db)
 
 
-## Blocker input during the intro: a left click skips the current step only.
+## Blocker input: a left click either skips the current leg-intro step OR dismisses the
+## challenge-lost banner, depending on which state owns the blocker. The two states never
+## run at once (intro = leg start, loss = race end), so they can't cross.
 func _on_intro_blocker_input(event: InputEvent) -> void:
-	if not _leg_intro_active:
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if _leg_intro_active:
 		_skip_current_intro_step()
+	elif _challenge_lost_active:
+		_dismiss_challenge_lost()
 
 
 ## Fast-forward the CURRENT intro step to its end state. An in-flight label tween is
@@ -835,6 +875,78 @@ func show_leg_won_banner() -> Tween:
 	tween.set_parallel(false)
 	tween.tween_callback(banner.queue_free)
 	return tween
+
+
+## Centre-screen "CHALLENGE LOST" banner in the leg-won / bailout visual register: scales
+## in, then HOLDS until a left click (captured by the reused _intro_blocker), then fades and
+## emits challenge_lost_dismissed. Gives a race loss a real beat instead of an instant cut to
+## the map. `forfeit` = the staked darts lost; `bank_left` = the bank after the forfeit.
+func show_challenge_lost(forfeit: int, bank_left: int) -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	_challenge_lost_active = true
+	_intro_blocker.visible = true
+	_intro_blocker.move_to_front()
+
+	# Container added AFTER the blocker's move_to_front, so it renders on top; IGNORE mouse so
+	# the click falls through to the blocker (which routes it to _dismiss_challenge_lost).
+	var container: VBoxContainer = VBoxContainer.new()
+	container.alignment = BoxContainer.ALIGNMENT_CENTER
+	container.add_theme_constant_override("separation", 10)
+	container.size = Vector2(560.0, 120.0)
+	container.position = Vector2((viewport_size.x - 560.0) / 2.0, (viewport_size.y - 120.0) / 2.0)
+	container.pivot_offset = Vector2(280.0, 60.0)
+	container.scale = Vector2(0.3, 0.3)
+	container.modulate.a = 0.0
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(container)
+
+	var headline: Label = Label.new()
+	headline.text = "CHALLENGE LOST"
+	headline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	headline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	headline.add_theme_font_size_override("font_size", challenge_lost_font_size)
+	headline.add_theme_color_override("font_color", challenge_lost_color)
+	headline.add_theme_constant_override("outline_size", 6)
+	headline.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	container.add_child(headline)
+
+	var sub: Label = Label.new()
+	sub.text = "Wager forfeit: %d darts  —  Bank: %d" % [forfeit, bank_left]
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sub.add_theme_font_size_override("font_size", challenge_lost_sub_font_size)
+	sub.add_theme_color_override("font_color", challenge_lost_sub_color)
+	sub.add_theme_constant_override("outline_size", 3)
+	sub.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.85))
+	container.add_child(sub)
+
+	_challenge_lost_banner = container
+
+	# Scale-in only — no hold/fade here; it HOLDS until _dismiss_challenge_lost (the click).
+	var tween: Tween = create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(container, "scale", Vector2.ONE, challenge_lost_scale_in_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.tween_property(container, "modulate:a", 1.0, challenge_lost_scale_in_duration * 0.5)
+
+
+## Dismiss the challenge-lost banner: fade + free it, drop the blocker, and emit
+## challenge_lost_dismissed so main.gd can return to the map. Guards on the active flag so a
+## double click can't double-emit.
+func _dismiss_challenge_lost() -> void:
+	if not _challenge_lost_active:
+		return
+	_challenge_lost_active = false
+	_intro_blocker.visible = false
+	var banner: Control = _challenge_lost_banner
+	_challenge_lost_banner = null
+	if banner != null:
+		var tween: Tween = create_tween()
+		tween.set_parallel(true)
+		tween.tween_property(banner, "modulate:a", 0.0, challenge_lost_fade_out_duration).set_ease(Tween.EASE_IN)
+		tween.tween_property(banner, "position:y", banner.position.y - 30.0, challenge_lost_fade_out_duration).set_ease(Tween.EASE_IN)
+		tween.set_parallel(false)
+		tween.tween_callback(banner.queue_free)
+	challenge_lost_dismissed.emit()
 
 
 ## Show a boss arrival announcement with name and description. Returns the tween
@@ -1994,13 +2106,16 @@ func show_shop_hover_tooltip(rarity_text: String, screen_pos: Vector2) -> void:
 func show_shop_complete() -> void:
 	upgrade_container.visible = false
 	score_label.text = "Shop complete!"
-	next_leg_button.text = "Next Leg"
+	# "Return to Map" (round 3 item 4): the button leads to the map, not a next leg.
+	next_leg_button.text = "Return to Map"
 	next_leg_button.visible = true
 
 
-## Reset the next leg button text to default.
+## Reset the next-leg button text to its default. Reads "Return to Map" (round 3 item 4) —
+## post-leg/shop the button returns to the run map, where the next encounter is picked. (The
+## %NextLegButton node name + next_leg_pressed signal are kept; only the label changed.)
 func reset_next_leg_button() -> void:
-	next_leg_button.text = "Next Leg"
+	next_leg_button.text = "Return to Map"
 
 
 # --- Checkout Helper ---

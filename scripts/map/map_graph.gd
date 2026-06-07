@@ -694,11 +694,22 @@ func compute_challenge_params(node: MapNode, highest_cleared: int, rng: RandomNu
 	var snapped: int = _snap(float(raw), _starting_target, _target_increment)
 	c.target_score = clampi(snapped, _starting_target, highest_cleared)
 
-	# Deposit band from the tuned curve (§4): reliable_darts = how many darts an average
-	# run needs to clear this target at THIS depth's build power (E rises with depth, so
-	# an old number costs fewer darts now — "match concisely"). min = a lean precision
-	# floor, max = a forgiving cushion. Both are raw-dart counts.
 	var e: float = expected_per_dart(node.depth)
+
+	# Affordability clamp (round 3 item 2): pull the TARGET down so the derived band's top
+	# end (max ≈ reliable + cushion) lands ≤ c.max_deposit_cap. Clamping the target — not the
+	# band — keeps deposit = wager = race budget achievable (§5); a squeezed band under a
+	# too-high target would offer an unwinnable race. reliable_cap is the reliable-dart count
+	# whose +cushion hits the cap; cap_target is the score that costs that many darts at this
+	# depth, snapped DOWN (nearest-snap could round UP past the cap) and floored at the start.
+	var reliable_cap: int = maxi(c.max_deposit_cap - c.deposit_cushion, 1)
+	var cap_target: int = maxi(_snap_down(float(reliable_cap) * e, _starting_target, _target_increment), _starting_target)
+	c.target_score = mini(c.target_score, cap_target)
+
+	# Deposit band from the tuned curve (§4): reliable_darts = how many darts an average
+	# run needs to clear this (clamped) target at THIS depth's build power (E rises with depth,
+	# so an old number costs fewer darts now — "match concisely"). min = a lean precision
+	# floor, max = a forgiving cushion. Both are raw-dart counts.
 	var reliable: int = maxi(int(ceil(float(c.target_score) / maxf(e, 0.0001))), 1)
 	# Lean end = reliable × lean_factor, but never below the bankable floor — and the
 	# floor yields to the §4 contract min ≤ reliable when a cheap target makes reliable
@@ -706,6 +717,17 @@ func compute_challenge_params(node: MapNode, highest_cleared: int, rng: RandomNu
 	var lean: int = maxi(int(round(float(reliable) * c.lean_factor)), c.min_deposit_floor)
 	c.min_deposit = mini(lean, reliable)
 	c.max_deposit = maxi(reliable + c.deposit_cushion, c.min_deposit)
+
+	# Degenerate corner (early game — document, don't paper over): when cap_target bottomed
+	# out at the lattice floor (_starting_target, kept checkout-legal) yet reliable(101) still
+	# exceeds reliable_cap, the band blows past the cap. Net: clamp max to the cap and drop min
+	# to the bankable floor so early challenges stay ENTERABLE (challenge_entry_view hard-blocks
+	# entry when bank < min) and the rarity thirds don't collapse. This is the ONE place min may
+	# sit below lean_factor × reliable — a lean ~5–12 wager against a ~15-reliable target is a
+	# very lean race (chosen friction with a rare payoff), not a bug (Max 2026-06-06: act-0 small).
+	if c.max_deposit > c.max_deposit_cap:
+		c.max_deposit = c.max_deposit_cap
+		c.min_deposit = mini(c.min_deposit_floor, c.max_deposit)
 
 
 ## The act's legal target window [floor, ceiling] — what a rolled leg is clamped
@@ -736,6 +758,15 @@ func _act_ceiling(act: int, max_target: int, starting_target: int, target_increm
 ## Snap an arbitrary value to the nearest legal X01 target (starting_target + n·inc).
 func _snap(value: float, starting_target: int, target_increment: int) -> int:
 	var n: int = int(round((value - float(starting_target)) / float(target_increment)))
+	if n < 0:
+		n = 0
+	return starting_target + n * target_increment
+
+
+## Snap DOWN to the nearest legal X01 target at or below `value` (floor, not round). Used by
+## the challenge affordability clamp where rounding UP would let max_deposit exceed the cap.
+func _snap_down(value: float, starting_target: int, target_increment: int) -> int:
+	var n: int = int(floor((value - float(starting_target)) / float(target_increment)))
 	if n < 0:
 		n = 0
 	return starting_target + n * target_increment

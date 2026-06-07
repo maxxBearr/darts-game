@@ -92,8 +92,11 @@ const POINT_TEX: Texture2D = preload("res://sprites/point.png")
 @export var trickle_duration: float = 0.6
 ## Seconds per revealed row during the leg-intro fill (the reverse of the leg-win
 ## trickle: rows appear top-to-bottom, one move-darts tick each). Total fill time =
-## turns × this, so it scales with the leg's turn budget. Lower = snappier trickle.
-@export var intro_fill_row_interval: float = 0.15
+## turns × this. The fill is now the intro's FINAL sequential step (hud.play_leg_intro,
+## 2026-06-06), so its full duration ADDS to the intro length — kept low (0.12) so a
+## 5–6-turn leg's fill stays ≈0.6–0.7 s and the default intro total lands ≤ ~3.5 s.
+## Raise for a more drawn-out, ceremonial fill; lower for a snappier trickle.
+@export var intro_fill_row_interval: float = 0.12
 
 # --- Leg state ---
 ## Darts per turn (a set's size). Named _max_darts for the existing hud read path.

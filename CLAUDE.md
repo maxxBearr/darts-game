@@ -1,132 +1,208 @@
-# ACTIVE: Playtest round 3 — challenge feel + transition cleanup (2026-06-06)
+# ACTIVE: Geometry items — the GEOMETRY family (2026-06-07)
 
-Four items from Max's first live challenge playtest (rounds 1+2 build, still uncommitted on top of
-`529c1e4` — archived at `specs/2026-06-06-playtest-tuning-rounds-1-2.md`). Items are independent;
-suggested order is as listed (1 and 4 touch the same intro seam, do them in this order so the intro
-contract is settled before the transition cut). Conventions as always: static-type everything, comment
-frequently, exported tunables with hover descriptions.
+A NEW item family: board-wide, rarity-less, zero-sum reshapes of the board's physical layout. Designed in
+a Cowork sparring session (Max + Claude, 2026-06-07); round-3 spec archived at
+`specs/2026-06-06-playtest-round-3.md`. Conventions as always: static-type everything, comment frequently,
+exported tunables with hover descriptions.
 
-## 1. Leg intro: rail fill becomes its own final step (sequencing fix)
+## 0. Thesis + the family laws (LOCKED this session)
 
-Max's note: the fronted-rail trickle-fill runs *simultaneously* with the readout flights, so the player
-never sees what's happening on the rail.
+**The family proper is eight rarity-less trades: Ring Trade ×2, Color Territory ×4, Parity Shift ×2.**
+Plus one boss-reward relic (Bigger Bull, §7) that touches the same state but lives OUTSIDE the family/pool.
 
-- `scripts/hud.gd::play_leg_intro`: move `dart_indicator.play_intro_fill()` from before the three
-  `_fly_intro_label` awaits to AFTER them. The rail fill becomes the fourth sequential, skippable step
-  (click already routes to `skip_intro_fill()` once `_intro_step_tween` is null — that path now becomes
-  the normal one rather than the long-budget fallback). The `is_intro_fill_active()` guard before the
-  await can simplify to a straight `await dart_indicator.intro_fill_finished` after starting the fill —
-  but keep a zero-row safety (a fill with no rows must still emit, or be guarded, so the intro can't hang).
-- REWRITE the "Rail fill runs alongside the label flights — overlapping keeps the intro short" comment:
-  the rationale inverted (Max 2026-06-06) — the fill is the payoff being *presented*, so it now waits for
-  the readouts; sequential beats short.
-- Budget: sequential adds the fill's full duration (~+1 s on a 5-turn leg). Tighten the
-  `intro_fill_row_interval` default in dart_indicator.gd to keep the default total ≤ ~3.5 s; it's
-  exported, so document the trade in its hover description.
-- No main.gd changes — `leg_intro_finished` / `conceal_for_leg_intro` contracts are untouched.
+1. **Board-wide only — never single-target.** Every existing board item is single-target (hotspot, wedge
+   value, swap, brush); single-target geometry would stack onto the same power ring as a hit-rate
+   multiplier = a flat accuracy upgrade in disguise. Worse, "grow a wedge, neighbors pay" is a *fake*
+   trade for exactly the wedge everyone wants: 20 is flanked by 1 and 5, so shrinking the neighbors is the
+   board's native punishment being bought out. **Fat Wedge is CUT.** Geometry = the only family that
+   reshapes the whole board's risk profile; that's its identity. (Bonus: no PICK_SEGMENT plumbing —
+   geometry items need no picker.)
+2. **Conservation — the board never gets bigger.** For something to grow, something shrinks. This is why
+   every geometry item is inherently a trade. **Rim Overflow is CUT** (it grew the double ring into the
+   dead rim — the one non-zero-sum growth; parked as a future boss-reward candidate only, see Deferred).
+3. **Rarity-less — conservation eats the rarity axis.** Rarity elsewhere means *better-priced* (event
+   swings: more gain for barely more penalty). A zero-sum reshape cannot be better-priced — its `+` and
+   `−` are the same area — so rarity could only mean "bigger swing in both directions," a volume knob that
+   breaks the rarity grammar. Geometry items have ONE fixed power level. Event UI renders them with no
+   rarity frame; the section rarity ramp does not apply to geometry options.
+4. **GEOMETRY is its own family — NOT Placement.** New `ScoringEnums.Family.GEOMETRY` value. Challenges
+   keep `[SCORING, PLACEMENT]` untouched (challenge rewards stay flat / high-risk-high-reward); events
+   gain geometry as an active family (trades are free); the shop sells both. No trade/flat flag needed
+   anywhere — the family boundary IS the tier boundary.
+5. **Dynamic — geometry rules recompute against live board state.** Color Territory tracks current paint
+   (brush, Prism recolor-on-hit); Parity Shift tracks current face values (Wedge Swap). Self-limiting by
+   renormalization (paint a whole wedge red → nothing left to shrink → no-op). This makes geometry
+   contestable (board-as-contested-territory law) and composes with the painter build: paint it, then
+   grow it. Singles are the board's brakes — a geometry build trades checkout control for scoring
+   consistency, and the player feels it at 32-left.
 
-## 2. Challenge deposit cap: max deposit ≤ 12, enforced by capping the TARGET
+## 1. The eight items (all: `family = GEOMETRY`, `kind = BOARD_MUTATION`, `timing = ON_ACQUIRE`, no config picker)
 
-Max's note: an early act-0 challenge offered a 12–17 deposit band — "no way you are going to be able to
-do that most of the time". (Rounds-1+2 §Round-2.3 predicted this: "report silly bands".) Design decision
-(Max's pick): cap the **target** so the race stays fair — deposit = wager = race budget is the
-load-bearing rule (02-challenge-nodes-impl §5), so clamping only the band would offer a race whose budget
-is below what its target fairly needs. Early challenges become *concise rematches* of cheaper numbers.
+Three new `ScoringModifier` subclasses (mirroring `brush_modifier.gd`'s shape), eight pool entries:
 
-- `scripts/map/challenge_node.gd`: new export `max_deposit_cap: int = 12` with hover description (hard
-  ceiling on the band's top end; enforced upstream by clamping target_score, NOT by squeezing the band —
-  see compute_challenge_params).
-- `scripts/map/map_graph.gd::compute_challenge_params`: after the anchored target roll/snap/clamp,
-  apply the affordability clamp BEFORE deriving the band:
-  - `reliable_cap := maxi(c.max_deposit_cap - c.deposit_cushion, 1)` — so the derived
-    `max_deposit = reliable + cushion` lands ≤ the cap.
-  - `cap_target := reliable_cap × expected_per_dart(node.depth)`, snapped **DOWN** to the leg lattice
-    (nearest-snap could round up and break the cap — add a snap-down helper or floor the `n` in `_snap`'s
-    math locally), floored at `_starting_target`.
-  - `c.target_score = mini(c.target_score, cap_target)`.
-  - Derive `reliable` / band from the clamped target exactly as today.
-- **Degenerate corner (this IS the early game, document it):** when `cap_target` falls below
-  `_starting_target`, the lattice floor wins (targets must stay checkout-legal), `reliable` recomputes
-  above `reliable_cap`, and the band would still blow past the cap. Safety net: after the band derivation,
-  `c.max_deposit = mini(c.max_deposit, c.max_deposit_cap)` and `c.min_deposit = mini(c.min_deposit,
-  c.max_deposit)`. These early races are deliberately lean (pressure > 1) because `_starting_target` is
-  the cheapest legal number — acceptable per Max ("never want more than ~12"); the finer sub-251 lattice
-  stays deferred (02 §15). Comment the why at the clamp site.
-- The existing `min_deposit_floor ≤ min ≤ max` contract and `challenge_entry_view` need no changes (the
-  picker just reads the band) — but verify the §4 hover docs on `lean_factor` / `deposit_cushion` still
-  read true and mention the cap.
-- **Tests** (`tests/test_challenge_nodes.gd`): across the existing seeds × depths × highest_cleared grid
-  assert (a) `max_deposit ≤ max_deposit_cap` ALWAYS; (b) the clamp is NOT inert — at early
-  highest_cleared values (~101–301) some rolls must actually get pulled down vs the unclamped derivation
-  (distribution check, not just bounds — a default tuning value can ship a feature inert); (c) it doesn't
-  bind everywhere — report (or assert, if stable across seeds) that some late/cheap configs pass through
-  unclamped; (d) target stays ≤ highest_cleared, lattice-legal, ≥ `_starting_target`.
+- **`RingTradeModifier`** — a signed global triple↔double width dial. Export `triple_shift: float = 0.015`
+  (## Normalized radial width moved from the double band into the triple band per stack; negative moves it
+  the other way. Triple base width 0.050, double 0.070.). Two pool entries: **Wide Triple / Narrow Double**
+  (scoring-lean, +shift) and **Wide Double / Narrow Triple** (checkout-lean, −shift). The outer single
+  band *slides* (same width, shifted) — singles are untouched; this is the clean identity trade. Opposite
+  stacks net out arithmetically through the shared accumulated dial — no special-case code (self-inflicted
+  if bought; an event 1-of-3 may legitimately show both directions side by side).
+- **`ColorTerritoryModifier`** — export `target_color` (the four pool entries: **Grow Red / Green / White /
+  Black**) + `growth_factor: float = 0.30` (## Per stack, ring bands currently painted the target color
+  widen radially by this fraction within their wedge; the wedge's non-target bands pay proportionally —
+  per-wedge renormalization, zero-sum per wedge column.). DYNAMIC: recomputed from
+  `effective_wedge_colors` on every repaint. A color with no presence on the board = inert until painted
+  (legal, a build-around purchase). Bull is exempt (bull radii are not per-wedge state).
+- **`ParityShiftModifier`** — export `grow_even: bool` (two pool entries: **Grow Even / Grow Odd**) +
+  `weight_factor: float = 1.25` (## Per stack, the angular weight multiplier applied to wedges whose
+  CURRENT effective face value matches the parity; all 20 weights renormalize to 360°.). DYNAMIC:
+  recomputed from `effective_wedge_values` on every wedge swap. Note adjacent same-parity wedges exist
+  (18–4, 6–10, 16–8; 17–3–19–7 is a run of four odds) — renormalization is exactly why this works with no
+  neighbor edge cases. Known polarizing item; ships as the experiment.
 
-## 3. Challenge loss: banner + click-to-continue (no more instant boot)
+**Floors (the brake-preservation clamp, all exported on the manager):**
+`ring_band_floor: float = 0.45` (## Minimum fraction of a ring band's BASE width it can be squeezed to by
+geometry items; clamped after all rules apply. Protects the singles — the board's brakes.) and
+`wedge_angle_floor: float = 0.45` (## Same, for a wedge's base 18° angular width.). Stacking the same item
+is allowed; floors are the cap. Starting values are Max's call to tune (playtest experiment — keep dead
+easy to mess with).
 
-Max's note: the last dart hits and the screen just changes — no beat, totally unclear. Today
-`main.gd::_fail_challenge` is `show_bust("CHALLENGE FAILED — wager forfeit")` + a 1.6 s timer → `_show_map()`.
+**Magnitudes are starting points, not gospel** — every number above is an export with a hover doc.
 
-- New `hud.show_challenge_lost(forfeit: int, bank_left: int)`: centre-screen banner in the
-  `show_bailout` / leg-won visual register (scale-in + outline; red-leaning palette) — headline
-  "CHALLENGE LOST", sub-line "Wager forfeit: N darts  —  Bank: M". It HOLDS until a left click anywhere,
-  then fades out. Reuse the `_intro_blocker` full-rect pattern for the click capture (`move_to_front`;
-  separate active flag or a shared one — but don't let intro skip-state and loss-dismiss state cross).
-  Exports for font size / colors / fade timing with hover descriptions (follow the `leg_won_*` pattern).
-  Expose dismissal as an awaitable signal (e.g. `challenge_lost_dismissed`).
-- `main.gd::_fail_challenge`: keep the teardown exactly as is (handicap end, dpt restore, budget zero,
-  `AuidoManager.on_leg_lost()`, bank label update) — then set `_leg_phase = "challenge_lost"` (gate
-  aiming/hover/checkout-path cycling like "leg_intro" does), call the banner with `_challenge_deposit`
-  (already stored at confirm) + `_banked_darts`, await dismissal, then `set_remaining_bust(false)` and
-  `_show_map()`, clearing `_leg_phase`. Drop the `show_bust` call and the `create_timer` entirely (the
-  bust label is the wrong register for a race loss; in-race busts that merely end a turn are untouched).
-- Seam to watch: `_fail_challenge` runs as a `score_tween` callback — awaiting inside a tween callback is
-  the same known-good pattern as the slide-in intro await. Also verify a loss on the very last banked
-  dart (bank 0 after forfeit) renders sanely ("Bank: 0").
+## 2. Substrate — geometry state lives in `ScoringModifierManager` (contestable)
 
-## 4. "Return to Map" + cut the map→leg board slide
+Parallel to `voided_rings` / `hotspot_rings`, the manager owns computed geometry (so boss hooks can read
+and fight it, and it persists across legs like every other board mutation):
 
-Max's note: the button leads to the map now, not a next leg — and with the leg intro doing the
-presentation work, the old leg-to-leg board slide is a vestige.
+- `effective_wedge_weights: Array[float]` (20, default 1.0) → cumulative angular boundaries.
+- `effective_ring_bounds: Array[Dictionary]` (20 entries; per-wedge normalized ring boundaries, seeded
+  from the RING_* constants).
+- `bull_radii: Dictionary` (double/single bull normalized radii — only the Bigger Bull relic §7 moves
+  these; the eight trades never touch bull).
+- `recompute_geometry() -> void` — rebuild from base constants, fold in active rules (ring-trade dial,
+  then per-wedge color scaling, then parity weights — weights are multiplicative so order is irrelevant;
+  document anyway), clamp floors LAST, renormalize, emit `geometry_changed`.
+- **Recompute triggers:** geometry modifier acquired; brush `apply_to_board`; wedge swap; Prism
+  recolor-on-hit (fires at score resolution, between darts — never mid-flight); run/leg init. Geometry
+  items persist across legs (run-scoped, like hotspots) — verify no leg-end reset path clears them.
+- **Narrow-double handicap/boss composes:** `double_ring_width_scale` stays as the dartboard-side final
+  multiplier applied AFTER the manager's bounds + floors (a 75% handicap narrowing legitimately goes below
+  the item floor — chosen friction may break the brakes; comment the why). A checkout-lean Ring Trade
+  player has partially pre-countered the handicap — intended (build-counter vs environmental).
 
-- `scripts/hud.gd`: `reset_next_leg_button()` and `show_shop_complete()` set text "Return to Map"
-  (was "Next Leg"). Shop entry/leave texts ("Enter Shop (...)", "Leave Shop (...)") unchanged. Keep the
-  `%NextLegButton` node name and `next_leg_pressed` signal (scene rename not worth the churn) but update
-  the comments at `_on_next_leg` / the signal docs to say "return to map".
-- `main.gd`: remove the board slide from the map→leg path. Restructure `_on_map_node_chosen` +
-  `_slide_to_leg_node` (rename to `_enter_leg_node`; update the no-repeat comment that names
-  `_slide_to_leg_node`): for LEG/BOSS nodes, do ALL the arrival work that used to hide behind the
-  slide-out — `claim_unplayed_leg_params`, `reset_for_leg`, `_clear_darts`, `start_leg_with`,
-  `_update_all_hud`, streak section, `conceal_for_leg_intro`, boss setup — **while the map overlay is
-  still visible** (the overlay is the new off-screen moment), THEN `map_view.visible = false`, then
-  checkout highlights/helper, `_leg_phase = "leg_intro"`, `play_leg_intro` → await → boss announcement /
-  `_start_new_throw` (unchanged tail). Note `_on_map_node_chosen` currently hides the map up front for
-  ALL node types — only the leg path defers hiding; shop/challenge/event keep their current order.
-- **Challenge races keep their slide** (`_start_challenge_race`): they have no leg intro, so the slide is
-  their only transition. `leg_transition_duration` therefore STAYS exported — re-document its hover text
-  as the challenge-race slide duration (don't rename the export; scene-stored values).
-- Verify the first-leg entry point (`_on_run_confirmed`) still concedes/intros correctly — it never slid,
-  so it should be untouched, but it shares the intro contract item 1 just changed.
-- Live check: picking a leg node must not visibly pop darts off the board — if MapView turns out not to
-  fully cover the board area, fall back to clearing at the map-hide frame (still no slide).
+## 3. `dartboard.gd` — hit detection + rendering read the new state
 
-## Tests + checklist (all items)
+The Narrow Double pattern (`_effective_double_inner()`) generalized:
 
-- Suites: `test_map_graph.gd`, `test_events.gd`, `test_challenge_nodes.gd` (item-2 asserts added) +
-  `--check-only` parse pass on every changed script.
-- Live: intro = three readouts THEN rail fill, per-step click-skip still works on all four steps, default
-  total ≤ ~3.5 s; debug an early challenge (highest_cleared ~101–301) → band tops out ≤ 12; lose a
-  challenge → banner holds until click, no aiming during it, map after; win path + leftover-wager banking
-  unchanged; leg win → "Return to Map" → map → pick leg → intro starts with NO board slide and no visible
-  dart-pop; shop enter/leave texts + shop slide unchanged; challenge race still slides in; boss
-  announcement still lands after the intro.
-- Known seams: `_leg_phase` values now include "challenge_lost" — sweep the phase-gated inputs (bailout,
-  checkout cycling, hover) for the new value; awaits inside tween callbacks (two sites now).
+- **Hit detection (`calculate_score`)**: restructure to bull checks first (read `bull_radii`), then wedge
+  index, THEN ring classification against *that wedge's* bounds (today it classifies ring first against
+  global constants — per-wedge bounds invert the order).
+- **`_get_wedge_index`**: weighted cumulative boundaries (precomputed on `geometry_changed`) instead of
+  uniform 18° division; keep `WEDGE_OFFSET_DEG` + `board_rotation_offset` handling. The offset anchors the
+  20-wedge's *center*; document what "center" means once widths vary (anchor the cumulative walk at the
+  20-wedge's start boundary).
+- **Rendering (`_draw`)**: the per-wedge per-ring segment polygons already take explicit start/end degrees
+  + inner/outer radii — feed the computed boundaries. **Wires**: full-circle `_draw_ring_wire` is only
+  valid where bounds are uniform; replace with per-wedge boundary arcs + radial spokes at the weighted
+  wedge boundaries. **Number labels**: position at weighted wedge centers.
+- **Same-state consumers to sweep:** `get_segment_at_position` (picker hover), `_build_segment_polygon`
+  (hotspot smoke + shockwave clip), the shop-spot overlay drawing — all must read the same per-wedge
+  bounds or hotspot smoke will visibly desync from a resized ring.
+- **Re-flow animation:** tween the dartboard's working copy of weights/bounds toward the manager's
+  computed targets on `geometry_changed` (export `geometry_reflow_duration: float = 0.6` with hover doc).
+  Dynamic resizes (a Prism recolor shrinking your fat red triple) MUST animate to read — an instant snap
+  is illegible. Hit detection reads the *settled* values (manager state), not the tween's in-between.
+- Hotspot / brush / void keys are `"<wedge>:<ring>"` — index-keyed, unaffected by resize; they compose
+  free. Throw/accuracy mechanics: untouched (scatter is geometry-independent).
+- Mini-boards (rules slideshow, assembly zone preview) stay STATIC — they teach the canonical board.
 
-**After this ships:** archive per Workflow Notes (`specs/2026-06-06-playtest-round-3.md`), then the queue
-resumes: more tuning dials if playtest demands, **geometry items**, **typed shop + codex**. Program index:
-`specs/map/00-overview.md`. Challenge context: `specs/map/02-challenge-nodes-impl.md`. Rounds 1+2:
-`specs/2026-06-06-playtest-tuning-rounds-1-2.md`.
+## 4. Solver — values unchanged, one tiebreak gets eyes
+
+`_build_solver_candidates` reads values only, so checkout *math* is untouched (the long-assumed
+async-solver dependency was a myth — confirmed against code this session). One touch: the "fattest
+segments" path-ranking tiebreak should read effective segment area (angular width × band width at its
+radius) instead of the static fatness assumption, so suggested paths prefer enlarged targets and avoid
+floor-squeezed singles. Target tooltip: no change (values don't move).
+
+## 5. Stud display — board-rule reminders ON the surround
+
+Dynamic rules need a persistent "this law is active" display, and its home is the board surround (the
+effect is spatial; the reminder should be too — Max's call, replacing the old relic-row idea).
+
+- New `scripts/board_studs.gd` (dartboard child, drawn on the surround ring): one stud per active geometry
+  rule. Placeholder glyph art (EventFamilyIcons-fallback style — labelled colored shapes); hover tooltip =
+  item name + live effect summary (e.g. "Grow Red — red bands +30%"). Exports for stud radius/size/
+  spacing/colors with hover docs.
+- Legibility-through-flash: small, persistent, high-contrast; must survive recolor + boss overlay; the
+  surround also hosts numbers and boss flash — keep studs clear of the number track.
+- **Architect the stud entry generically** ({icon, tooltip_provider}) so Mirror Zone + future board-level
+  relics can migrate into studs in a later pass (deferred — geometry-only for now).
+
+## 6. Events + pool integration
+
+- `ScoringEnums.Family`: add `GEOMETRY`. Challenge draw list stays `[SCORING, PLACEMENT]` — untouched.
+- **Events**: flip `&"geometry"` ACTIVE in the event family table (`03-events-impl.md` §2 scaffolded it;
+  its "maps to Family.PLACEMENT trades" line is now WRONG — update that doc). Grant path: GEOMETRY-filtered
+  modifier draw, 3 distinct entries of the eight (reuse the challenge pick's distinctness logic). **No
+  rarity:** options render without a rarity frame; the §3 section ramp is not rolled for geometry options.
+  Update `event_node.gd`'s doc comment ("Later: &"geometry"" → active).
+- **Shop**: the eight enter `ModifierRegistry.MODIFIER_TYPES` with pool weights (exported-style tuning —
+  suggest 8–10 each to start; the pool must still feel varied). VERIFY the shop draw/pricing machinery
+  tolerates rarity-less items — if a rarity is structurally required, treat geometry as fixed common-tier
+  pricing; flag, don't redesign.
+- The make-it-a-trade retrofit the events spec wanted for flat families: NOT needed for geometry — the
+  family is natively trade-shaped (law #2).
+
+## 7. Bigger Bull — boss-reward relic (outside the family)
+
+The sanctioned flat: bull currently has NO upgrade path at all, and boss rewards are the existing
+premium-flat channel (Glass Cannon's shelf).
+
+- New `RewardRegistry` entry + reward class (`bigger_bull_reward.gd`): on acquire, grows both bull radii
+  into the inner single via `bull_radii` (exports: `double_bull_radius: 0.032 → 0.048`,
+  `single_bull_radius: 0.080 → 0.112` — ~+50%, hover-documented, Max tunes). Inner single pays
+  (conservation holds, but it's low-value real estate — that's why it's relegated to earned-flat tier).
+- Hit detection + rendering read `bull_radii` (§3). Solver: bull values unchanged. One-time acquire,
+  no-stack (standard reward semantics).
+
+## 8. Tests (`tests/test_geometry.gd`, headless) + checklist
+
+- **Conservation:** after any rule set, wedge angles sum to 360°; per-wedge ring bounds strictly ascending
+  within [0, RING_DOUBLE_OUTER]; the eight trades never move `bull_radii`.
+- **Floors hold:** stack one item ×10 → no band below `ring_band_floor × base`, no wedge below
+  `wedge_angle_floor × 18°`.
+- **Netting:** Wide Triple + Wide Double stacks cancel back to base bounds exactly.
+- **Dynamic re-flow:** repaint a ring → Color Territory bounds move; swap two wedges → Parity weights
+  re-flow; all-target-color wedge → no-op (renormalization self-limits).
+- **NOT inert** (the `[[feedback-rolled-generator-spread]]` lesson — a default tuning value can ship a
+  feature inert): with default magnitudes, assert boundary deltas vs base exceed a visible epsilon for
+  every item.
+- **Hit-detection consistency:** sample points just inside/outside computed boundaries → `calculate_score`
+  agrees with the bounds (e.g. a point in a widened triple band scores triple).
+- **Solver:** candidate values unchanged by geometry; fattest tiebreak prefers the enlarged segment.
+- **Events:** geometry family rolls 3 distinct of the eight, no rarity field set, bank unchanged.
+- Existing suites green; `--check-only` parse pass on every changed script.
+- **Live:** acquire each item type → board re-flows animated, studs appear with tooltips; paint → red
+  territory grows; swap → parity re-flows; Prism recolor visibly contests a grown color; narrow-double
+  challenge handicap composes on a checkout-lean board; hotspot smoke + shockwave clip match resized
+  segments; numbers stay centered; checkout helper paths sane on a heavily reshaped board; floors stop a
+  stack-spam board from deleting its singles.
+
+## Deferred (explicitly out of this pass)
+
+- **Rim Overflow** — cut (breaks conservation); parked as a *future boss-reward candidate* only.
+- **Mirror Zone / other relics → studs** — stud architecture supports it; migration is its own pass.
+- **Mini-board geometry awareness** — slideshow/assembly stay canonical.
+- **`DartboardGeometry` shared-helper dedup** (the long-noted refactor) — opportunistic only if the
+  drawing rework makes it free; not required.
+- **Soft-biasing event geometry options** toward colors present on the board — only if "inert Grow X"
+  offers annoy in playtest.
+- **Geometry-flavored challenge handicaps** (e.g. squeezed singles as a race handicap) — content mine note.
+
+**After this ships:** archive per Workflow Notes (`specs/2026-06-07-geometry-items.md`), then the queue
+resumes: **typed shop + codex** (Phase 03 remainder). Program index: `specs/map/00-overview.md`. Events
+scaffold this activates: `specs/map/03-events-impl.md`. Family-design rationale recorded there + in
+session memory (`project_geometry_items`).
 
 ---
 

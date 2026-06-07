@@ -54,6 +54,9 @@ func _test_level(level: LevelDefinition) -> void:
 	var cfg: MapGenConfig = _cfg_for(level)
 	var total_challenges: int = 0
 	var band_samples: Array[String] = []
+	# Round-3 item-2 cap accounting: how often the affordability clamp pulls the target down
+	# (bound) vs leaves a cheap-enough config alone (passthrough) vs hits the degenerate corner.
+	var cap_accum: Dictionary = {"bound": 0, "passthrough": 0, "degenerate": 0}
 	for seed_value: int in range(SEEDS_PER_LEVEL):
 		var g: MapGraph = _generate_full(level, seed_value)
 		for id: int in g.nodes:
@@ -69,6 +72,7 @@ func _test_level(level: LevelDefinition) -> void:
 				g.compute_challenge_params(n, hc, prng)
 				_test_anchor(g, n, hc, seed_value)
 				_test_deposit_band(g, n, hc, seed_value)
+				_test_deposit_cap(g, n, hc, seed_value, cap_accum)
 				_test_dpt(n, seed_value)
 				if band_samples.size() < 6:
 					band_samples.append("d%d hc%d → T%d E%.0f rel%d dep[%d,%d] dpt%d" % [
@@ -77,8 +81,14 @@ func _test_level(level: LevelDefinition) -> void:
 	print("   challenge nodes seen across %d seeds: %d" % [SEEDS_PER_LEVEL, total_challenges])
 	for s: String in band_samples:
 		print("     %s" % s)
+	print("   deposit cap: %d bound (target pulled down), %d passthrough, %d degenerate-corner" % [cap_accum["bound"], cap_accum["passthrough"], cap_accum["degenerate"]])
 	# Round 2: every level (including 501) generates challenges now (act 0 included).
 	_check(total_challenges > 0, "level generates at least some challenge nodes", -1)
+	# Round-3 item 2: the cap must be neither inert (it pulls SOME targets down) nor
+	# always-binding (cheap/deep configs pass through unclamped) — a default tuning value
+	# can ship a feature inert, so assert the distribution, not just the bounds.
+	_check(cap_accum["bound"] > 0, "deposit cap actually binds on some configs (not inert)", -1)
+	_check(cap_accum["passthrough"] > 0, "deposit cap leaves cheap-enough configs unclamped (not always-binding)", -1)
 
 
 ## REALISTIC highest_cleared values for a node in act `a` at depth `d`. To stand on this
@@ -141,8 +151,14 @@ func _test_placement(g: MapGraph, n: MapNode, cfg: MapGenConfig, seed_value: int
 func _test_anchor(g: MapGraph, n: MapNode, hc: int, seed_value: int) -> void:
 	var c: ChallengeNode = n.challenge
 	_check(c.target_score <= hc, "target (%d) <= highest_cleared (%d)" % [c.target_score, hc], seed_value)
+	# The anchor floor is hc - undercut, BUT the round-3 affordability cap (item 2) may
+	# legitimately pull the target BELOW it — concise rematches of cheaper numbers — down to
+	# the cap_target floor. So the real lower bound is min(anchor floor, cap_target).
 	var floor_anchor: int = maxi(hc - c.target_undercut, 101)
-	_check(c.target_score >= floor_anchor, "target (%d) >= anchor floor (%d)" % [c.target_score, floor_anchor], seed_value)
+	var reliable_cap: int = maxi(c.max_deposit_cap - c.deposit_cushion, 1)
+	var cap_target: int = maxi(_snap_down_lattice(float(reliable_cap) * g.expected_per_dart(n.depth)), 101)
+	var effective_floor: int = mini(floor_anchor, cap_target)
+	_check(c.target_score >= effective_floor, "target (%d) >= effective floor (%d: anchor %d / cap %d)" % [c.target_score, effective_floor, floor_anchor, cap_target], seed_value)
 	# On the leg lattice (snapped to 100s, §15 decision).
 	_check((c.target_score - 101) % 100 == 0, "target on leg lattice (101+n*100)", seed_value)
 
@@ -164,6 +180,60 @@ func _test_deposit_band(g: MapGraph, n: MapNode, hc: int, seed_value: int) -> vo
 	# absurd reserve. (Spec §4 quotes ~6–13 with T near the low end; with T able to roll
 	# up to highest_cleared the top runs a little higher, but stays modest.)
 	_check(c.max_deposit <= 18, "max_deposit (%d) within sane ceiling (<=18)" % c.max_deposit, seed_value)
+
+
+# ── Round-3 item 2: deposit cap via target clamp ──────────────────────────────
+
+## The affordability clamp (compute_challenge_params): max_deposit must ALWAYS stay ≤ the
+## cap, the clamp must not be inert (some configs get their target pulled down) nor
+## always-binding (cheap-enough configs pass through), and the degenerate corner — when even
+## the lattice-floored target costs more than the cap allows — must yield exactly
+## [min_deposit_floor, max_deposit_cap]. Re-derives the UNCAPPED anchor from the same seed
+## the real compute call used, to tell "would have exceeded the cap" from "fit anyway".
+func _test_deposit_cap(g: MapGraph, n: MapNode, hc: int, seed_value: int, accum: Dictionary) -> void:
+	var c: ChallengeNode = n.challenge
+	# (a) hard ceiling — never exceeded.
+	_check(c.max_deposit <= c.max_deposit_cap, "max_deposit (%d) <= cap (%d)" % [c.max_deposit, c.max_deposit_cap], seed_value)
+	# Reproduce the uncapped anchored target (same seed/window as the real compute call).
+	var prng: RandomNumberGenerator = RandomNumberGenerator.new()
+	prng.seed = seed_value * 31 + hc
+	var lo_t: int = maxi(hc - c.target_undercut, 101)
+	var hi_t: int = maxi(hc, lo_t)
+	var raw: int = prng.randi_range(lo_t, hi_t)
+	var anchored: int = clampi(_snap_nearest(raw), 101, hc)
+	var e: float = g.expected_per_dart(n.depth)
+	var uncapped_max: int = maxi(int(ceil(float(anchored) / maxf(e, 0.0001))), 1) + c.deposit_cushion
+	if uncapped_max > c.max_deposit_cap:
+		accum["bound"] += 1
+		# The clamp engaged: target was pulled to ≤ the uncapped anchor.
+		_check(c.target_score <= anchored, "capped target (%d) <= uncapped anchor (%d)" % [c.target_score, anchored], seed_value)
+	else:
+		accum["passthrough"] += 1
+		# Cap inert here: the cheap-enough target passes through unchanged.
+		_check(c.target_score == anchored, "uncapped-fit config passes target through (%d == %d)" % [c.target_score, anchored], seed_value)
+	# (e) degenerate corner: if even the FINAL target's reliable+cushion still exceeds the cap,
+	# the safety net must have produced exactly [min_deposit_floor (vs cap), max_deposit_cap].
+	var reliable_final: int = maxi(int(ceil(float(c.target_score) / maxf(e, 0.0001))), 1)
+	if reliable_final + c.deposit_cushion > c.max_deposit_cap:
+		accum["degenerate"] += 1
+		_check(c.max_deposit == c.max_deposit_cap, "degenerate band max == cap (%d)" % c.max_deposit, seed_value)
+		_check(c.min_deposit == mini(c.min_deposit_floor, c.max_deposit_cap), "degenerate band min == bankable floor (%d)" % c.min_deposit, seed_value)
+
+
+## Nearest-snap to the leg lattice (mirrors MapGraph._snap with starting 101 / increment 100).
+func _snap_nearest(value: int) -> int:
+	var k: int = int(round((float(value) - 101.0) / 100.0))
+	if k < 0:
+		k = 0
+	return 101 + k * 100
+
+
+## Snap DOWN to the leg lattice (mirrors MapGraph._snap_down) — the affordability cap_target.
+func _snap_down_lattice(value: float) -> int:
+	var k: int = int(floor((value - 101.0) / 100.0))
+	if k < 0:
+		k = 0
+	return 101 + k * 100
 
 
 # ── §5 dpt + ice-tray ─────────────────────────────────────────────────────────

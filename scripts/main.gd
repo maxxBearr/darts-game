@@ -205,8 +205,10 @@ var _base_accuracy_skew_v: float = 0.0
 var _current_upgrades: Array[Dictionary] = []
 
 ## End-of-leg phase: "", "accuracy_pick", "modifier_pick", "wedge_picker", "segment_picker",
-## "boss_reward_pick". Also "leg_intro" while the leg-intro presentation plays (gates the
-## checkout-path cycling input; no throw exists yet, so aiming is impossible by construction).
+## "boss_reward_pick". Also "leg_intro" while the leg-intro presentation plays, and
+## "challenge_lost" while the race-loss banner holds for its dismiss click — both gate the
+## checkout-path cycling input (the `== ""` check) and rely on a full-rect blocker to swallow
+## clicks; in neither is a throw possible (no active aim), so aiming is blocked by construction.
 var _leg_phase: String = ""
 
 ## Cached checkout paths for illumination (from last solver run).
@@ -357,7 +359,9 @@ var all_in_active: bool = false
 ## Duration of the board slide transition into/out of shop in seconds.
 @export var shop_transition_duration: float = 0.5
 
-## Duration of the board slide transition between legs in seconds.
+## Duration of the board slide for a CHALLENGE RACE entry, in seconds. (The map→leg slide
+## was cut in round 3 — the leg intro carries that transition now — so this drives only
+## _start_challenge_race, which has no intro and needs the slide as its sole transition.)
 @export var leg_transition_duration: float = 0.5
 
 @export_group("Score Animation")
@@ -1194,7 +1198,8 @@ func _on_next_turn() -> void:
 	_update_checkout_helper()
 
 
-## Player presses "Next Leg" — advance to next leg, enter shop, or leave shop.
+## Player presses "Return to Map" (the next_leg button, round 3 item 4) — show the map, or
+## finish a shop. The map is where the next encounter is picked (no direct leg advance here).
 func _on_next_leg() -> void:
 	AuidoManager.play_ui_click()
 	hud.next_leg_button.visible = false
@@ -1234,78 +1239,77 @@ func _show_map() -> void:
 func _on_map_node_chosen(node: MapNode) -> void:
 	if node == null:
 		return
-	map_view.visible = false
 	_map_graph.advance_to(node.id)
 	_leg_phase = ""
+	# Only the leg path DEFERS hiding the map (the overlay is now the leg's off-screen moment —
+	# round 3 item 4); shop / challenge / event keep their existing "hide the map up front" order.
 	if node.type == MapNode.Type.SHOP:
+		map_view.visible = false
 		var response: Dictionary = {
 			"current_leg": x01_game.current_leg,
 			"target_score": x01_game.target_score,
 		}
 		_start_shop(response)
 	elif node.type == MapNode.Type.CHALLENGE:
+		map_view.visible = false
 		_enter_challenge(node)
 	elif node.type == MapNode.Type.EVENT:
+		map_view.visible = false
 		_enter_event(node)
 	else:
-		_slide_to_leg_node(node)
+		_enter_leg_node(node)
 
 
-## Slide the board out/in and start a leg with the chosen node's parameters. This
-## replaces advance_leg()'s self-increment — the node owns (target, dart budget),
-## and a BOSS node rolls a concrete boss from the level pool on arrival.
-func _slide_to_leg_node(node: MapNode) -> void:
-	# No-repeat rule (tuning pass 2026-06-06): a run never plays the exact same
-	# (target, turns) leg twice. Claimed at arrival — params aren't shown on the map
-	# ("type on map, params on arrival"), so a nearest-config adjustment is invisible.
+## Start a leg from the chosen map node — NO board slide (round 3 item 4): the leg intro now
+## carries the transition presentation, so the old slide-out/in is vestigial. All arrival work
+## runs while the MAP overlay still covers the board (the overlay is the off-screen moment),
+## then the overlay hides and the intro plays. Replaces advance_leg()'s self-increment — the
+## node owns (target, dart budget); a BOSS node rolls a concrete boss from the level pool here.
+func _enter_leg_node(node: MapNode) -> void:
+	# No-repeat rule (tuning pass 2026-06-06): a run never plays the exact same (target, turns)
+	# leg twice. Claimed at arrival — params aren't shown on the map ("type on map, params on
+	# arrival"), so a nearest-config adjustment is invisible.
 	_map_graph.claim_unplayed_leg_params(node)
-	var viewport_size: Vector2 = get_viewport_rect().size
-	var center: Vector2 = viewport_size / 2.0
-	var off_left: Vector2 = Vector2(-dartboard.board_radius * 2.0, center.y)
-	var off_right: Vector2 = Vector2(viewport_size.x + dartboard.board_radius * 2.0, center.y)
 
-	var tween: Tween = create_tween()
-	tween.tween_property(dartboard, "position", off_left, leg_transition_duration * 0.5).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-	tween.tween_callback(func() -> void:
-		scoring_modifier_manager.reset_for_leg()
-		_clear_darts()
-		x01_game.start_leg_with(node.target_score, node.max_turns)
-		_update_all_hud()
-		hud.update_streak_section(
-			scoring_modifier_manager.get_active_streak_modifiers(),
-			scoring_modifier_manager.effective_wedge_values
-		)
-		# Leg intro: hide the freshly-written info-column readouts + empty the fronted
-		# rail while the board is off-screen, so the intro (after slide-in) reveals them.
-		hud.conceal_for_leg_intro()
-		if node.type == MapNode.Type.BOSS:
-			var game_state: Dictionary = _build_game_state()
-			boss_manager.start_boss_leg(game_state)
-			boss_manager.on_turn_start(game_state)
-			_sync_board_and_solver()
-			_update_boss_status()
-		dartboard.position = off_right
+	# Arrival work, all done while the map overlay still hides the board (no slide). The overlay
+	# is a near-opaque full-rect, so clearing darts / resetting here is never visible.
+	scoring_modifier_manager.reset_for_leg()
+	_clear_darts()
+	x01_game.start_leg_with(node.target_score, node.max_turns)
+	_update_all_hud()
+	hud.update_streak_section(
+		scoring_modifier_manager.get_active_streak_modifiers(),
+		scoring_modifier_manager.effective_wedge_values
 	)
-	tween.tween_property(dartboard, "position", center, leg_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	tween.tween_callback(func() -> void:
-		_update_checkout_highlights()
-		_update_checkout_helper()
-		# Leg-intro presentation: the readouts fly to their slots and the fronted rail
-		# trickle-fills before any aiming exists. The "leg_intro" phase gates stray
-		# input (checkout-path cycling); _start_new_throw only runs once it finishes,
-		# so the player can't aim or throw mid-intro. Boss setup already ran during the
-		# slide-out; the announcement still plays after the intro, before the throw.
-		_leg_phase = "leg_intro"
-		hud.play_leg_intro(x01_game.current_leg, x01_game.target_score, x01_game.max_turns, x01_game.darts_per_turn)
-		await hud.leg_intro_finished
-		_leg_phase = ""
-		if boss_manager.is_boss_active():
-			var boss_def: BossDefinition = boss_manager.get_active_boss_definition()
-			var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
-			announce_tween.tween_callback(_start_new_throw)
-		else:
-			_start_new_throw()
-	)
+	# Hide the freshly-written info-column readouts + empty the fronted rail so the intro can
+	# reveal them piece by piece.
+	hud.conceal_for_leg_intro()
+	if node.type == MapNode.Type.BOSS:
+		var game_state: Dictionary = _build_game_state()
+		boss_manager.start_boss_leg(game_state)
+		boss_manager.on_turn_start(game_state)
+		_sync_board_and_solver()
+		_update_boss_status()
+	# Drop the overlay — the board (already centred from run start / the last challenge slide)
+	# is revealed underneath, and the intro takes over the reveal.
+	map_view.visible = false
+
+	_update_checkout_highlights()
+	_update_checkout_helper()
+	# Leg-intro presentation: the readouts fly to their slots and the fronted rail trickle-fills
+	# before any aiming exists. The "leg_intro" phase gates stray input (checkout-path cycling);
+	# _start_new_throw only runs once it finishes, so the player can't aim or throw mid-intro.
+	# Boss setup already ran above; the announcement still plays after the intro, before the throw.
+	_leg_phase = "leg_intro"
+	hud.play_leg_intro(x01_game.current_leg, x01_game.target_score, x01_game.max_turns, x01_game.darts_per_turn)
+	await hud.leg_intro_finished
+	_leg_phase = ""
+	if boss_manager.is_boss_active():
+		var boss_def: BossDefinition = boss_manager.get_active_boss_definition()
+		var announce_tween: Tween = hud.show_boss_announcement(boss_def.display_name, boss_def.description, boss_def.title_color, boss_def.description_color)
+		announce_tween.tween_callback(_start_new_throw)
+	else:
+		_start_new_throw()
 
 
 # ── Phase 02: challenge nodes (specs/map/02-challenge-nodes-impl.md) ─────────
@@ -1315,7 +1319,7 @@ func _slide_to_leg_node(node: MapNode) -> void:
 ## actual wager/withdrawal happens on confirm.
 func _enter_challenge(node: MapNode) -> void:
 	if node.challenge == null:
-		_slide_to_leg_node(node)   # safety: malformed node, treat as a leg
+		_enter_leg_node(node)   # safety: malformed node, treat as a leg
 		return
 	_active_challenge = node.challenge
 	_map_graph.compute_challenge_params(node, _highest_cleared, _challenge_rng)
@@ -1341,8 +1345,9 @@ func _on_challenge_confirmed(deposit: int) -> void:
 
 
 ## Slide the board in and start the x01 race under the challenge's constrained front:
-## its target, its dpt override, and the deposit as the total-dart budget (§9). Mirrors
-## _slide_to_leg_node but routes through start_challenge_race + applies a handicap.
+## its target, its dpt override, and the deposit as the total-dart budget (§9). Challenge
+## races KEEP the board slide (round 3 item 4 only cut the map→leg slide): a race has no leg
+## intro, so the slide is its only transition. Routes through start_challenge_race + handicap.
 func _start_challenge_race() -> void:
 	var c: ChallengeNode = _active_challenge
 	var viewport_size: Vector2 = get_viewport_rect().size
@@ -1503,6 +1508,8 @@ func _finish_challenge_reward() -> void:
 ## A lost challenge race: the deposit is forfeit (already withheld), the run CONTINUES.
 ## Restore the dpt override, tear down the handicap, flash a notice, and return to the map.
 func _fail_challenge() -> void:
+	# Teardown (unchanged): end the handicap, restore the pre-race dpt, zero the budget, drop
+	# the challenge state, play the loss sting, refresh the bank label.
 	_end_handicap()
 	x01_game.darts_per_turn = _challenge_prev_dpt
 	x01_game.dart_budget = 0
@@ -1510,11 +1517,17 @@ func _fail_challenge() -> void:
 	_active_challenge = null
 	AuidoManager.on_leg_lost()
 	hud.update_bank(_banked_darts)
-	hud.show_bust("CHALLENGE FAILED — wager forfeit")
-	get_tree().create_timer(next_dart_delay * 2.0).timeout.connect(func() -> void:
-		hud.set_remaining_bust(false)
-		_show_map()
-	)
+	# Round 3 item 3: a held "CHALLENGE LOST" banner dismissed by a click, instead of the
+	# bust label + auto-timer cut (the bust register reads wrong for a race loss). Gate input
+	# with a dedicated phase while it holds; the banner's blocker also swallows clicks. The
+	# await here mirrors the slide-in intro's await-inside-a-tween-callback (this runs as a
+	# score_tween callback). _challenge_deposit is the wager stored at confirm.
+	_leg_phase = "challenge_lost"
+	hud.show_challenge_lost(_challenge_deposit, _banked_darts)
+	await hud.challenge_lost_dismissed
+	_leg_phase = ""
+	hud.set_remaining_bust(false)
+	_show_map()
 
 
 ## Bailout: rescue a would-be run-ending leg by spending banked darts.
@@ -1647,7 +1660,7 @@ func _on_reward_selected(index: int) -> void:
 ## the normal reward path and the relic-flip picker once all flips are placed.
 func _continue_after_reward() -> void:
 	# Post-boss shopping is now a map routing choice (a shop node after the boss),
-	# not an automatic appendage. Surface the Next Leg button → map.
+	# not an automatic appendage. Surface the "Return to Map" button → map.
 	_leg_phase = ""
 	hud.score_label.text = ""
 	hud.next_leg_button.visible = true
@@ -2494,7 +2507,7 @@ func _on_run_confirmed() -> void:
 
 	# Leg-intro presentation for the run's FIRST leg — it starts here off start_run(),
 	# not via a map arrival, so it needs its own conceal + intro pass (the same sequence
-	# _slide_to_leg_node plays for every later leg). Conceal AFTER _update_all_hud so the
+	# _enter_leg_node plays for every later leg). Conceal AFTER _update_all_hud so the
 	# already-written labels are hidden, then revealed one by one as the flyers land.
 	hud.conceal_for_leg_intro()
 	_leg_phase = "leg_intro"

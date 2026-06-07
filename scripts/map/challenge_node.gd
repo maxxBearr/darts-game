@@ -42,6 +42,14 @@ extends Resource
 @export var lean_factor: float = 0.65   ## min_deposit ≈ reliable_darts × this (rare-end precision floor)
 @export var deposit_cushion: int = 2    ## max_deposit ≈ reliable_darts + this (common-end safety net)
 
+## Hard ceiling on the band's top end (max_deposit). Enforced UPSTREAM by clamping
+## target_score down so the race budget the deposit funds stays achievable — NOT by
+## squeezing the band under a too-high target (deposit = wager = race budget is the
+## load-bearing rule, §5; a clamped band on a high target would offer an unwinnable race).
+## Early act-0 challenges therefore become concise rematches of cheaper numbers. See
+## MapGraph.compute_challenge_params. Default 12 (Max's playtest pick, 2026-06-06).
+@export var max_deposit_cap: int = 12
+
 ## The upgrade family this node offers (rolled at generation). Rarity is EARNED by
 ## finish-efficiency (§6), not stored here. The grant draws a ScoringModifier of this
 ## family at the earned rarity from ModifierRegistry (the shop/modifier pool — the only
