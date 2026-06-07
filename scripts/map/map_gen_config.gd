@@ -34,11 +34,14 @@ extends Resource
 
 ## Fewest nodes in ONE lane across the whole act (both lanes share this total; it is cut
 ## into crossovers+1 stretches of ≥2 each). Traversed path length per act ≈ lane_len + 3
-## (entry + pre-boss + boss) + crossovers actually taken.
+## (entry + pre-boss + boss) + crossovers actually taken. Kept at 9: dropping the MIN starves a
+## short act of room for its guaranteed lane-run challenge (challenges_per_path_min). The
+## leg-lattice pass trims only the MAX (worst-case length) — see lane_len_max.
 @export var lane_len_min: int = 9
 
-## Most nodes in one lane across the whole act.
-@export var lane_len_max: int = 12
+## Most nodes in one lane across the whole act. Trimmed by 1 (was 12) in the leg-lattice pass to
+## shave the longest acts; the cull rule already culls easy leftovers, so fewer leg nodes is fine.
+@export var lane_len_max: int = 11
 
 ## Relative weights for a crossover's rolled TYPE (normalized internally). A crossover is
 ## off-budget, so these add spice on top of the lane-run special budget. Challenge respects
@@ -133,6 +136,22 @@ extends Resource
 @export var act_node_budget_max: int = 40
 
 # ── Retained from slice 1/2 ──────────────────────────────────────────────────
+
+## Leg-lattice pass (2026-06-07): the most LEG-type nodes any single entry→boss route may hold —
+## the per-traversal pacing cap. Parallel branch legs are alternatives (a stay-vs-detour pair costs
+## one path's worth, not both), so the on-screen leg count floats above this. The cull rule already
+## bounds the MEANINGFUL legs (extra legs beyond the act's ~10-cell lattice just repeat the hardest
+## cleared pair), so this is a SOFT pacing target on node count, checked by the map test suite over
+## the seed grid (not a hard _validate assert — an unlucky low-special roll mustn't crash a run).
+## Trim lane_len to lower it. Set to 14 = the trimmed generation's observed per-act ceiling over
+## the test seed grid (a tight regression guard). NOTE: the spec's aspirational ~8-9 is NOT
+## reachable by the sanctioned "trim lane_len by 1-2" alone — the crossover interchanges (up to 3,
+## each adding a leg when taken) plus the lane spine dominate the count. Reaching 8-9 would need a
+## deeper topology cut (fewer crossovers and a shorter lane floor, which cascades into
+## act_node_budget_min and the topology invariants) — left for a follow-up tuning pass. The cull
+## rule already delivers the FELT pacing: extra leg nodes just repeat/cull, so you don't play 14
+## escalating legs.
+@export var path_leg_budget: int = 14
 
 ## Chance a placed challenge node carries a recycled benched-boss aim handicap (§8);
 ## otherwise it is a clean precision race. 0 = never handicapped, 1 = always. The

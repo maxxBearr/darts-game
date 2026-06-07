@@ -272,6 +272,11 @@ var _event_pending: bool = false
 ## _continue_shop_after_pick, cleared in _finish_event.
 var _geometry_event_pending: bool = false
 
+## The (target, turns) the current ordinary leg was DRAWN at from the lattice frontier (leg
+## lattice, 2026-06-07). Cached on arrival so the leg-win hook resolves the right cell even after
+## a bailout shifts x01.max_turns. (-1, -1) = no ordinary leg in flight (boss/challenge/shop).
+var _active_leg_pair: Vector2i = Vector2i(-1, -1)
+
 ## Run-scoped RNG for the arrival-time challenge target roll (§3). Randomized at run start.
 var _challenge_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -1017,6 +1022,13 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 	# A normal leg now ends at its leg-complete banner and returns to the map via the Next
 	# button — no upgrade panel. _show_accuracy_pick / _generate_upgrades stay in the file
 	# for the shop + (unchanged) boss-reward paths; events are their own sibling generator.
+	# Ordinary leg cleared: resolve its lattice cell (raises the act's cull threshold + culls the
+	# now-easier leftovers, monotone difficulty). Use the DRAWN pair (bailout may have moved
+	# x01.max_turns). Boss/challenge wins return earlier, so this only fires for ordinary legs.
+	if _active_leg_pair.x != -1:
+		_map_graph.record_leg_cleared(_active_leg_pair.x, _active_leg_pair.y)
+		_active_leg_pair = Vector2i(-1, -1)
+
 	_leg_phase = ""
 	hud.score_label.text = "Leg %d Complete! Cleared %d in %d turns" % [x01_game.current_leg, x01_game.target_score, x01_game.current_turn]
 	hud.next_leg_button.visible = true
@@ -1338,10 +1350,12 @@ func _on_map_node_chosen(node: MapNode) -> void:
 ## then the overlay hides and the intro plays. Replaces advance_leg()'s self-increment — the
 ## node owns (target, dart budget); a BOSS node rolls a concrete boss from the level pool here.
 func _enter_leg_node(node: MapNode) -> void:
-	# No-repeat rule (tuning pass 2026-06-06): a run never plays the exact same (target, turns)
-	# leg twice. Claimed at arrival — params aren't shown on the map ("type on map, params on
-	# arrival"), so a nearest-config adjustment is invisible.
-	_map_graph.claim_unplayed_leg_params(node)
+	# Leg lattice (2026-06-07): the leg's (target, turns) is DRAWN from the act's live monotone
+	# frontier on arrival — params aren't shown on the map ("type on map, params on arrival"). Cache
+	# the DRAWN pair so the win hook resolves the right lattice cell even if the player bails out
+	# (bailout raises x01.max_turns past the drawn turns; the node keeps the drawn pair).
+	_map_graph.draw_leg_from_frontier(node)
+	_active_leg_pair = Vector2i(node.target_score, node.max_turns)
 
 	# Arrival work, all done while the map overlay still hides the board (no slide). The overlay
 	# is a near-opaque full-rect, so clearing darts / resetting here is never visible.
@@ -1803,6 +1817,7 @@ func _reset_run_state() -> void:
 	_challenge_deposit = 0
 	_challenge_handicap = null
 	_challenge_reward_pending = false
+	_active_leg_pair = Vector2i(-1, -1)
 	x01_game.darts_per_turn = 3
 	x01_game.max_turns = 5
 	x01_game.dart_budget = 0
@@ -2571,9 +2586,9 @@ func _on_run_confirmed() -> void:
 	run_rng.randomize()
 	_map_graph = MapGraph.generate(_current_level, run_rng, x01_game.starting_target, x01_game.target_increment)
 	_map_graph.advance_to(_map_graph.start_id)
-	# Leg 1 starts off x01_game.start_run() (not a map arrival), so record its config
-	# directly — the no-repeat rule must count it or a later leg could replay 101.
-	_map_graph.record_played_config(x01_game.target_score, x01_game.max_turns)
+	# Leg 1 starts off x01_game.start_run() (not a map arrival) on the fixed 101/5 calibration leg.
+	# Mark that lattice opener cleared so the act-0 frontier opens to {101/4 (tighten), 201/6 (climb)}.
+	_map_graph.record_leg_cleared(x01_game.target_score, x01_game.max_turns)
 
 	# Challenge-node state: anchor starts at leg-1's target (the lowest score in play) and
 	# climbs with every banked win; the roll RNG is run-scoped so each node anchors fresh.

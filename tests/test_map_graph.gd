@@ -12,6 +12,7 @@ const INCREMENT := 100          ## X01 target lattice step (mirrors _generate_fu
 
 var _failures: int = 0
 var _checks: int = 0
+var _max_legs_seen: int = 0   ## widest entry→boss leg count observed (informs path_leg_budget tuning)
 
 
 func _init() -> void:
@@ -26,6 +27,11 @@ func _init() -> void:
 	_test_incremental_gen()
 	_test_state_aware_family_roll()
 	_test_reproducibility()
+	# Leg lattice (2026-06-07, §6): monotone difficulty, frontier legality, spread, exhaustion.
+	_test_lattice_monotone()
+	_test_lattice_spread()
+	_test_lattice_exhaustion()
+	print("   widest entry→boss leg count observed: %d (path_leg_budget tuning signal)" % _max_legs_seen)
 	print("\nMapGraph test: %d checks, %d failures across %d seeds/level." % [_checks, _failures, SEEDS_PER_LEVEL])
 	quit(1 if _failures > 0 else 0)
 
@@ -76,28 +82,14 @@ func _depth_population(g: MapGraph, depth: int) -> int:
 	return c
 
 
-## The number of distinct (target, turns) leg configs an act can host — its combo capacity
-## MINUS the reserved boss pair. The no-repeat rule is allowed to repeat only once a path's
-## claims exceed this (the documented exhaustion fallback in claim_unplayed_leg_params).
-func _act_leg_capacity(g: MapGraph, cfg: MapGenConfig, act: int) -> int:
-	var num_targets: int = (g.act_ceiling(act) - g.act_floor(act)) / INCREMENT + 1
-	var num_turns: int = cfg.turns_max - cfg.turns_min + 1
-	return num_targets * num_turns - 1   # boss pair (ceiling @ reference_turns) is reserved
-
-
 # ── Per-level suite ───────────────────────────────────────────────────────────
 
 func _test_level(level: LevelDefinition) -> void:
 	print("— Level %s (max %d, %d acts/bosses)" % [level.display_name, level.max_score_target, level.boss_count])
-	var turns_dist: Dictionary = {}   ## max_turns value -> count of non-boss legs across all seeds
 	for seed_value: int in range(SEEDS_PER_LEVEL):
 		# _generate_full asserts internally (each act runs _validate); a bad roll halts here.
 		var g: MapGraph = _generate_full(level, seed_value)
 		_assert_structure(level, g, seed_value)
-		for id: int in g.nodes:
-			var n: MapNode = g.get_node_by_id(id)
-			if n.type != MapNode.Type.BOSS:
-				turns_dist[n.max_turns] = turns_dist.get(n.max_turns, 0) + 1
 	# Heavier per-path checks on a subset of seeds, plus cross-seed spread/existence signals.
 	var crossover_count_dist: Dictionary = {}   ## act-0 crossover count -> seeds with it
 	var total_branches_seen: int = 0
@@ -108,7 +100,7 @@ func _test_level(level: LevelDefinition) -> void:
 		_assert_per_path_budget(level, g, seed_value)
 		_assert_crossover_invariants(level, g, seed_value)
 		_assert_branch_invariants(level, g, seed_value)
-		_assert_no_repeat_claims(level, g, seed_value)
+		_assert_path_leg_budget(level, g, seed_value)
 		var c0: int = 0
 		for id: int in g.nodes:
 			var n: MapNode = g.get_node_by_id(id)
@@ -124,43 +116,10 @@ func _test_level(level: LevelDefinition) -> void:
 	_check(crossover_count_dist.size() > 1, "act-0 crossover count spreads across seeds (not pinned)", -1)
 	_check(total_branches_seen > 0, "mini-branches appear across seeds", -1)
 	_check(act0_challenges_seen > 0, "act-0 challenges appear across seeds (round 2)", -1)
-	# Spread guarantee: the generator must NOT silently go inert (every leg == ref).
-	_assert_spread(level, turns_dist)
-	# Parity guarantee: forcing the roll to reference_turns reproduces the slice-1 ladder.
-	_assert_parity(level)
+	# Leg lattice (2026-06-07): legs are no longer rolled at generation — they're drawn from the
+	# per-act monotone frontier at arrival. The lattice mechanics are exercised by the dedicated
+	# suite-level tests (_test_lattice_*); per-level here we only check the per-path leg cap above.
 	_dump_example(level)
-
-
-## The slice was inert once (every leg rolled reference_turns) and the bounds-only suite
-## stayed green. Assert the rolled max_turns actually spreads.
-func _assert_spread(level: LevelDefinition, turns_dist: Dictionary) -> void:
-	var cfg: MapGenConfig = _cfg_for(level)
-	var keys: Array = turns_dist.keys()
-	keys.sort()
-	var dist_str: String = ""
-	for t: int in keys:
-		dist_str += "%d×%d  " % [t, turns_dist[t]]
-	print("   max_turns distribution (non-boss legs, %d seeds): %s" % [SEEDS_PER_LEVEL, dist_str.strip_edges()])
-	_check(keys.size() > 1, "turns roll produces >1 distinct value (not inert)", -1)
-	_check(turns_dist.has(cfg.turns_min), "turns_min (%d) appears across seeds" % cfg.turns_min, -1)
-	_check(turns_dist.has(cfg.turns_max), "turns_max (%d) appears across seeds" % cfg.turns_max, -1)
-
-
-## "Ships at parity": with turns forced to reference_turns and pressure 1.0, every node's
-## target must equal baseline_target(depth) — i.e. the slice-1 ladder value.
-func _assert_parity(level: LevelDefinition) -> void:
-	var cfg: MapGenConfig = _cfg_for(level).duplicate()
-	cfg.turns_min = cfg.reference_turns
-	cfg.turns_max = cfg.reference_turns
-	cfg.pressure_baseline = 1.0
-	var lvl: LevelDefinition = level.duplicate()
-	lvl.map_gen_config = cfg
-	var g: MapGraph = _generate_full(lvl, 999)
-	for id: int in g.nodes:
-		var n: MapNode = g.get_node_by_id(id)
-		_check(n.max_turns == cfg.reference_turns, "parity: turns == reference_turns", 999)
-		var want: int = g.baseline_target(n.depth)
-		_check(n.target_score == want, "parity: target == slice-1 ladder at depth %d (got %d want %d)" % [n.depth, n.target_score, want], 999)
 
 
 func _assert_structure(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
@@ -197,24 +156,18 @@ func _assert_structure(level: LevelDefinition, g: MapGraph, seed_value: int) -> 
 	for a: int in range(g.acts):
 		_check(boss_per_act.get(a, 0) == 1, "exactly one boss in act %d" % a, seed_value)
 
-	# Slice 2 contract: each non-boss leg rolls turns in range and targets flat pressure.
+	# Leg lattice (2026-06-07): ordinary legs carry NO (target, turns) at generation — they are
+	# drawn from the per-act frontier at arrival, so a leg node's target_score is 0 here. Only the
+	# BOSS carries a fixed pair: the act ceiling at reference turns, sitting one increment ABOVE the
+	# drawable lattice top (boss off-grid). Assert the boss pair; ordinary legs are left unassigned.
 	var cfg: MapGenConfig = _cfg_for(level)
 	for id: int in g.nodes:
 		var n: MapNode = g.get_node_by_id(id)
-		var fl: int = g.act_floor(n.act)
-		var ce: int = g.act_ceiling(n.act)
-		_check(n.target_score >= fl and n.target_score <= ce, "target in act %d window [%d,%d]" % [n.act, fl, ce], seed_value)
 		if n.type == MapNode.Type.BOSS:
-			continue
-		_check(n.max_turns >= cfg.turns_min and n.max_turns <= cfg.turns_max, "leg turns in [%d,%d]" % [cfg.turns_min, cfg.turns_max], seed_value)
-		var base: int = g.baseline_target(n.depth)
-		var ideal_raw: float = cfg.pressure_baseline * float(n.max_turns) / float(cfg.reference_turns) * float(base)
-		if ideal_raw < float(fl) or ideal_raw > float(ce):
-			_check(n.target_score == fl or n.target_score == ce, "clamped leg target on act boundary", seed_value)
+			_check(n.target_score == g.act_ceiling(n.act), "boss target == act %d ceiling" % n.act, seed_value)
+			_check(n.max_turns == cfg.reference_turns, "boss turns == reference_turns", seed_value)
 		else:
-			var p: float = g.pressure_of(n.target_score, n.max_turns, n.depth)
-			var tol: float = 0.5 * 100.0 * float(cfg.reference_turns) / (float(n.max_turns) * float(base)) + 0.001
-			_check(absf(p - cfg.pressure_baseline) <= tol, "flat pressure ~%.2f (got %.3f, tol %.3f)" % [cfg.pressure_baseline, p, tol], seed_value)
+			_check(n.target_score == 0, "ordinary leg unassigned at generation (drawn at arrival)", seed_value)
 
 	# At least one shop exists per act on average (per-path budget guarantees ≥1/act).
 	var shop_count: int = 0
@@ -434,39 +387,144 @@ func _straight_lane_reaches(g: MapGraph, fork: MapNode, rejoin: MapNode) -> bool
 	return false
 
 
-## The no-repeat leg rule: claiming every non-boss LEG along any single path yields
-## pairwise-distinct (target, turns) configs — never the act boss's reserved pair, always
-## inside the act window / turns band — UNTIL the act's leg combo capacity is exhausted, at
-## which point the documented fallback may repeat (round-2 act-0 paths can be long enough to
-## approach the 15-config space). Mirrors main.gd's arrival flow (record leg 1, claim arrivals).
-func _assert_no_repeat_claims(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+# ── Leg lattice (§6) — draw-from-frontier, monotone cull, exhaustion fallback ──
+
+## Per-path leg cap (§4): an "entry→boss route" is ONE act, so cap LEG-type nodes PER ACT along a
+## path (not the whole multi-act run). SOFT pacing target — checked over the seed grid (the cull
+## rule already bounds the meaningful legs; this just keeps the node count from sprawling).
+func _assert_path_leg_budget(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
 	var cfg: MapGenConfig = _cfg_for(level)
-	var paths: Array = _enumerate_paths(g)
-	# One representative path per seed keeps the cost linear (claims mutate the graph).
-	var path: Array = paths[seed_value % paths.size()]
-	g.record_played_config(101, 5)   # leg 1, as main.gd records it at run start
-	var seen: Dictionary = {"101|5": true}
-	var claims_in_act: Dictionary = {0: 1}   # leg 1 is an act-0 config
+	for path: Array in _enumerate_paths(g):
+		var per_act: Dictionary = {}
+		for id: int in path:
+			var n: MapNode = g.get_node_by_id(id)
+			if n.type == MapNode.Type.LEG:
+				per_act[n.act] = per_act.get(n.act, 0) + 1
+		for a: int in per_act:
+			_max_legs_seen = maxi(_max_legs_seen, int(per_act[a]))
+			_check(int(per_act[a]) <= cfg.path_leg_budget,
+				"act %d path leg count %d <= path_leg_budget %d" % [a, int(per_act[a]), cfg.path_leg_budget], seed_value)
+
+
+## Walk a start→boss PATH the way main.gd does: the act-0 entry is the fixed 101/5 opener
+## (auto-cleared at run start), then each ordinary LEG node DRAWS its pair from the live frontier
+## and clears it (raising the cull threshold). Returns per-act ordered records
+## { act -> {"draws": Array[Vector2i], "pressures": Array[float], "legal": bool} }. legal=false if
+## a drawn cell was NOT in the live frontier at draw time while the frontier was non-empty (a
+## fallback repeat on an empty frontier is allowed). Mutates the graph's lattice — fresh g per call.
+func _walk_lattice(g: MapGraph, path: Array) -> Dictionary:
+	var per_act: Dictionary = {}
 	for id: int in path:
 		var n: MapNode = g.get_node_by_id(id)
-		# Specials don't play their rolled params (shop/event/challenge arrivals route
-		# elsewhere in main.gd), and the boss is its reserved pair's single owner.
-		if n.type != MapNode.Type.LEG:
-			continue
 		if n.id == g.start_id:
-			continue   # leg 1 is recorded above, not claimed
-		g.claim_unplayed_leg_params(n)
-		claims_in_act[n.act] = claims_in_act.get(n.act, 0) + 1
-		var key: String = "%d|%d" % [n.target_score, n.max_turns]
-		if seen.has(key):
-			# A repeat is legal ONLY once this act's leg combo space is exhausted.
-			_check(claims_in_act[n.act] > _act_leg_capacity(g, cfg, n.act),
-				"claimed leg %s repeats only when act %d combo space is exhausted (claim #%d, cap %d)" % [key, n.act, claims_in_act[n.act], _act_leg_capacity(g, cfg, n.act)], seed_value)
-		seen[key] = true
-		_check(n.max_turns >= cfg.turns_min and n.max_turns <= cfg.turns_max, "claimed turns in band", seed_value)
-		_check(n.target_score >= g.act_floor(n.act) and n.target_score <= g.act_ceiling(n.act), "claimed target in act window", seed_value)
-		_check(key != "%d|%d" % [g.act_ceiling(n.act), cfg.reference_turns],
-			"claimed leg never replays the act boss's reserved pair", seed_value)
+			g.record_leg_cleared(101, 5)   # the fixed calibration opener (cumulative leg 1)
+			continue
+		if n.type != MapNode.Type.LEG:
+			continue   # specials / boss play no lattice leg
+		var act: int = n.act
+		if not per_act.has(act):
+			per_act[act] = {"draws": [], "pressures": [], "legal": true}
+		var frontier: Array[Dictionary] = g.get_frontier(act)
+		g.draw_leg_from_frontier(n)
+		var pair: Vector2i = Vector2i(n.target_score, n.max_turns)
+		if not frontier.is_empty():
+			var found: bool = false
+			for f: Dictionary in frontier:
+				if int(f["score"]) == pair.x and int(f["turns"]) == pair.y:
+					found = true
+					break
+			if not found:
+				per_act[act]["legal"] = false
+		(per_act[act]["draws"] as Array).append(pair)
+		(per_act[act]["pressures"] as Array).append(float(pair.x) / float(pair.y * 3))
+		g.record_leg_cleared(pair.x, pair.y)
+	return per_act
+
+
+## §6: cleared pressures are monotone nondecreasing (the "easier leftover" leak is closed), every
+## drawn leg was in the live frontier (frontier legality), and 101/4 — culled the instant any
+## harder cell clears — can only ever be the FIRST drawn leg (cumulative leg 2).
+func _test_lattice_monotone() -> void:
+	print("— Leg lattice: monotone cleared pressure + frontier legality + 101/4-as-leg-2")
+	var level: LevelDefinition = load("res://resources/levels/level_501.tres")
+	var saw_101_4: int = 0
+	for seed_value: int in range(SEEDS_PER_LEVEL):
+		var g: MapGraph = _generate_full(level, seed_value)
+		var paths: Array = _enumerate_paths(g)
+		var path: Array = paths[seed_value % paths.size()]
+		var per_act: Dictionary = _walk_lattice(g, path)
+		for act: int in per_act:
+			var rec: Dictionary = per_act[act]
+			_check(rec["legal"], "every drawn leg was in the live frontier (act %d)" % act, seed_value)
+			var pressures: Array = rec["pressures"]
+			for i: int in range(1, pressures.size()):
+				_check(float(pressures[i]) >= float(pressures[i - 1]) - 0.0001,
+					"cleared pressures nondecreasing (act %d: %.2f then %.2f)" % [act, float(pressures[i - 1]), float(pressures[i])], seed_value)
+			if act == 0:
+				var draws: Array = rec["draws"]
+				for j: int in range(draws.size()):
+					if (draws[j] as Vector2i) == Vector2i(101, 4):
+						_check(j == 0, "101/4 only appears as the first drawn leg (cumulative leg 2)", seed_value)
+						saw_101_4 += 1
+	_check(saw_101_4 > 0, "101/4 actually appears across seeds (not inert)", -1)
+
+
+## §6 spread (the rolled-generator-spread lesson): the first drawn leg opens to BOTH "tighten"
+## (101/4) and "climb" (201/6) across seeds, and walks visit DIFFERENT cell sequences — not one
+## canonical walk.
+func _test_lattice_spread() -> void:
+	print("— Leg lattice: first-pick spread (tighten vs climb) + sequence variety")
+	var level: LevelDefinition = load("res://resources/levels/level_501.tres")
+	var first_tighten: int = 0   # 101/4
+	var first_climb: int = 0     # 201/6
+	var distinct_seqs: Dictionary = {}
+	for seed_value: int in range(SEEDS_PER_LEVEL):
+		var g: MapGraph = _generate_full(level, seed_value)
+		var paths: Array = _enumerate_paths(g)
+		var path: Array = paths[seed_value % paths.size()]
+		var per_act: Dictionary = _walk_lattice(g, path)
+		if per_act.has(0) and (per_act[0]["draws"] as Array).size() > 0:
+			var draws: Array = per_act[0]["draws"]
+			var first: Vector2i = draws[0]
+			if first == Vector2i(101, 4):
+				first_tighten += 1
+			elif first == Vector2i(201, 6):
+				first_climb += 1
+			distinct_seqs[str(draws)] = true
+	_check(first_tighten > 0, "some seeds open by tightening (101/4 first)", -1)
+	_check(first_climb > 0, "some seeds open by climbing (201/6 first)", -1)
+	_check(distinct_seqs.size() > 1, "walks visit different cell sequences (not one canonical walk)", -1)
+	print("   first pick: tighten(101/4)=%d climb(201/6)=%d, distinct act-0 sequences=%d" % [first_tighten, first_climb, distinct_seqs.size()])
+
+
+## §6 exhaustion: after the lattice empties (fast climb + long path), the next draw repeats the
+## hardest CLEARED pair — never an easier one.
+func _test_lattice_exhaustion() -> void:
+	print("— Leg lattice: exhaustion fallback repeats the hardest cleared pair")
+	var level: LevelDefinition = load("res://resources/levels/level_501.tres")
+	for seed_value: int in range(20):
+		var g: MapGraph = _generate_full(level, seed_value)
+		g.record_leg_cleared(101, 5)   # opener
+		var hardest: Vector2i = Vector2i(101, 5)
+		var guard: int = 0
+		while not g.get_frontier(0).is_empty() and guard < 50:
+			var d: MapNode = MapNode.new()
+			d.act = 0
+			d.type = MapNode.Type.LEG
+			g.draw_leg_from_frontier(d)
+			g.record_leg_cleared(d.target_score, d.max_turns)
+			if float(d.target_score) / float(d.max_turns * 3) > float(hardest.x) / float(hardest.y * 3):
+				hardest = Vector2i(d.target_score, d.max_turns)
+			guard += 1
+		# Frontier now empty → the next draw is the fallback.
+		var fb: MapNode = MapNode.new()
+		fb.act = 0
+		fb.type = MapNode.Type.LEG
+		g.draw_leg_from_frontier(fb)
+		var fb_pair: Vector2i = Vector2i(fb.target_score, fb.max_turns)
+		_check(fb_pair == hardest, "fallback repeats hardest cleared pair (got %s want %s)" % [str(fb_pair), str(hardest)], seed_value)
+		_check(float(fb_pair.x) / float(fb_pair.y * 3) >= float(hardest.x) / float(hardest.y * 3) - 0.0001,
+			"fallback is never easier than the hardest cleared", seed_value)
 
 
 # ── Incremental generation (§3.6 / §8) ────────────────────────────────────────

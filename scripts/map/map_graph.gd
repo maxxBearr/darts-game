@@ -61,15 +61,35 @@ var _next_depth: int = 0               ## the running global depth counter (next
 var _act_entry_depth: int = 0          ## depth of the current act's entry (gates act-0 challenges)
 var _detour_challenge_used: bool = false  ## a crossover/branch challenge was placed this act (≤1 cap)
 
-## Every (target_score, max_turns) pair the run has actually PLAYED as a leg, keyed
-## "target|turns". The no-repeat rule ("never play the exact same leg twice") is
-## enforced at ARRIVAL via claim_unplayed_leg_params, not at generation: the player
-## only walks ~half the placed nodes, and act-0's combo space (5 targets × 3 turns)
-## is smaller than an act's placed-node count, so generation-wide dedup would
-## exhaust. Act windows are disjoint, so collisions only ever happen within an act.
-## Boss configs (act ceiling @ reference_turns) are reserved here at generation so
-## an ordinary leg can never pre-play the boss's exact numbers.
-var _played_leg_configs: Dictionary = {}
+# ── Leg lattice (2026-06-07) — per-act monotone (score, turns) frontier ──────
+# Replaces slice-2's per-leg turn roll + the claim_unplayed_leg_params no-repeat dodge with a
+# per-act difficulty lattice drawn LAZILY at arrival (see the leg-lattice spec). Cells are
+# (score, turns); a cell's pressure is the depth-independent score / (turns · BASE_DARTS_PER_TURN)
+# — the §1 table value (201/6 = 11.2, etc.), NOT the depth-based pressure_of() the challenges read.
+# Within an act, cells unlock left→right per row (6t→5t→4t) and row→row (a row's loosest cell
+# unlocks the next row's loosest once resolved); any UNDRAWN cell at/below the highest CLEARED
+# pressure is culled, so difficulty is strictly monotone. Bosses sit at the act ceiling, off the
+# drawable lattice (rows stop one increment below it). Ordinary legs carry target_score = 0 at
+# generation — they get their pair from draw_leg_from_frontier on arrival.
+
+## Drawable turn columns, loosest → tightest (the LOCKED 6/5/4 grid). The lowest row of each act
+## drops the loosest (6t) column — a 6-turn opener score is trivially easy (the §1 table omits it).
+const LATTICE_TURNS: Array[int] = [6, 5, 4]
+
+## Every lattice cell across all generated acts. Each is a Dictionary:
+##   {act, score, turns, pressure, drawn, cleared, culled, is_opener}
+## drawn = assigned to a leg node; cleared = that leg was won; culled = expired by the monotone
+## rule; resolved (cleared OR culled) gates unlocking; is_opener marks act 0's fixed calibration
+## leg (101/5) the run auto-plays at start — never drawn from the frontier.
+var _lattice_cells: Array[Dictionary] = []
+
+## act -> highest CLEARED cell pressure (the cull threshold for that act).
+var _act_cleared_pressure: Dictionary = {}
+
+## Dedicated RNG for the arrival-time frontier draw, so lazy draws never perturb the structural
+## _rng stream (which would reshape later generate_next_act calls). Seeded lazily from _rng.seed,
+## mirroring _family_rng. Path-dependent by nature (the live frontier depends on the route walked).
+var _lattice_rng: RandomNumberGenerator = null
 
 
 ## Build a run map for `level`, using the seeded `rng` for every roll so runs are
@@ -225,9 +245,13 @@ func _build_act(act: int, run_state: Dictionary) -> void:
 	# (crossover/branch content is off-budget spice, §4), so this still walks run0/run1.
 	_slot_specials(act, stretches, run_state)
 
-	# Step 7 — assign leg params to the new act's nodes off the slice-2 pressure curve
-	# (the helper skips already-assigned earlier-act nodes, so visited legs never re-roll).
+	# Step 7 — rebuild the depth→act maps + assign the boss its tier pair (ordinary legs are
+	# drawn lazily at arrival, so this no longer rolls leg params — see _assign_leg_params).
 	_assign_leg_params(_level, _cfg, _rng, _starting_target, _target_increment)
+
+	# Step 8 — build this act's leg lattice (the per-act monotone (score, turns) grid drawn at
+	# arrival). Depends on the act window math set in _assign_leg_params; idempotent per act.
+	_build_act_lattice(act)
 
 	_generated_acts = act + 1
 
@@ -512,17 +536,15 @@ func _roll_challenge_node(rng: RandomNumberGenerator, cfg: MapGenConfig) -> Chal
 	return c
 
 
-# ── Step 4: the pressure-ratio generator (slice 2) ──────────────────────────
+# ── Step 4: boss tier pairs + the depth→act maps (the pressure seam's context) ──
 
-## Assign each node its (target_score, max_turns). The slice-1 ladder is kept as
-## baseline_target(depth) — the value a reference_turns leg gets — and defined to
-## be pressure 1.0. Each non-boss leg rolls its own turn count, then derives a
-## target at flat pressure_baseline against that curve; turns = reference_turns
-## reproduces slice 1 exactly (ships at parity). Bosses are unchanged tier
-## checkpoints: act ceiling at reference_turns. See spec §2.
-func _assign_leg_params(level: LevelDefinition, cfg: MapGenConfig, rng: RandomNumberGenerator, starting_target: int, target_increment: int) -> void:
+## Rebuild the depth→act span maps (so the public pressure seam stays callable — challenge
+## pricing reads it) and assign each BOSS its fixed tier pair (act ceiling @ reference turns).
+## Ordinary legs are NOT assigned here anymore: they carry target_score = 0 until drawn from the
+## per-act lattice on arrival (draw_leg_from_frontier). Idempotent across incremental act gens.
+func _assign_leg_params(level: LevelDefinition, cfg: MapGenConfig, _rng_unused: RandomNumberGenerator, starting_target: int, target_increment: int) -> void:
 	# Capture the pressure-math context so the public seam functions stay callable
-	# after generation (Phase 02 reads the same curve — §6).
+	# after generation (Phase 02 challenge pricing reads the same curve — §6).
 	_starting_target = starting_target
 	_target_increment = target_increment
 	_max_target = level.max_score_target if level != null else 501
@@ -541,128 +563,193 @@ func _assign_leg_params(level: LevelDefinition, cfg: MapGenConfig, rng: RandomNu
 		if not _act_max_depth.has(n.act) or n.depth > _act_max_depth[n.act]:
 			_act_max_depth[n.act] = n.depth
 
+	# Bosses: fixed at the act ceiling, reference turns — tier checkpoints, not drawn. The boss
+	# sits ABOVE the drawable lattice (rows stop one increment below the ceiling), so it never
+	# overlaps a drawable cell — no reservation needed. Ordinary legs are left at target 0.
 	for id: int in nodes:
 		var n: MapNode = nodes[id]
-		# Incremental gen (§3.6): only assign nodes from the act being appended. An
-		# already-assigned node carries a non-zero target (legs roll ≥ starting_target;
-		# bosses get the act ceiling), so this skips every earlier act — a visited leg's
-		# params never re-roll, and the depth-map rebuild above still spans all acts.
-		if n.target_score != 0:
-			continue
-		# Bosses: fixed at the act ceiling, reference turns — tier checkpoints, not
-		# rolled. baseline_target at the boss depth already equals the act ceiling.
-		# RESERVE the boss's pair in the played set so an ordinary leg in this act can
-		# never roll the boss's exact numbers (the boss "plays it" once, at the climax).
-		if n.type == MapNode.Type.BOSS:
+		if n.type == MapNode.Type.BOSS and n.target_score == 0:
 			n.target_score = _act_ceiling(n.act, _max_target, _starting_target, _target_increment)
 			n.max_turns = _reference_turns
-			_played_leg_configs[_config_key(n.target_score, n.max_turns)] = true
+
+
+# ── The leg lattice (2026-06-07) — build, frontier, cull, draw, resolve ──────
+
+## Build one act's lattice cells (idempotent — incremental gen may re-enter). Rows = scores from
+## act_floor up to act_ceiling − increment (the boss owns the ceiling, off-grid); columns = the
+## 6/5/4 turn grid, except the lowest row which drops 6t ({5,4} — the pure turn-squeeze opener
+## row). Cell pressure is depth-independent score/(turns·3). Only act 0's lowest-row loosest cell
+## is the fixed opener the run auto-plays; acts 2/3 arrive from a boss, so every cell is drawable.
+func _build_act_lattice(act: int) -> void:
+	for c: Dictionary in _lattice_cells:
+		if int(c["act"]) == act:
+			return   # already built
+	var floor_s: int = act_floor(act)
+	var ceil_s: int = act_ceiling(act)
+	var score: int = floor_s
+	while score <= ceil_s - _target_increment:
+		var is_lowest: bool = score == floor_s
+		var columns: Array[int] = (LATTICE_TURNS.slice(1) if is_lowest else LATTICE_TURNS) as Array[int]
+		for turns: int in columns:
+			_lattice_cells.append({
+				"act": act,
+				"score": score,
+				"turns": turns,
+				"pressure": float(score) / float(turns * BASE_DARTS_PER_TURN),
+				"drawn": false,
+				"cleared": false,
+				"culled": false,
+				"is_opener": act == 0 and is_lowest and turns == columns[0],
+			})
+		score += _target_increment
+
+
+## The loosest (highest) turn column present in a given row: 6t normally, 5t for the lowest row
+## (act_floor), which drops the trivial 6t column.
+func _row_loosest_turns(act: int, score: int) -> int:
+	return LATTICE_TURNS[1] if score == act_floor(act) else LATTICE_TURNS[0]
+
+
+## Find the cell for an exact (act, score, turns); empty Dictionary if none.
+func _find_cell(act: int, score: int, turns: int) -> Dictionary:
+	for c: Dictionary in _lattice_cells:
+		if int(c["act"]) == act and int(c["score"]) == score and int(c["turns"]) == turns:
+			return c
+	return {}
+
+
+## Find a cell by its (score, turns) pair across all acts; empty if none. Act windows are
+## disjoint in score, so the pair is unique. Used to resolve a cleared leg's cell.
+func _find_cell_by_pair(target: int, turns: int) -> Dictionary:
+	for c: Dictionary in _lattice_cells:
+		if int(c["score"]) == target and int(c["turns"]) == turns:
+			return c
+	return {}
+
+
+## The unlock predecessor of a cell (empty = no predecessor, so unlocked from the start):
+## the loosest cell of the row below for a row's loosest cell (the 6t→6t row chain), else the
+## next-looser cell in the same row (the 6t→5t→4t column chain).
+func _cell_predecessor(cell: Dictionary) -> Dictionary:
+	var act: int = int(cell["act"])
+	var score: int = int(cell["score"])
+	var turns: int = int(cell["turns"])
+	if turns == _row_loosest_turns(act, score):
+		var below: int = score - _target_increment
+		if below < act_floor(act):
+			return {}   # bottom row — unlocked from the start
+		return _find_cell(act, below, _row_loosest_turns(act, below))
+	return _find_cell(act, score, turns + 1)   # one column looser, same row
+
+
+## A cell is resolved (counts for unlocking its successors) once it is cleared OR culled.
+func _cell_resolved(cell: Dictionary) -> bool:
+	return bool(cell["cleared"]) or bool(cell["culled"])
+
+
+## A cell is unlocked (eligible to draw, once also undrawn/uncleared/unculled) when its
+## predecessor is resolved (or it has none).
+func _cell_unlocked(cell: Dictionary) -> bool:
+	var pred: Dictionary = _cell_predecessor(cell)
+	if pred.is_empty():
+		return true
+	return _cell_resolved(pred)
+
+
+## The current frontier for an act: unlocked ∧ undrawn ∧ uncleared ∧ unculled ∧ not the opener.
+func _available_cells(act: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for c: Dictionary in _lattice_cells:
+		if int(c["act"]) != act:
 			continue
-		# Roll turns, derive the flat-pressure target, snap to X01 parity, clamp to
-		# the act window so a high/low roll near an act edge can't over/undershoot.
-		var turns: int = _roll_turns(rng, cfg)
-		n.max_turns = turns
-		n.target_score = _derive_leg_target(n.depth, n.act, turns)
+		if bool(c["drawn"]) or bool(c["cleared"]) or bool(c["culled"]) or bool(c["is_opener"]):
+			continue
+		if _cell_unlocked(c):
+			out.append(c)
+	return out
 
 
-## Roll a whole turn count in [turns_min, turns_max]. turns_center_bias is the
-## *fraction of legs pinned to reference_turns*; the rest roll uniform across the
-## range. Bias 0 = fully uniform, bias 1 = always reference_turns. Whole by
-## construction → no divisibility problem.
-## (The old lerp-then-round was inert at the default: lerp(u, 5, 0.6) over [4,6]
-## always landed in [4.6, 5.4], which all rounds to 5 — every leg reproduced slice
-## 1. This discrete weighting makes the spread explicit and predictable.)
-func _roll_turns(rng: RandomNumberGenerator, cfg: MapGenConfig) -> int:
-	var lo: int = cfg.turns_min
-	var hi: int = cfg.turns_max
-	if hi <= lo:
-		return maxi(lo, 1)
-	var ref: int = clampi(cfg.reference_turns, lo, hi)
-	var bias: float = clampf(cfg.turns_center_bias, 0.0, 1.0)
-	if rng.randf() < bias:
-		return ref
-	return rng.randi_range(lo, hi)
+## The hardest CLEARED cell in an act (for the exhaustion fallback). Empty if none cleared.
+func _hardest_cleared_cell(act: int) -> Dictionary:
+	var best: Dictionary = {}
+	for c: Dictionary in _lattice_cells:
+		if int(c["act"]) == act and bool(c["cleared"]):
+			if best.is_empty() or float(c["pressure"]) > float(best["pressure"]):
+				best = c
+	return best
 
 
-## Derive a leg's flat-pressure target for a (depth, act, turns) triple: pressure ×
-## turns-ratio × the depth's baseline ladder value, snapped to X01 parity and clamped
-## to the act window. Single source of truth — used by the generation roll AND the
-## arrival-time no-repeat re-derivation, so a rerolled turn count lands exactly where
-## the generator would have put it.
-func _derive_leg_target(depth: int, act: int, turns: int) -> int:
-	var raw: float = _cfg.pressure_baseline * float(turns) / float(_reference_turns) * float(baseline_target(depth))
-	var snapped: int = _snap(raw, _starting_target, _target_increment)
-	return clampi(snapped, _act_floor(act), _act_ceiling(act, _max_target, _starting_target, _target_increment))
+## Public, read-only snapshot of an act's frontier — {score, turns, pressure} per available cell.
+## For tests / UI; mutating the returned dicts does not touch lattice state.
+func get_frontier(act: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for c: Dictionary in _available_cells(act):
+		out.append({"score": int(c["score"]), "turns": int(c["turns"]), "pressure": float(c["pressure"])})
+	return out
 
 
-# ── The no-repeat leg rule (tuning pass 2026-06-06) ──────────────────────────
-# "You should never play the exact same leg twice." A leg's identity is its
-# (target_score, max_turns) pair — darts_per_turn is global, not per-leg. Enforced
-# at arrival (when the node's params are actually consumed), because the player
-# only plays a subset of placed nodes; see _played_leg_configs.
-
-## Stable key for a played-config pair.
-func _config_key(target: int, turns: int) -> String:
-	return "%d|%d" % [target, turns]
-
-
-## Record a config as played WITHOUT adjusting anything — used for the run's first
-## leg, which starts off x01_game.start_run() rather than a map arrival.
-func record_played_config(target: int, turns: int) -> void:
-	_played_leg_configs[_config_key(target, turns)] = true
-
-
-## Ensure `node`'s (target, turns) pair has never been played this run, mutating the
-## node to the nearest unplayed config if needed, then record it. Call ON ARRIVAL,
-## before the params are handed to x01_game. Policy (Max, 2026-06-06): reroll turns
-## first (each turn count re-derives its own flat-pressure target, so pressure stays
-## coherent), then nudge the target along the lattice; allow a repeat only if the
-## act's entire combo space is exhausted (practically unreachable for played-only
-## tracking). Bosses are skipped — their pair is reserved at generation and the boss
-## is its single legitimate player. Deterministic (nearest-first), no RNG draw, so
-## arrival order never perturbs the seeded generator.
-func claim_unplayed_leg_params(node: MapNode) -> void:
+## Draw `node`'s (target, turns) from the live frontier on ARRIVAL — replaces the old
+## roll-then-dodge. Uniform among eligible cells (the frontier is typically 2 — "tighten or
+## climb"). On lattice exhaustion (a fast climb + long path can outrun it), repeat the act's
+## hardest cleared pair. Bosses are skipped (they carry their reserved tier pair).
+func draw_leg_from_frontier(node: MapNode) -> void:
 	if node == null or node.type == MapNode.Type.BOSS:
 		return
-	var key: String = _config_key(node.target_score, node.max_turns)
-	if not _played_leg_configs.has(key):
-		_played_leg_configs[key] = true
+	if _lattice_rng == null:
+		_lattice_rng = RandomNumberGenerator.new()
+		_lattice_rng.seed = _rng.seed ^ 0x5A17710C   # dedicated stream — never perturb structure
+	var act: int = node.act
+	var eligible: Array[Dictionary] = _available_cells(act)
+	if eligible.is_empty():
+		# Exhaustion fallback (spec §3): repeat the hardest cleared pair — never an easier one.
+		var hard: Dictionary = _hardest_cleared_cell(act)
+		if not hard.is_empty():
+			node.target_score = int(hard["score"])
+			node.max_turns = int(hard["turns"])
+		else:
+			# Nothing cleared yet and nothing available (only reachable on a pathological empty
+			# act before its first clear) — open at the act floor / reference turns, never strand.
+			node.target_score = act_floor(act)
+			node.max_turns = _reference_turns
 		return
-	# Collision. Build every legal (turns, target) candidate for this node, ordered by
-	# distance from the original roll: alternate turn counts first (|Δturns|, with the
-	# re-derived target), then lattice nudges around each turn count's ideal target
-	# (|Δtarget| as the secondary axis). The act window caps the lattice walk.
-	var floor_t: int = _act_floor(node.act)
-	var ceil_t: int = _act_ceiling(node.act, _max_target, _starting_target, _target_increment)
-	var max_steps: int = (ceil_t - floor_t) / maxi(_target_increment, 1)
-	var rolled_turns: int = node.max_turns
-	# Outer loop: target-nudge distance (0 = the pure turns-reroll pass). Inner: turn
-	# counts by distance from the rolled value. This realises "reroll turns, THEN nudge
-	# target" — all Δtarget=0 candidates are tried across every turn count first.
-	for step: int in range(0, max_steps + 1):
-		for turns_delta: int in range(0, _cfg.turns_max - _cfg.turns_min + 1):
-			for turns_sign: int in [1, -1]:
-				if turns_delta == 0 and turns_sign == -1:
-					continue   # Δ0 has no signed twin
-				var turns: int = rolled_turns + turns_delta * turns_sign
-				if turns < _cfg.turns_min or turns > _cfg.turns_max:
-					continue
-				var ideal: int = _derive_leg_target(node.depth, node.act, turns)
-				for target_sign: int in [1, -1]:
-					if step == 0 and target_sign == -1:
-						continue   # Δ0 has no signed twin
-					var target: int = ideal + step * _target_increment * target_sign
-					if target < floor_t or target > ceil_t:
-						continue
-					var candidate: String = _config_key(target, turns)
-					if not _played_leg_configs.has(candidate):
-						node.max_turns = turns
-						node.target_score = target
-						_played_leg_configs[candidate] = true
-						return
-	# The whole act window × turns band is played out — accept the repeat (record is
-	# idempotent). With played-only tracking this needs 15+ legs inside one act.
-	_played_leg_configs[key] = true
+	var pick: Dictionary = eligible[_lattice_rng.randi_range(0, eligible.size() - 1)]
+	pick["drawn"] = true
+	node.target_score = int(pick["score"])
+	node.max_turns = int(pick["turns"])
+
+
+## Resolve a CLEARED leg: mark its lattice cell cleared, raise the act's cull threshold, and cull
+## every undrawn cell at/below it (monotone difficulty, spec §2). Call on a leg WIN with the pair
+## the leg was DRAWN at (not the bailout-extended live turns). A boss / challenge / off-lattice
+## pair matches no cell → no-op, so it is safe to call broadly. Also marks act 0's auto-played
+## opener at run start (record_leg_cleared(starting_target, reference_turns)).
+func record_leg_cleared(target: int, turns: int) -> void:
+	var cell: Dictionary = _find_cell_by_pair(target, turns)
+	if cell.is_empty():
+		return
+	cell["cleared"] = true
+	var act: int = int(cell["act"])
+	var p: float = float(cell["pressure"])
+	if not _act_cleared_pressure.has(act) or p > float(_act_cleared_pressure[act]):
+		_act_cleared_pressure[act] = p
+	_apply_cull(act)
+
+
+## Cull every UNDRAWN cell in `act` whose pressure is at or below the act's highest cleared
+## pressure — the monotone rule. Culled cells count as resolved, so a dead row still unlocks the
+## climb above it. Lock status is irrelevant (the spec culls "any undrawn cell"); the opener is
+## exempt. One pass suffices — culling never lowers the threshold.
+func _apply_cull(act: int) -> void:
+	if not _act_cleared_pressure.has(act):
+		return
+	var threshold: float = float(_act_cleared_pressure[act])
+	for c: Dictionary in _lattice_cells:
+		if int(c["act"]) != act:
+			continue
+		if bool(c["drawn"]) or bool(c["cleared"]) or bool(c["culled"]) or bool(c["is_opener"]):
+			continue
+		if float(c["pressure"]) <= threshold + 0.0001:
+			c["culled"] = true
 
 
 # ── Step 4: the pressure seam (build now, consume in Phase 02 — §6) ──────────
