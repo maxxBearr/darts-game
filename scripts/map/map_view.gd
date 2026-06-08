@@ -16,6 +16,12 @@ signal node_chosen(node: MapNode)
 
 ## Size of each node widget in pixels.
 @export var node_size: Vector2 = Vector2(72.0, 48.0)
+## Icon-bearing nodes (event/trial) stack title-over-icon: px reserved at the top for the title.
+@export var icon_node_title_height: float = 18.0
+## Breathing room between the title band and the family icon below it (px).
+@export var icon_node_gap: float = 3.0
+## Bottom inset under the family icon (px), so it doesn't kiss the button edge.
+@export var icon_node_bottom_inset: float = 3.0
 
 ## Outer margin (x = left/right padding for the depth axis, y = top padding).
 @export var margin: Vector2 = Vector2(110.0, 130.0)
@@ -191,6 +197,39 @@ func _build_widgets() -> void:
 		btn.text = _label_for(n)
 		btn.add_theme_font_size_override("font_size", 13)
 		btn.clip_text = true
+		# Family icon (Phase 03 typed-shop slice): event AND challenge nodes show their reward-family
+		# glyph so the routing/deposit decision reads off the map. Drawn as a non-interactive child
+		# in the lower-centre of the button (clicks pass through to the button). Falls back to the
+		# text glyph when no texture is registered (handled in _label_for).
+		var icon_tex: Texture2D = _family_icon_for(n)
+		if icon_tex != null:
+			# Title-over-icon stack. The Button's built-in text is vertically CENTRED, so it
+			# lands in the same band as a bottom-anchored icon and the two overlap. Route the
+			# title through a top-anchored Label instead (btn.text cleared), then give the icon
+			# the remaining lower band with explicit gaps (the icon_node_* exports). Both
+			# children ignore the mouse so clicks pass through to the button, and both inherit
+			# the button's modulate (reachability dim + selection pulse keep working).
+			btn.text = ""
+			var title: Label = Label.new()
+			title.text = _label_for(n)
+			title.add_theme_font_size_override("font_size", 13)
+			title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			title.position = Vector2.ZERO
+			title.size = Vector2(node_size.x, icon_node_title_height)
+			btn.add_child(title)
+
+			var ico: TextureRect = TextureRect.new()
+			ico.texture = icon_tex
+			ico.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			ico.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			ico.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var icon_band_top: float = icon_node_title_height + icon_node_gap
+			ico.size = Vector2(node_size.x, node_size.y - icon_band_top - icon_node_bottom_inset)
+			ico.position = Vector2(0.0, icon_band_top)
+			btn.add_child(ico)
+
 		var nid: int = id
 		btn.pressed.connect(func() -> void: _on_node_pressed(nid))
 		add_child(btn)
@@ -279,7 +318,16 @@ func _style_button(btn: Button, n: MapNode, is_reach: bool, is_current: bool) ->
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", style)
 	btn.add_theme_stylebox_override("disabled", style)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.95 if (is_reach or is_current) else 0.6))
+	var face_alpha: float = 0.95 if (is_reach or is_current) else 0.6
+	btn.add_theme_color_override("font_color", Color(1, 1, 1, face_alpha))
+	# Icon-bearing nodes (event/trial) carry their title in a Label child and their glyph in a
+	# TextureRect child — neither inherits the Button's font_color override, so mirror the
+	# reachability dim onto them here or they'd stay full-bright on locked nodes.
+	for child: Node in btn.get_children():
+		if child is Label:
+			(child as Label).add_theme_color_override("font_color", Color(1, 1, 1, face_alpha))
+		elif child is TextureRect:
+			(child as TextureRect).self_modulate = Color(1, 1, 1, face_alpha)
 
 
 func _color_for(n: MapNode) -> Color:
@@ -299,6 +347,19 @@ func _color_for(n: MapNode) -> Color:
 			return color_offbranch if n.is_off_branch else color_leg
 
 
+## The reward-family icon texture for an event or challenge node, or null when none is registered
+## (the view then falls back to the text glyph). EVENT carries the family as a StringName; CHALLENGE
+## carries it as a ScoringEnums.Family enum (mapped via EventFamilyIcons.key_for_family).
+func _family_icon_for(n: MapNode) -> Texture2D:
+	if family_icons == null:
+		return null
+	if n.type == MapNode.Type.EVENT and n.event != null:
+		return family_icons.texture_for(n.event.reward_family)
+	if n.type == MapNode.Type.CHALLENGE and n.challenge != null:
+		return family_icons.texture_for(EventFamilyIcons.key_for_family(n.challenge.reward_family))
+	return null
+
+
 func _label_for(n: MapNode) -> String:
 	match n.type:
 		MapNode.Type.SHOP:
@@ -308,8 +369,9 @@ func _label_for(n: MapNode) -> String:
 		MapNode.Type.CHALLENGE:
 			return "Trial"
 		MapNode.Type.EVENT:
-			# The family glyph is the icon scaffold (placeholder shape until art lands).
-			if n.event != null and family_icons != null:
+			# With a real family icon the glyph is redundant — keep just "Event". Only when no
+			# texture is registered does the text glyph stand in (the scaffold fallback).
+			if n.event != null and family_icons != null and family_icons.texture_for(n.event.reward_family) == null:
 				return "Event\n%s" % family_icons.label_for(n.event.reward_family)
 			return "Event"
 		_:

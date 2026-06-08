@@ -17,6 +17,10 @@ var _bank: int = 0
 var _deposit: int = 0
 var _max_affordable: int = 0      ## min(max_deposit, bank) — can't stake darts you don't have
 
+## Lazily-built family-icon source, so the reward line can show the reward-family glyph inline
+## (RichTextLabel [img]) — the same icons the map nodes + typed shop use.
+var _family_icons: EventFamilyIcons = null
+
 var _readout: RichTextLabel
 var _deposit_label: Label
 var _ice_tray_label: Label
@@ -129,6 +133,17 @@ func _family_name(f: ScoringEnums.Family) -> String:
 		_: return "Any"
 
 
+## Inline BBCode `[img]` for the reward-family icon (the same texture the map node shows), or ""
+## when the family has no icon. Reuses EventFamilyIcons so the path isn't duplicated.
+func _reward_icon_bb(f: ScoringEnums.Family) -> String:
+	if _family_icons == null:
+		_family_icons = EventFamilyIcons.new()
+	var tex: Texture2D = _family_icons.texture_for(EventFamilyIcons.key_for_family(f))
+	if tex == null or tex.resource_path == "":
+		return ""
+	return "[img=20x20]%s[/img] " % tex.resource_path
+
+
 func _handicap_name(id: StringName) -> String:
 	match id:
 		&"rotation": return "Rotating board"
@@ -144,7 +159,7 @@ func _refresh() -> void:
 	var text: String = ""
 	text += "[b]Target:[/b] %d   [b]Darts/turn:[/b] %d\n" % [c.target_score, c.darts_per_turn]
 	text += "[b]Wager band:[/b] %d–%d darts\n" % [c.min_deposit, c.max_deposit]
-	text += "[b]Reward:[/b] %s item (rarer the fewer darts you use)\n" % _family_name(c.reward_family)
+	text += "[b]Reward:[/b] %s%s item (rarer the fewer darts you use)\n" % [_reward_icon_bb(c.reward_family), _family_name(c.reward_family)]
 	text += "[b]Handicap:[/b] %s\n" % _handicap_name(c.handicap_id)
 	text += "[b]Bank:[/b] %d darts\n" % _bank
 	text += "\n[i]The wager IS your budget. Lose and you forfeit all of it; win and unused darts return to the bank.[/i]"

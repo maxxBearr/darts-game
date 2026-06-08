@@ -45,8 +45,10 @@ extends Resource
 
 ## Relative weights for a crossover's rolled TYPE (normalized internally). A crossover is
 ## off-budget, so these add spice on top of the lane-run special budget. Challenge respects
-## the act-0 depth gate and the ≤1 detour-challenge-per-act cap; event family is state-gated.
-@export var crossover_weight_leg: float = 0.5
+## the act-0 depth gate and the ≤1 detour-challenge-per-act cap; shop respects the act-wide
+## shop_min_graph_gap spacing. Leg weight trimmed 0.5→0.35 in the 2026-06-08 density pass
+## (Max: acts read too leg-heavy) — typed crossovers absorb 1–2 of the dry legs per act.
+@export var crossover_weight_leg: float = 0.35
 @export var crossover_weight_shop: float = 0.2
 @export var crossover_weight_event: float = 0.2
 @export var crossover_weight_challenge: float = 0.1
@@ -79,17 +81,39 @@ extends Resource
 # split), NOT a per-act slot count. The generator caps every path at the max and
 # aims each path near the band; the min is soft (contrast can leave a branch lean).
 
+## Hard minimum graph distance (in edges) between any two SHOP nodes, enforced across ALL
+## placement sources — lane budget, crossovers, mini-branches — and across stretch boundaries
+## (Max's ruling 2026-06-08: the per-run special_min_gap was blind to both, rolling Shop→Shop
+## runs and the recurring lane-Shop/crossover-Shop/lane-Shop diamond). 2 = no shop within two
+## hops of another. 0 disables the rule.
+@export var shop_min_graph_gap: int = 2
+
 ## Soft minimum shops a single traversal collects.
 @export var shops_per_path_min: int = 1
 
 ## Hard maximum shops a single traversal collects.
 @export var shops_per_path_max: int = 3
 
-## Soft minimum events a single traversal collects.
-@export var events_per_path_min: int = 1
+## Soft minimum events a single traversal collects. Raised 1→2 in the 2026-06-08 density pass
+## (Max: too many plain legs; a lane could roll its whole act event-less when contrast lumped
+## a low event roll onto the other lane). Events are the free-trade spice, so they're the
+## right filler — challenges stay at their band (deposit friction shouldn't inflate).
+@export var events_per_path_min: int = 2
 
 ## Hard maximum events a single traversal collects.
 @export var events_per_path_max: int = 3
+
+## Drought breaker (2026-06-08): the longest run of plain LEG nodes a traversal may see.
+## Any longer run gets ONE rolled node converted to an event/challenge. Deliberately a hard
+## cap, not a per-leg chance — a chance can whiff and ship the same 4-leg dry stretch, and an
+## invariant is suite-assertable while a tendency isn't. Walks lanes ACROSS stretch seams and
+## every mini-branch detour. 3 = "4+ legs in a row never ships". 0 disables.
+@export var max_consecutive_legs: int = 3
+
+## When the drought breaker converts a leg, the chance it becomes a CHALLENGE rather than an
+## EVENT (challenge only where the act-0 depth gate allows). Events are the default filler —
+## free-trade spice, no deposit friction.
+@export_range(0.0, 1.0) var drought_break_challenge_chance: float = 0.25
 
 ## Soft minimum challenges a single traversal collects, for acts ≥ 1. Act 0 uses its own
 ## (leaner) band below — the post-boss-1 hard gate was removed in round 2 (challenges may

@@ -60,6 +60,7 @@ var _next_depth: int = 0               ## the running global depth counter (next
 # Per-act detour bookkeeping (round 2), reset at the top of each _build_act:
 var _act_entry_depth: int = 0          ## depth of the current act's entry (gates act-0 challenges)
 var _detour_challenge_used: bool = false  ## a crossover/branch challenge was placed this act (≤1 cap)
+var _act_branch_runs: Array = []       ## this act's mini-branch node-id runs (drought breaker sweeps them)
 
 # ── Leg lattice (2026-06-07) — per-act monotone (score, turns) frontier ──────
 # Replaces slice-2's per-leg turn roll + the claim_unplayed_leg_params no-repeat dodge with a
@@ -155,6 +156,7 @@ func _build_act(act: int, run_state: Dictionary) -> void:
 	# most ONE challenge may sit across all of this act's crossovers + mini-branches combined.
 	_act_entry_depth = _next_depth
 	_detour_challenge_used = false
+	_act_branch_runs.clear()
 
 	# Step 1 — act entry: a single shared funnel node (act 0's is the global start).
 	var entry: MapNode = _new_node(MapNode.Type.LEG, _next_depth, 0, act)
@@ -245,6 +247,16 @@ func _build_act(act: int, run_state: Dictionary) -> void:
 	# (crossover/branch content is off-budget spice, §4), so this still walks run0/run1.
 	_slot_specials(act, stretches, run_state)
 
+	# Step 6.5 — drought breaker (Max's ruling 2026-06-08): runs LAST so it sees the final
+	# leg layout; any >max_consecutive_legs run of plain legs gets one node converted.
+	_break_leg_droughts(stretches, run_state)
+
+	# Step 6.6 — branch divergence guard (Max's ruling 2026-06-08): a mini-branch whose type
+	# COMPOSITION matches the lane it bypasses is a fake choice; force one node to differ. Runs
+	# after the drought breaker so both sides are final (and a drought-broken branch may already
+	# diverge, in which case this no-ops).
+	_ensure_branches_diverge(run_state)
+
 	# Step 7 — rebuild the depth→act maps + assign the boss its tier pair (ordinary legs are
 	# drawn lazily at arrival, so this no longer rolls leg params — see _assign_leg_params).
 	_assign_leg_params(_level, _cfg, _rng, _starting_target, _target_increment)
@@ -294,7 +306,11 @@ func _slot_specials(act: int, stretches: Array, run_state: Dictionary) -> void:
 	else:
 		specs.append({"type": MapNode.Type.CHALLENGE, "lo": _cfg.challenges_per_path_min, "hi": _cfg.challenges_per_path_max, "min_depth": 0})
 
+	var lane_challenges_placed: int = 0
+	var challenge_min_depth: int = 0
 	for spec: Dictionary in specs:
+		if spec["type"] == MapNode.Type.CHALLENGE:
+			challenge_min_depth = spec["min_depth"]
 		var target: int = _rng.randi_range(maxi(spec["lo"], 0), maxi(spec["hi"], 0))
 		var host_count: int = mini(target, stretches.size())
 		if host_count <= 0:
@@ -305,11 +321,129 @@ func _slot_specials(act: int, stretches: Array, run_state: Dictionary) -> void:
 			if _rng.randf() < _cfg.branch_contrast:
 				# Content contrast: place into ONE run only so the lanes differ.
 				var pick_run: Array[int] = seg["run0"] if _rng.randi_range(0, 1) == 0 else seg["run1"]
-				_place_special_in_run(pick_run, spec["type"], run_state, spec["min_depth"])
+				if _place_special_in_run(pick_run, spec["type"], run_state, spec["min_depth"]) != null and spec["type"] == MapNode.Type.CHALLENGE:
+					lane_challenges_placed += 1
 			else:
 				# No contrast: both runs host it, so either lane pick collects it.
-				_place_special_in_run(seg["run0"], spec["type"], run_state, spec["min_depth"])
-				_place_special_in_run(seg["run1"], spec["type"], run_state, spec["min_depth"])
+				if _place_special_in_run(seg["run0"], spec["type"], run_state, spec["min_depth"]) != null and spec["type"] == MapNode.Type.CHALLENGE:
+					lane_challenges_placed += 1
+				if _place_special_in_run(seg["run1"], spec["type"], run_state, spec["min_depth"]) != null and spec["type"] == MapNode.Type.CHALLENGE:
+					lane_challenges_placed += 1
+
+	# Hard floor (Max's ruling 2026-06-08): every act guarantees ≥1 lane-run challenge —
+	# challenges are the only earned-rarity surface, so an act without one mutes the skill
+	# spine. The §8 shop-spacing rule shifted the placement stream and let rare seeds
+	# (level_1501 seeds 24/27) roll a challenge-less act; force-place one here. With zero
+	# challenges on the lanes, the same-type gap can never block, so the only blockers are
+	# already-special nodes and the act-0 depth gate — a shuffled sweep over every run finds
+	# a slot whenever one exists at legal depth.
+	if lane_challenges_placed == 0:
+		var sweep: Array[int] = _shuffled_indices(stretches.size())
+		for si: int in sweep:
+			var seg: Dictionary = stretches[si]
+			var first_run: Array[int] = seg["run0"] if _rng.randi_range(0, 1) == 0 else seg["run1"]
+			var second_run: Array[int] = seg["run1"] if first_run == seg["run0"] else seg["run0"]
+			if _place_special_in_run(first_run, MapNode.Type.CHALLENGE, run_state, challenge_min_depth) != null:
+				return
+			if _place_special_in_run(second_run, MapNode.Type.CHALLENGE, run_state, challenge_min_depth) != null:
+				return
+
+
+## Drought breaker (Max's ruling 2026-06-08): no traversal sees more than
+## max_consecutive_legs plain LEGs in a row. Deliberately a HARD cap, not a per-leg chance —
+## a chance can whiff and ship the same dry stretch, and an invariant can be suite-asserted
+## while a tendency can't. Sweeps each lane's stay-on-lane sequence (runs concatenated ACROSS
+## stretch seams — droughts span them; crossovers are optional detours, not on the straight
+## path) plus every mini-branch detour (an all-leg branch reads just as dry). When a leg run
+## exceeds the cap, ONE node from the window converts — rolled position (no stamped rhythm),
+## EVENT by default, CHALLENGE at drought_break_challenge_chance where the act-0 depth gate
+## allows. Conversions are off-budget spice, same standing as typed crossovers.
+func _break_leg_droughts(stretches: Array, run_state: Dictionary) -> void:
+	if _cfg.max_consecutive_legs <= 0:
+		return
+	var sequences: Array = []
+	for lane_key: String in ["run0", "run1"]:
+		var lane_ids: Array[int] = []
+		for seg: Dictionary in stretches:
+			lane_ids.append_array(seg[lane_key])
+		sequences.append(lane_ids)
+	for entry: Dictionary in _act_branch_runs:
+		sequences.append(entry["branch"])
+
+	for seq: Array in sequences:
+		var streak: Array[int] = []   # the current run of consecutive plain-LEG node ids
+		for id: int in seq:
+			if (nodes[id] as MapNode).type != MapNode.Type.LEG:
+				streak.clear()
+				continue
+			streak.append(id)
+			if streak.size() <= _cfg.max_consecutive_legs:
+				continue
+			# Over the cap — convert one rolled node from the window. Converting ANY of the
+			# cap+1 nodes leaves both sides ≤ cap; the legs AFTER the convert stay a live
+			# streak so longer droughts earn multiple breaks.
+			var pick_i: int = _rng.randi_range(0, streak.size() - 1)
+			var pick: MapNode = nodes[streak[pick_i]]
+			var t: MapNode.Type = MapNode.Type.EVENT
+			if _challenge_depth_ok(pick) and _rng.randf() < _cfg.drought_break_challenge_chance:
+				t = MapNode.Type.CHALLENGE
+			_assign_special_payload(pick, t, run_state)
+			pick.is_offbudget = true   # off-budget spice — must not count toward the per-path caps
+			var rest: Array[int] = []
+			for k: int in range(pick_i + 1, streak.size()):
+				rest.append(streak[k])
+			streak = rest
+
+
+## Branch divergence guard (Max's ruling 2026-06-08): a mini-branch exists to be a real
+## stay-vs-detour choice, so its content must differ from the lane segment it bypasses. The
+## meaningful-choice test is COMPOSITION, not sequence — a branch [Event, Leg] bypassing a lane
+## [Leg, Event] offers the identical reward set, so reordering isn't enough; we compare the type
+## MULTISET. When they match, convert one branch node to force a divergence: flip a non-EVENT
+## branch node to EVENT (removing any non-event type and adding an event always changes the
+## multiset, so it can no longer equal the parallel's); if every branch node is already an event
+## (degenerate — the parallel would be too), nudge one to CHALLENGE where legal, else SHOP.
+## Off-budget, same standing as the branch's own optional special.
+func _ensure_branches_diverge(run_state: Dictionary) -> void:
+	for entry: Dictionary in _act_branch_runs:
+		var branch_ids: Array = entry["branch"]
+		var parallel_ids: Array = entry["parallel"]
+		if branch_ids.size() != parallel_ids.size() or branch_ids.is_empty():
+			continue
+		if not _same_type_multiset(branch_ids, parallel_ids):
+			continue   # already a real choice — leave it
+		# Prefer flipping a non-EVENT branch node to EVENT (guaranteed multiset change).
+		var non_event: Array[int] = []
+		for id: int in branch_ids:
+			if (nodes[id] as MapNode).type != MapNode.Type.EVENT:
+				non_event.append(id)
+		if not non_event.is_empty():
+			_assign_special_payload(nodes[non_event[_rng.randi_range(0, non_event.size() - 1)]], MapNode.Type.EVENT, run_state)
+			continue
+		# All-event degenerate case: differ by COUNT of a rarer type. Challenge if the act-0 gate
+		# allows and the detour-challenge slot is free, else a (spacing-permitting) shop.
+		var pick: MapNode = nodes[branch_ids[_rng.randi_range(0, branch_ids.size() - 1)]]
+		if not _detour_challenge_used and _challenge_depth_ok(pick):
+			_detour_challenge_used = true
+			_assign_special_payload(pick, MapNode.Type.CHALLENGE, run_state)
+		elif not _shop_within(pick.id, _cfg.shop_min_graph_gap):
+			_assign_special_payload(pick, MapNode.Type.SHOP, run_state)
+
+
+## True when two equal-length node-id lists carry the same MULTISET of node types (order
+## ignored). Used by the branch divergence guard.
+func _same_type_multiset(a_ids: Array, b_ids: Array) -> bool:
+	var counts: Dictionary = {}   ## MapNode.Type -> signed count (a adds, b subtracts)
+	for id: int in a_ids:
+		var t: int = int((nodes[id] as MapNode).type)
+		counts[t] = int(counts.get(t, 0)) + 1
+	for id: int in b_ids:
+		var t: int = int((nodes[id] as MapNode).type)
+		counts[t] = int(counts.get(t, 0)) - 1
+	for t: int in counts:
+		if counts[t] != 0:
+			return false
+	return true
 
 
 ## Fisher–Yates over [0, n) using the SEEDED generator. Array.shuffle() draws from the
@@ -339,6 +473,8 @@ func _place_special_in_run(run_ids: Array[int], type: MapNode.Type, run_state: D
 			continue   # already a special — never stack two on one node
 		if cand.depth < min_depth:
 			continue   # act-0 challenge depth gate (no-op for unrestricted types)
+		if type == MapNode.Type.SHOP and _shop_within(cand.id, _cfg.shop_min_graph_gap):
+			continue   # act-wide shop spacing (shop_min_graph_gap) — see _shop_within
 		var blocked: bool = false
 		for j: int in range(run_ids.size()):
 			if (nodes[run_ids[j]] as MapNode).type == type and absi(i - j) <= _cfg.special_min_gap:
@@ -352,6 +488,32 @@ func _place_special_in_run(run_ids: Array[int], type: MapNode.Type, run_state: D
 	var node: MapNode = nodes[run_ids[idx]]
 	_assign_special_payload(node, type, run_state)
 	return node
+
+
+## True when another SHOP sits within `max_dist` edges of `node_id` (undirected BFS over
+## next_ids + prev_ids). The act-wide shop spacing rule (Max's ruling 2026-06-08): the per-run
+## special_min_gap is blind across stretch boundaries and to crossover/branch detours, which
+## kept rolling Shop→Shop runs and the lane-Shop/crossover-Shop/lane-Shop diamond. This check
+## walks the REAL graph, so one rule covers every placement source at once. Cheap: max_dist=2
+## touches a handful of nodes.
+func _shop_within(node_id: int, max_dist: int) -> bool:
+	if max_dist <= 0:
+		return false
+	var frontier: Array[int] = [node_id]
+	var seen: Dictionary = {node_id: true}
+	for _step: int in range(max_dist):
+		var next_frontier: Array[int] = []
+		for id: int in frontier:
+			var n: MapNode = nodes[id]
+			for nb: int in n.next_ids + n.prev_ids:
+				if seen.has(nb):
+					continue
+				seen[nb] = true
+				if (nodes[nb] as MapNode).type == MapNode.Type.SHOP:
+					return true
+				next_frontier.append(nb)
+		frontier = next_frontier
+	return false
 
 
 ## Convert `node` to a special TYPE and hang its payload (challenge roll / event family).
@@ -386,8 +548,14 @@ func _type_crossovers(crossover_nodes: Array[MapNode], run_state: Dictionary) ->
 ## gate passes AND the act's single detour-challenge slot is unused; picking it consumes that
 ## slot. EVENT family eligibility is resolved later in _assign_special_payload.
 func _roll_detour_type(node: MapNode, _run_state: Dictionary, include_leg: bool) -> MapNode.Type:
-	var types: Array[MapNode.Type] = [MapNode.Type.SHOP, MapNode.Type.EVENT]
-	var weights: Array[float] = [maxf(_cfg.crossover_weight_shop, 0.0), maxf(_cfg.crossover_weight_event, 0.0)]
+	var types: Array[MapNode.Type] = [MapNode.Type.EVENT]
+	var weights: Array[float] = [maxf(_cfg.crossover_weight_event, 0.0)]
+	# SHOP obeys the act-wide spacing rule even as a detour — the lane-Shop/crossover-Shop
+	# diamond was the recurring offender (Max 2026-06-08). Excluded here, the roll falls to
+	# the remaining types (or LEG) instead.
+	if not _shop_within(node.id, _cfg.shop_min_graph_gap):
+		types.append(MapNode.Type.SHOP)
+		weights.append(maxf(_cfg.crossover_weight_shop, 0.0))
 	if include_leg:
 		types.append(MapNode.Type.LEG)
 		weights.append(maxf(_cfg.crossover_weight_leg, 0.0))
@@ -466,6 +634,13 @@ func _place_one_branch(act: int, stretches: Array, lane: int, run_state: Diction
 		for b: int in range(b_len - 1):
 			_connect(branch_ids[b], branch_ids[b + 1])
 		_connect(branch_ids[b_len - 1], rejoin_id)
+		# The bypassed lane nodes run PARALLEL to the branch (run[fork_i+1 .. fork_i+b_len];
+		# rejoin is excluded) — same count by construction. Store both so the drought breaker
+		# can sweep the detour AND the divergence guard can compare branch vs what it bypasses.
+		var parallel_ids: Array[int] = []
+		for k: int in range(fork_i + 1, fork_i + b_len + 1):
+			parallel_ids.append(run[k])
+		_act_branch_runs.append({"branch": branch_ids, "parallel": parallel_ids})
 		# Optional single special on the detour (off-budget). LEG excluded — we already rolled
 		# to host one — so _roll_detour_type returns a special (or LEG only if weights vanish).
 		if _rng.randf() < _cfg.branch_special_chance:
@@ -476,21 +651,18 @@ func _place_one_branch(act: int, stretches: Array, lane: int, run_state: Diction
 		return   # one branch placed for this lane
 
 
-## Roll an EVENT node's trade-family against the live run-state (§3.6). accuracy is always
-## eligible; brush only where the run currently owns brush colors (available_brush_colors
-## non-empty). The 3 concrete options are rolled at arrival (events slice), so only the
-## family — the routed map icon — is fixed here.
-func _roll_event_node(run_state: Dictionary) -> EventNode:
+## Roll an EVENT node's trade-family. ALL trade families are always eligible — NO state gates
+## (Max's ruling 2026-06-07, typed-shop slice): brushes and geometry items feed each other (an
+## asymmetric board makes geometry trades interesting, paints make boards asymmetric), and
+## ungated rolls make branch compositions more distinct. Pre-affinity brush picks draw from
+## the full color pool (BrushModifier.generate's fallback); geometry needed no gate from day
+## one (a currently-inert trade is a legal build-around purchase, geometry spec §6). The 3
+## concrete options are rolled at arrival (events slice), so only the family — the routed map
+## icon — is fixed here. Roll the family off the COSMETIC sub-RNG so family changes never
+## perturb the structural _rng stream (which would reshape the generated map).
+func _roll_event_node(_run_state: Dictionary) -> EventNode:
 	var e: EventNode = EventNode.new()
-	var families: Array[StringName] = [&"accuracy"]
-	var brush_colors: Variant = run_state.get("available_brush_colors", null)
-	if brush_colors is Array and not (brush_colors as Array).is_empty():
-		families.append(&"brush")
-	# Geometry is ALWAYS eligible: its trades are zero-sum board reshapes, and even a currently
-	# inert option (e.g. Grow Red on a board with no red) is a legal build-around purchase, so it
-	# needs no state gate (geometry spec §6). Roll the family off the COSMETIC sub-RNG so adding
-	# it never perturbs the structural _rng stream (which would reshape the generated map).
-	families.append(&"geometry")
+	var families: Array[StringName] = [&"accuracy", &"brush", &"geometry"]
 	if _family_rng == null:
 		_family_rng = RandomNumberGenerator.new()
 		_family_rng.seed = _rng.seed ^ 0x9E3779B9  # read-only on _rng — doesn't consume its state.

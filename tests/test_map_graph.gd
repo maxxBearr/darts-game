@@ -101,6 +101,9 @@ func _test_level(level: LevelDefinition) -> void:
 		_assert_crossover_invariants(level, g, seed_value)
 		_assert_branch_invariants(level, g, seed_value)
 		_assert_path_leg_budget(level, g, seed_value)
+		_assert_shop_spacing(level, g, seed_value)
+		_assert_no_leg_droughts(level, g, seed_value)
+		_assert_branches_diverge(level, g, seed_value)
 		var c0: int = 0
 		for id: int in g.nodes:
 			var n: MapNode = g.get_node_by_id(id)
@@ -208,10 +211,11 @@ func _assert_topology_invariants(level: LevelDefinition, g: MapGraph, seed_value
 				detour_challenges_per_act[n.act] = detour_challenges_per_act.get(n.act, 0) + 1
 		if n.type == MapNode.Type.EVENT:
 			_check(n.event != null, "event node carries an EventNode resource", seed_value)
-			# Empty run-state ⇒ brush is ineligible (no colors), but accuracy AND geometry both
-			# are (geometry's zero-sum trades are always eligible, even when currently inert).
-			_check(n.event.reward_family == &"accuracy" or n.event.reward_family == &"geometry",
-				"event family is accuracy or geometry under empty run-state", seed_value)
+			# Event family is UNGATED at generation (typed-shop slice, Max 2026-06-07): accuracy,
+			# brush, or geometry may roll regardless of run-state — only the routed map icon is
+			# fixed here; brush affinity (and the colorless→accuracy downgrade) resolves at arrival.
+			_check(n.event.reward_family == &"accuracy" or n.event.reward_family == &"brush" or n.event.reward_family == &"geometry",
+				"event family is one of accuracy / brush / geometry", seed_value)
 	for a: int in detour_challenges_per_act:
 		_check(detour_challenges_per_act[a] <= 1, "act %d has ≤1 detour challenge (got %d)" % [a, detour_challenges_per_act[a]], seed_value)
 	for a: int in per_act:
@@ -238,8 +242,8 @@ func _assert_per_path_budget(level: LevelDefinition, g: MapGraph, seed_value: in
 		for id: int in path:
 			var n: MapNode = g.get_node_by_id(id)
 			per_act_len[n.act] = per_act_len.get(n.act, 0) + 1
-			if n.is_crossover or n.is_branch:
-				continue   # §4: detour content is off the per-path special budget
+			if n.is_crossover or n.is_branch or n.is_offbudget:
+				continue   # §4: detour content + §8 drought/divergence spice are off the per-path budget
 			if not per_act_count.has(n.act):
 				per_act_count[n.act] = {}
 			var tc: Dictionary = per_act_count[n.act]
@@ -388,6 +392,134 @@ func _straight_lane_reaches(g: MapGraph, fork: MapNode, rejoin: MapNode) -> bool
 
 
 # ── Leg lattice (§6) — draw-from-frontier, monotone cull, exhaustion fallback ──
+
+## Act-wide shop spacing (typed-shop spec §8, Max 2026-06-08): no two SHOP nodes sit within
+## shop_min_graph_gap UNDIRECTED edges of each other — across lane/crossover/branch placement and
+## across stretch boundaries. Recomputed independently here (BFS over next+prev) to validate the
+## generator's _shop_within guard rather than trust it.
+func _assert_shop_spacing(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+	var gap: int = _cfg_for(level).shop_min_graph_gap
+	if gap <= 0:
+		return
+	for sid: int in g.nodes:
+		if g.get_node_by_id(sid).type != MapNode.Type.SHOP:
+			continue
+		# BFS up to `gap` hops over undirected edges; no OTHER shop may appear in that ball.
+		var seen: Dictionary = {sid: true}
+		var frontier: Array[int] = [sid]
+		for _step: int in range(gap):
+			var nxt: Array[int] = []
+			for id: int in frontier:
+				var n: MapNode = g.get_node_by_id(id)
+				for nb: int in n.next_ids + n.prev_ids:
+					if seen.has(nb):
+						continue
+					seen[nb] = true
+					if g.get_node_by_id(nb).type == MapNode.Type.SHOP:
+						_check(false, "shop %d within %d hops of shop %d (act-wide spacing §8)" % [nb, gap, sid], seed_value)
+					nxt.append(nb)
+			frontier = nxt
+
+
+## Drought breaker (spec §8 follow-up, Max 2026-06-08): no stay-on-lane sequence (each lane's run
+## nodes concatenated across stretch seams — droughts span them, crossovers are off-path detours)
+## nor any mini-branch may hold more than max_consecutive_legs plain LEGs in a row. Reconstructs the
+## sequences from the graph (lane-run nodes = depth shared with a sibling, not a branch/crossover;
+## branch chains = is_branch nodes per outer lane) and sweeps each for the longest leg run.
+func _assert_no_leg_droughts(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+	var cap: int = _cfg_for(level).max_consecutive_legs
+	if cap <= 0:
+		return
+	var depth_count: Dictionary = {}
+	for id: int in g.nodes:
+		var d: int = g.get_node_by_id(id).depth
+		depth_count[d] = depth_count.get(d, 0) + 1
+	for seq: Array in _lane_and_branch_sequences(g, depth_count):
+		var streak: int = 0
+		for id: int in seq:
+			if g.get_node_by_id(id).type == MapNode.Type.LEG:
+				streak += 1
+				_check(streak <= cap, "lane/branch plain-leg run ≤ max_consecutive_legs %d (got %d)" % [cap, streak], seed_value)
+			else:
+				streak = 0
+
+
+## Reconstruct, per act, each lane's straight run (lane-run nodes in depth order, skipping the sole
+## entry/pre-boss/crossover nodes) and each mini-branch chain. Mirrors what _break_leg_droughts
+## sweeps. Returns an Array of Array[int] (depth-ordered node-id sequences).
+func _lane_and_branch_sequences(g: MapGraph, depth_count: Dictionary) -> Array:
+	var out: Array = []
+	for a: int in range(g.acts):
+		for lane: int in [0, 1]:
+			var run: Array[int] = []
+			for id: int in g.nodes:
+				var n: MapNode = g.get_node_by_id(id)
+				if n.act == a and n.lane == lane and not n.is_branch and int(depth_count.get(n.depth, 0)) > 1:
+					run.append(id)
+			_sort_ids_by_depth(g, run)
+			if not run.is_empty():
+				out.append(run)
+		for blane: int in [-1, 2]:
+			var br: Array[int] = []
+			for id: int in g.nodes:
+				var n: MapNode = g.get_node_by_id(id)
+				if n.act == a and n.lane == blane and n.is_branch:
+					br.append(id)
+			_sort_ids_by_depth(g, br)
+			if not br.is_empty():
+				out.append(br)
+	return out
+
+
+func _sort_ids_by_depth(g: MapGraph, ids: Array[int]) -> void:
+	ids.sort_custom(func(x: int, y: int) -> bool: return g.get_node_by_id(x).depth < g.get_node_by_id(y).depth)
+
+
+## Branch divergence guard (spec §8 follow-up, Max 2026-06-08): every mini-branch's type MULTISET
+## must differ from the parallel lane segment it bypasses (composition, not order — a fake choice
+## is the SAME reward set either way). Reconstructs each branch chain (head→tail), its fork/rejoin
+## on the parent lane, and the parent-lane span strictly between them, and asserts the multisets differ.
+func _assert_branches_diverge(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
+	for id: int in g.nodes:
+		var head: MapNode = g.get_node_by_id(id)
+		if not head.is_branch or head.prev_ids.size() != 1:
+			continue
+		var fork: MapNode = g.get_node_by_id(head.prev_ids[0])
+		if fork.is_branch:
+			continue   # interior chain node — only walk from the head (fork is a real lane node)
+		# Walk the branch chain head→tail.
+		var chain: Array[int] = [head.id]
+		var cur: MapNode = head
+		while cur.next_ids.size() == 1 and g.get_node_by_id(cur.next_ids[0]).is_branch:
+			cur = g.get_node_by_id(cur.next_ids[0])
+			chain.append(cur.id)
+		if cur.next_ids.size() != 1:
+			continue
+		var rejoin: MapNode = g.get_node_by_id(cur.next_ids[0])
+		# Parallel = parent-lane run nodes strictly between fork and rejoin (the bypassed span).
+		var parallel: Array[int] = []
+		for pid: int in g.nodes:
+			var pn: MapNode = g.get_node_by_id(pid)
+			if pn.lane == fork.lane and not pn.is_branch and not pn.is_crossover and pn.depth > fork.depth and pn.depth < rejoin.depth:
+				parallel.append(pid)
+		_check(not _same_type_multiset(g, chain, parallel),
+			"mini-branch (fork %d) type multiset differs from its bypassed lane span" % fork.id, seed_value)
+
+
+## True when two node-id lists carry the same MULTISET of node types (order ignored).
+func _same_type_multiset(g: MapGraph, a_ids: Array[int], b_ids: Array[int]) -> bool:
+	var counts: Dictionary = {}
+	for id: int in a_ids:
+		var t: int = int(g.get_node_by_id(id).type)
+		counts[t] = int(counts.get(t, 0)) + 1
+	for id: int in b_ids:
+		var t: int = int(g.get_node_by_id(id).type)
+		counts[t] = int(counts.get(t, 0)) - 1
+	for t: int in counts:
+		if int(counts[t]) != 0:
+			return false
+	return true
+
 
 ## Per-path leg cap (§4): an "entry→boss route" is ONE act, so cap LEG-type nodes PER ACT along a
 ## path (not the whole multi-act run). SOFT pacing target — checked over the seed grid (the cull
@@ -595,31 +727,35 @@ func _test_incremental_gen() -> void:
 	_check(g.nodes.size() == before, "generate_next_act past the final act is a no-op", -1)
 
 
-## State-aware family roll (§8): an act generated with brush colors in run-state may roll
-## the brush event family; an act generated WITHOUT them only ever rolls accuracy.
+## Event family roll is UNGATED at generation (typed-shop slice, Max 2026-06-07): brush + geometry
+## roll regardless of run-state — only the routed map icon is fixed at gen; brush affinity (and the
+## colorless→accuracy downgrade) resolves at ARRIVAL. So brush appears WITH and WITHOUT colors, and
+## all three families show across seeds. (Was the old state-aware gate; superseded by the ungate.)
 func _test_state_aware_family_roll() -> void:
-	print("— State-aware event family roll (§3.6)")
+	print("— Event family roll is ungated at generation (typed-shop slice)")
 	var level: LevelDefinition = load("res://resources/levels/level_1501.tres")
 	var brush_seen_with: int = 0
 	var brush_seen_without: int = 0
-	var event_nodes_with: int = 0
+	var families_seen: Dictionary = {}
 	for seed_value: int in range(120):
-		# WITHOUT brush colors: every appended act sees an empty palette.
+		# WITHOUT brush colors: brush still rolls (ungated).
 		var g0: MapGraph = _generate_full(level, seed_value, [])
 		for id: int in g0.nodes:
 			var n: MapNode = g0.get_node_by_id(id)
-			if n.type == MapNode.Type.EVENT and n.event.reward_family == &"brush":
-				brush_seen_without += 1
-		# WITH brush colors: appended acts (1+) may roll brush.
+			if n.type == MapNode.Type.EVENT:
+				families_seen[n.event.reward_family] = true
+				if n.event.reward_family == &"brush":
+					brush_seen_without += 1
+		# WITH brush colors: brush rolls too.
 		var g1: MapGraph = _generate_full(level, seed_value, [0, 1])
 		for id: int in g1.nodes:
 			var n: MapNode = g1.get_node_by_id(id)
-			if n.type == MapNode.Type.EVENT and n.act >= 1:
-				event_nodes_with += 1
-				if n.event.reward_family == &"brush":
-					brush_seen_with += 1
-	_check(brush_seen_without == 0, "brush family NEVER rolls when run-state has no colors (got %d)" % brush_seen_without, -1)
-	_check(brush_seen_with > 0, "brush family DOES roll on act≥1 when colors are present (got %d of %d event nodes)" % [brush_seen_with, event_nodes_with], -1)
+			if n.type == MapNode.Type.EVENT and n.event.reward_family == &"brush":
+				brush_seen_with += 1
+	_check(brush_seen_without > 0, "brush family rolls even with NO colors (ungated at gen, got %d)" % brush_seen_without, -1)
+	_check(brush_seen_with > 0, "brush family rolls with colors present (got %d)" % brush_seen_with, -1)
+	for fam: StringName in [&"accuracy", &"brush", &"geometry"]:
+		_check(families_seen.has(fam), "event family %s appears across seeds" % fam, -1)
 
 
 ## A fixed seed reproduces the full multi-act run identically (node count, types, edges).

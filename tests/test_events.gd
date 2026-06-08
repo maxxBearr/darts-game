@@ -150,10 +150,15 @@ func _test_main_flow_guards() -> void:
 			bank_mutation = true
 	_check(not bank_mutation, "event block never mutates _banked_darts (§4 no bank touch)", -1)
 
-	# 3) Brush availability fallback (§2): the arrival downgrade (no colors ⇒ accuracy) and
-	#    the empty-pool fallback (no brush picks ⇒ accuracy surface) both present.
-	_check("available_brush_colors.is_empty()" in block, "event has the brush arrival fallback (no colors ⇒ accuracy)", -1)
-	_check("_enter_accuracy_event(section)" in block, "brush event falls back to the accuracy surface when the pool is empty", -1)
+	# 3) Brush ungate + unbias (Max 2026-06-07/08): brush is ALWAYS offerable — the old arrival
+	#    downgrade (no colors ⇒ accuracy) was removed, and the 2026-06-08 ruling made the roll fully
+	#    UNBIASED: generate() rolls the full ALL_COLORS pool unconditionally (no available-colors
+	#    gate / steering). A colorless brush event still yields valid picks. The accuracy surface is
+	#    still routed for the accuracy family. (Behavioural coverage: test_typed_shop._test_brush_rulings.)
+	_check("_enter_accuracy_event(section)" in block, "accuracy family routes to the accuracy surface", -1)
+	var brush_src: String = _read("res://scripts/modifiers/brush_modifier.gd")
+	_check("ALL_COLORS" in brush_src and not ("available_brush_colors" in brush_src),
+		"BrushModifier rolls the full ALL_COLORS pool, ungated/unbiased (no available-colors gate)", -1)
 
 	# 4) EVENT is routed to _enter_event (not the leg stub).
 	_check("MapNode.Type.EVENT:" in src and "_enter_event(node)" in src, "EVENT node routes to _enter_event", -1)

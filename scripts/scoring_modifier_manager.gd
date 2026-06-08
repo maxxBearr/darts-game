@@ -147,6 +147,13 @@ var hit_history_run: Array[Dictionary] = []
 
 @export var debug_perf_log: bool = false
 
+## TEMP bug-hunt instrumentation (brush ↔ Color Territory resize desync, 2026-06-08). When on,
+## recompute_geometry() dumps every non-default-colored ring (painted or Prism-recolored), the
+## active color_rules, and that ring's CURRENT width — so one in-game paint shows whether the paint
+## reached recompute and whether the matching color rule grew it. Localized 2026-06-08 (the resize
+## machinery is provably clean — see tests/repro_brush.tscn); kept off, flip on for interactive checks.
+@export var debug_geometry_log: bool = false
+
 var _state_version: int = 0
 var _last_sync_version: int = -1
 
@@ -242,7 +249,34 @@ func recompute_geometry() -> void:
 	# Rebuild the O(1) fatness table from the freshly-computed geometry (see _fatness_cache).
 	_rebuild_fatness_cache()
 
+	if debug_geometry_log:
+		_dump_geometry_debug(color_rules)
+
 	geometry_changed.emit()
+
+
+## TEMP bug-hunt dump (see debug_geometry_log). For every ring whose color differs from the default
+## board scheme (i.e. painted or Prism-recolored), print its color + CURRENT band width, alongside
+## the active Color Territory rules. If a painted GREEN double under Grow-Green shows ~0.0885 the
+## resize landed; if it shows ~0.0700 the rule didn't grow it; if the painted wedge is ABSENT the
+## paint never reached the array recompute reads (a desync/revert upstream).
+func _dump_geometry_debug(color_rules: Array) -> void:
+	var lines: Array[String] = []
+	for wi: int in range(20):
+		if wi >= effective_wedge_colors.size() or wi >= effective_ring_bounds.size():
+			continue
+		var even: bool = wi % 2 == 0
+		var c: Dictionary = effective_wedge_colors[wi]
+		var diffs: Array[String] = []
+		for rk: String in RING_ORDER:
+			var is_single: bool = rk == "inner_single" or rk == "outer_single"
+			var defc: int = int(ScoringEnums.SegmentColor.BLACK if even else ScoringEnums.SegmentColor.WHITE) if is_single else int(ScoringEnums.SegmentColor.RED if even else ScoringEnums.SegmentColor.GREEN)
+			if int(c.get(rk, defc)) != defc:
+				var b: Array = effective_ring_bounds[wi].get(rk, [0.0, 0.0])
+				diffs.append("%s=col%d w=%.4f" % [rk, int(c[rk]), float(b[1]) - float(b[0])])
+		if not diffs.is_empty():
+			lines.append("w%d(val%d): %s" % [wi, effective_wedge_values[wi], ", ".join(diffs)])
+	print("[GEO] recompute color_rules=%s | non-default rings: %s" % [str(color_rules), (", ".join(lines) if not lines.is_empty() else "(none)")])
 
 
 ## Recompute the per-(wedge, ring) fatness table = −(angular weight × annular area) from the

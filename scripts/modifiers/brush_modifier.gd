@@ -45,8 +45,8 @@ func apply_to_board(_wedge_values: Array[int], wedge_colors: Array[Dictionary], 
 
 
 static func get_pool_weight() -> int:
-	if ModifierRegistry.available_brush_colors.is_empty():
-		return 0
+	# Flat. Brush is ungated AND unbiased everywhere (Max's rulings 2026-06-07/08) — owned
+	# streak colors no longer gate pool presence or steer the roll.
 	return 15
 
 
@@ -54,22 +54,29 @@ static func get_rarity_weights() -> Array[int]:
 	return [100, 0, 0]
 
 
-static func generate(_rarity_tier: ScoringEnums.Rarity) -> BrushModifier:
+## All four paintable colors — the full, unbiased roll pool.
+const ALL_COLORS: Array[ScoringEnums.SegmentColor] = [
+	ScoringEnums.SegmentColor.RED,
+	ScoringEnums.SegmentColor.GREEN,
+	ScoringEnums.SegmentColor.BLACK,
+	ScoringEnums.SegmentColor.WHITE,
+]
+
+
+## Build a specific color's brush (mirrors ColorTerritoryModifier.make), so pick surfaces can
+## offer DISTINCT colors deterministically instead of reroll-and-hope.
+static func make(color: ScoringEnums.SegmentColor) -> BrushModifier:
 	var mod: BrushModifier = BrushModifier.new()
 	mod.rarity_tier = ScoringEnums.Rarity.COMMON
-
-	var colors: Array[ScoringEnums.SegmentColor] = ModifierRegistry.available_brush_colors
-	if colors.is_empty():
-		colors = [
-			ScoringEnums.SegmentColor.RED,
-			ScoringEnums.SegmentColor.GREEN,
-			ScoringEnums.SegmentColor.BLACK,
-			ScoringEnums.SegmentColor.WHITE,
-		]
-	mod.target_color = colors[randi_range(0, colors.size() - 1)]
-
-	var color_name: String = COLOR_NAMES[mod.target_color]
+	mod.target_color = color
+	var color_name: String = COLOR_NAMES[color]
 	mod.modifier_name = "Brush: %s" % color_name
 	mod.description = "Paint any one segment %s" % color_name.to_lower()
-
 	return mod
+
+
+static func generate(_rarity_tier: ScoringEnums.Rarity) -> BrushModifier:
+	# UNBIASED roll over the full color pool (Max's ruling 2026-06-08). The old affinity
+	# steering (roll only owned streak colors) collapsed every brush option to one color the
+	# moment a single color streak was owned — three identical cards is no choice at all.
+	return make(ALL_COLORS[randi_range(0, ALL_COLORS.size() - 1)])

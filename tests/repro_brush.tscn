@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://deury0o0suonr"]
+
+[ext_resource type="Script" path="res://tests/repro_brush_scene.gd" id="1"]
+
+[node name="ReproBrush" type="Node"]
+script = ExtResource("1")

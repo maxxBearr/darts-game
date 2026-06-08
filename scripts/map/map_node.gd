@@ -42,6 +42,12 @@ var is_off_branch: bool = false
 ## a special on a crossover is still dodgeable. See map_graph._type_crossovers.
 var is_crossover: bool = false
 
+## True on a node converted by the drought breaker / branch-divergence guard (spec §8 follow-ups,
+## 2026-06-08). Those conversions are "off-budget spice, same standing as typed crossovers" — they
+## add an EVENT/CHALLENGE/SHOP on top of the rolled per-path special budget, so they must NOT count
+## toward the per-path event/shop/challenge caps (mirrors how is_crossover/is_branch are excluded).
+var is_offbudget: bool = false
+
 ## True on a MINI-BRANCH node (round-2 topology): a short detour that forks off one lane,
 ## runs on an outer render row, and rejoins THE SAME lane (equal node count to the straight
 ## run it parallels). Off-budget for the per-path special caps (chosen friction, additive

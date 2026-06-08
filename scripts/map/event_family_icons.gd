@@ -10,15 +10,24 @@ extends Resource
 ## `geometry` are active reward paths; `scoring` remains a placeholder awaiting its
 ## make-it-a-trade retrofit (§7).
 
-## Real per-family textures, dropped in by Max later. Empty ⇒ the view uses the fallback.
-@export var icons: Dictionary = {}            ## StringName family -> Texture2D
+## Real per-family textures (Phase 03 typed-shop slice — art now lives in sprites/Icons/). The
+## SAME five icons the typed-shop ring uses (don't build a second set — codex reuses them too).
+## A family absent here falls back to the labelled coloured shape below.
+@export var icons: Dictionary = {
+	&"scoring": preload("res://sprites/Icons/scoringItems.png"),
+	&"streak": preload("res://sprites/Icons/streak.png"),
+	&"accuracy": preload("res://sprites/Icons/accuracyIcon.png"),
+	&"geometry": preload("res://sprites/Icons/geoItems.png"),
+	&"brush": preload("res://sprites/Icons/brush.png"),
+}
 
-## Placeholder swatch colour per family (the grey-box glyph tint until art lands).
+## Placeholder swatch colour per family (the grey-box glyph tint when an icon is missing).
 @export var fallback_colors: Dictionary = {
 	&"accuracy": Color(0.85, 0.70, 0.30),   ## bullseye gold
 	&"brush": Color(0.45, 0.70, 0.85),      ## paint blue
-	&"geometry": Color(0.55, 0.80, 0.55),   ## shape green (inactive)
-	&"scoring": Color(0.80, 0.55, 0.80),    ## score violet (inactive)
+	&"geometry": Color(0.55, 0.80, 0.55),   ## shape green
+	&"scoring": Color(0.80, 0.55, 0.80),    ## score violet
+	&"streak": Color(0.90, 0.55, 0.35),     ## streak amber
 }
 
 ## Placeholder one-glyph label per family (basic shapes, ASCII-safe for the grey rect).
@@ -27,7 +36,26 @@ extends Resource
 	&"brush": "[B]",      ## brush
 	&"geometry": "<>",    ## shape
 	&"scoring": "*",      ## score
+	&"streak": "S",       ## streak
 }
+
+
+## Map a ScoringEnums.Family enum to its StringName icon key. CHALLENGE nodes carry the family as
+## the enum (reward_family: ScoringEnums.Family); EVENT nodes carry it as a StringName already.
+## Returns &"" for families with no map icon (NONE / the sidelined PLACEMENT). Challenge draws only
+## ever roll SCORING / STREAK (geometry spec §10), but the full mapping is here for completeness.
+static func key_for_family(f: ScoringEnums.Family) -> StringName:
+	match f:
+		ScoringEnums.Family.SCORING:
+			return &"scoring"
+		ScoringEnums.Family.STREAK:
+			return &"streak"
+		ScoringEnums.Family.BRUSH:
+			return &"brush"
+		ScoringEnums.Family.GEOMETRY:
+			return &"geometry"
+		_:
+			return &""
 
 
 ## The texture for a family, or null when only the placeholder exists.

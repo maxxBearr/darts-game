@@ -241,6 +241,12 @@ var _reflow_tween: Tween = null
 ## settled values; only the visuals tween.
 @export var geometry_reflow_duration: float = 0.6
 
+## TEMP bug-hunt instrumentation (brush ↔ Color Territory resize desync, 2026-06-08). When on,
+## set_geometry() logs whether the churn guard SKIPPED an incoming push (thinks it's unchanged) or
+## APPLIED it — so a stale overwrite arriving after a fresh paint shows up in the [GEO] sequence.
+## Localized 2026-06-08 (resize machinery clean — see tests/repro_brush.tscn); kept off.
+@export var debug_geometry_log: bool = false
+
 ## Whether hover highlighting is currently enabled. Controlled by main.gd.
 var hover_enabled: bool = false
 
@@ -325,6 +331,18 @@ var _segment_picker_hover_ring: String = ""
 
 ## Fill color for rare lit spots.
 @export var shop_color_rare: Color = Color(0.7, 0.3, 0.9, 0.8)
+
+## Fill color for GEOMETRY (rarity-less trade) lit spots — the geo UI green (matches
+## EventFamilyIcons / geo option cards). Rarity-less, so the ring signals nothing; the colour +
+## icon carry the family identity. (Bespoke kaleidoscope shader is a visual-polish follow-up.)
+@export var shop_color_geometry: Color = Color(0.45, 0.72, 0.45, 0.8)
+
+## Fill color for BRUSH (rarity-less trade) lit spots — greenish-teal painted tint. (Bespoke
+## painted shader is a visual-polish follow-up.)
+@export var shop_color_brush: Color = Color(0.30, 0.68, 0.62, 0.8)
+
+## Pixel size of the family icon drawn centered on each lit spot (scaled down for thin rings).
+@export var shop_icon_size: float = 26.0
 
 ## Base fill opacity for lit spot segments (before shader processing).
 @export_range(0.3, 1.0, 0.05) var shop_fill_alpha: float = 0.7
@@ -1670,6 +1688,19 @@ func _sync_shop_shader(mat: ShaderMaterial) -> void:
 	mat.set_shader_parameter("glow_strength", shop_glow_strength)
 
 
+## The five family icons the typed shop draws on its lit spots — the SAME art the map nodes use.
+## Self-contained here (the dartboard doesn't know about families otherwise); keyed by the spot's
+## "family" StringName. Trade families have no rarity, so the spot's colour + this icon carry the
+## family read.
+const _SHOP_FAMILY_ICONS: Dictionary = {
+	&"scoring": preload("res://sprites/Icons/scoringItems.png"),
+	&"streak": preload("res://sprites/Icons/streak.png"),
+	&"accuracy": preload("res://sprites/Icons/accuracyIcon.png"),
+	&"geometry": preload("res://sprites/Icons/geoItems.png"),
+	&"brush": preload("res://sprites/Icons/brush.png"),
+}
+
+
 ## Look up the exported rarity color for a shop spot.
 func _get_shop_rarity_color(rarity: int) -> Color:
 	match rarity:
@@ -1679,6 +1710,35 @@ func _get_shop_rarity_color(rarity: int) -> Color:
 			return shop_color_rare
 		_:
 			return shop_color_common
+
+
+## The base fill colour for a typed shop spot: rarity families (scoring/streak/accuracy) read by
+## rarity tier; trade families (geometry/brush) read by their fixed family tint (rarity-less).
+func _shop_spot_color(spot: Dictionary) -> Color:
+	var family: StringName = spot.get("family", &"")
+	if family == &"geometry":
+		return shop_color_geometry
+	if family == &"brush":
+		return shop_color_brush
+	return _get_shop_rarity_color(spot.get("rarity", ScoringEnums.Rarity.COMMON))
+
+
+## Draw the spot's family icon centered on its ring slice (the icon "on the spot"). Scaled to fit
+## the band thickness so it stays inside thin rings. Reads DRAW geometry, so it tracks reflows.
+func _draw_shop_icon(overlay: Node2D, spot: Dictionary, inner_norm: float, outer_norm: float) -> void:
+	var family: StringName = spot.get("family", &"")
+	var tex: Texture2D = _SHOP_FAMILY_ICONS.get(family, null)
+	if tex == null:
+		return
+	var wedge_idx: int = spot["wedge_index"]
+	var mid_norm: float = (inner_norm + outer_norm) * 0.5
+	var mid_rad: float = deg_to_rad(_wedge_center_deg(wedge_idx))
+	var direction: Vector2 = Vector2(sin(mid_rad), -cos(mid_rad))
+	var center: Vector2 = direction * board_radius * mid_norm
+	# Cap the icon to the band's radial thickness so it never overflows a thin single/triple.
+	var band_px: float = board_radius * (outer_norm - inner_norm)
+	var sz: float = minf(shop_icon_size, maxf(band_px * 0.9, 8.0))
+	overlay.draw_texture_rect(tex, Rect2(center - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), false)
 
 
 ## Set lit spots for the shop. Each entry: {wedge_index, ring_name, rarity, active}.
@@ -1750,8 +1810,9 @@ func _draw_shop_overlay() -> void:
 		if not spot.get("active", false):
 			continue
 
-		var rarity: int = spot.get("rarity", ScoringEnums.Rarity.COMMON)
-		var base_color: Color = _get_shop_rarity_color(rarity)
+		# Typed shop (Phase 03): fill colour reads by family — rarity tier for scoring/streak/
+		# accuracy, fixed family tint for the rarity-less geometry/brush trades.
+		var base_color: Color = _shop_spot_color(spot)
 		var fill_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_fill_alpha)
 		var border_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_border_alpha)
 
@@ -1774,14 +1835,16 @@ func _draw_shop_overlay() -> void:
 		var border_points: PackedVector2Array = _build_segment_border_points(start_deg, end_deg, outer_norm, inner_norm)
 		_shop_overlay.draw_polyline(border_points, border_color, shop_border_thickness)
 
+		# Family icon "melted" onto the spot (re-derived here so it tracks reflows, §4a).
+		_draw_shop_icon(_shop_overlay, spot, inner_norm, outer_norm)
+
 
 ## Draw the dissolving shop spot on its own overlay (separate shader with dissolve uniforms).
 func _draw_shop_dissolve_overlay() -> void:
 	if not _shop_dissolve_active or _shop_dissolve_spot.is_empty():
 		return
 
-	var rarity: int = _shop_dissolve_spot.get("rarity", ScoringEnums.Rarity.COMMON)
-	var base_color: Color = _get_shop_rarity_color(rarity)
+	var base_color: Color = _shop_spot_color(_shop_dissolve_spot)
 	var fill_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_fill_alpha)
 	var border_color: Color = Color(base_color.r, base_color.g, base_color.b, shop_border_alpha)
 
@@ -2095,7 +2158,13 @@ func set_geometry(weights: Array[float], bounds: Array[Dictionary], bull: Dictio
 	# etc.), almost always unchanged. Skip the kill/create-Tween + redraw when the incoming
 	# settled geometry already matches the current settled target AND nothing is mid-reflow.
 	if not _geometry_changed(weights, bounds, bull) and (_reflow_tween == null or not _reflow_tween.is_valid()):
+		if debug_geometry_log:
+			print("[GEO] dartboard.set_geometry SKIP (churn guard: incoming bounds == current settled)")
 		return
+	if debug_geometry_log:
+		# Sample a couple of double-band widths so a stale overwrite is visible in the call sequence.
+		var w0: float = float(bounds[0]["double"][1]) - float(bounds[0]["double"][0]) if bounds[0].has("double") else -1.0
+		print("[GEO] dartboard.set_geometry APPLY (animate=%s, w0 double=%.4f)" % [str(animate), w0])
 	_geo_weights = weights.duplicate()
 	_geo_bounds = _dup_bounds(bounds)
 	_geo_bull = bull.duplicate()
@@ -2159,6 +2228,18 @@ func _apply_reflow(t: float) -> void:
 	queue_redraw()
 	if _boss_overlay != null:
 		_boss_overlay.queue_redraw()
+	# §4a live geometry tracking (typed-shop spec): every REGION-attached visual is a function of
+	# the DRAW geometry, so re-derive it on each reflow tick instead of caching build-time polygons.
+	# Without this the hotspot smoke / shop spots stay at their pre-resize size during a reflow
+	# (Prism recolor mid-leg, geo item mid-shop) and visibly desync from the resized ring. ~20 polys
+	# per tick is cheap. Hotspot smoke is real Polygon2D children → rebuild them; the shop overlays
+	# rebuild their polygons in their _draw callbacks, so a queue_redraw suffices.
+	if use_hotspot_shader and not hotspot_rings.is_empty():
+		_rebuild_hotspot_shader_layer()
+	if _shop_overlay != null:
+		_shop_overlay.queue_redraw()
+	if _shop_dissolve_overlay != null:
+		_shop_dissolve_overlay.queue_redraw()
 
 
 ## Whether incoming geometry differs from the current SETTLED target (beyond float noise). Used

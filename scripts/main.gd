@@ -351,6 +351,18 @@ var _shop_pick_items: Array[Dictionary] = []
 ## Extra lit spots beyond the dart count (breathing room for target choice).
 @export var shop_spot_slack: int = 3
 
+## Per-spot family roll weights (typed shop, Phase 03). Each lit spot independently rolls a family
+## from this dict (uniform 5-way by default); raise/lower a family to bias the shop's composition.
+## Keys are the five family StringNames. Brush is auto-zeroed for a generation when no brush colors
+## are owned (a brush spot would offer nothing). Exposed for later tuning.
+@export var shop_family_weights: Dictionary = {
+	&"scoring": 1.0,
+	&"streak": 1.0,
+	&"accuracy": 1.0,
+	&"geometry": 1.0,
+	&"brush": 1.0,
+}
+
 ## Number of pick choices shown when a shop spot is hit. Default 2.
 var shop_pick_count: int = 2
 
@@ -500,16 +512,15 @@ func _process(_delta: float) -> void:
 	var mouse_pos: Vector2 = get_global_mouse_position()
 	var hover_result: Dictionary = dartboard.update_hover(mouse_pos)
 
-	# Shop-specific hover: show rarity of lit spots
+	# Shop-specific hover: show what the lit spot offers — rarity + family for rarity spots,
+	# family + "Trade" for the rarity-less trade spots (label built in _shop_spot_label).
 	if _in_shop and _leg_phase == "shop":
 		if hover_result.is_empty():
 			hud.show_shop_hover_tooltip("Nothing", mouse_pos)
 		else:
 			var spot_idx: int = dartboard.check_shop_hit(mouse_pos)
 			if spot_idx >= 0:
-				var spot: Dictionary = _shop_lit_spots[spot_idx]
-				var rarity_name: String = ScoringEnums.RARITY_DATA[spot["rarity"]]["name"]
-				hud.show_shop_hover_tooltip("%s Upgrade" % rarity_name, mouse_pos)
+				hud.show_shop_hover_tooltip(_shop_spot_label(_shop_lit_spots[spot_idx]), mouse_pos)
 			else:
 				hud.show_shop_hover_tooltip("Nothing", mouse_pos)
 		return
@@ -1073,12 +1084,8 @@ func _enter_event(node: MapNode) -> void:
 	var family: StringName = node.event.reward_family if node.event != null else &"accuracy"
 	var section: int = node.act
 	_disable_hover()
-	# Residual arrival fallback (§2): if brush colors vanished between act-gen and arrival,
-	# downgrade to accuracy so the node never offers an empty family.
-	if family == &"brush":
-		_sync_brush_affinity()
-		if ModifierRegistry.available_brush_colors.is_empty():
-			family = &"accuracy"
+	# No affinity downgrade here (Max's ruling 2026-06-07): brush events are ungated — with no
+	# owned colors the picks simply roll from the full color pool, same as shop brush spots.
 	var option_count: int = node.event.option_count if node.event != null else 3
 	if family == &"brush":
 		_enter_brush_event(section, option_count)
@@ -1163,10 +1170,11 @@ func _enter_accuracy_event(section: int) -> void:
 ## through the shop-pick path (gated by _event_pending) back to the map. If the pool can't
 ## supply any brush picks, fall back to the accuracy surface (the §2 residual guard).
 func _enter_brush_event(section: int, option_count: int = 3) -> void:
-	var rarity: ScoringEnums.Rarity = _event_rarity_enum(section)
-	# Ask for option_count distinct brushes; the pool may supply fewer (then we offer fewer,
-	# the §2 relax-distinctness note). If it can supply none, fall back to the accuracy surface.
-	var picks: Array[Dictionary] = _generate_challenge_reward_picks(ScoringEnums.Family.BRUSH, rarity, option_count)
+	# Direct brush rolls — the SAME path as shop brush spots, NOT the registry pool draw.
+	# Unbiased over the full color pool with distinct colors guaranteed (Max 2026-06-08).
+	# Brush is rarity-less (forces COMMON), so the section ramp never applied anyway. The pool
+	# may supply fewer than option_count (relax-distinctness, §2); none at all → accuracy.
+	var picks: Array[Dictionary] = _generate_brush_shop_picks(option_count)
 	if picks.is_empty():
 		_enter_accuracy_event(section)
 		return
@@ -1957,49 +1965,19 @@ func _setup_shop_board(response: Dictionary, from_pos: Vector2, to_pos: Vector2)
 	)
 
 
-## Generate lit spot layout for the shop.
+## Generate the typed shop's lit spots (Phase 03). Delegates the rolling to the pure, headless-
+## testable ShopSpotGenerator; main only supplies the live inputs: the lit count, the exported
+## family weights, and a fresh randomized RNG (keeps the "random each shop" feel; tests seed
+## their own). Brush is deliberately NOT affinity-gated here (Max's ruling 2026-06-07): the
+## typed shop made brushes seekable, so they roll for everyone — picks draw from the full
+## color pool pre-affinity (BrushModifier.generate's fallback) and from YOUR streak colors
+## once affinity exists (_sync_brush_affinity runs at pick time). The affinity gate survives
+## where it still makes sense: event-node act generation (map_graph).
 func _generate_shop_spots(shop_darts: int) -> Array[Dictionary]:
 	var lit_count: int = shop_darts + shop_spot_slack
-	var rares: int = maxi(1, lit_count / 6)
-	var uncommons: int = lit_count / 3
-	var commons: int = lit_count - rares - uncommons
-
-	var spots: Array[Dictionary] = []
-	var used_segments: Array[String] = []
-
-	# Rares and uncommons go on doubles/triples
-	for _i: int in range(rares):
-		spots.append(_random_shop_spot(ScoringEnums.Rarity.RARE, true, used_segments))
-	for _i: int in range(uncommons):
-		spots.append(_random_shop_spot(ScoringEnums.Rarity.UNCOMMON, true, used_segments))
-	# Commons go on singles
-	for _i: int in range(commons):
-		spots.append(_random_shop_spot(ScoringEnums.Rarity.COMMON, false, used_segments))
-
-	return spots
-
-
-## Generate a single random shop spot, avoiding duplicates.
-func _random_shop_spot(rarity: ScoringEnums.Rarity, multi_ring: bool, used: Array[String]) -> Dictionary:
-	var ring_options: Array[String]
-	if multi_ring:
-		ring_options = ["Double", "Triple"]
-	else:
-		ring_options = ["Inner Single", "Outer Single"]
-
-	# Try to place on a unique segment
-	for _attempt: int in range(40):
-		var wedge_idx: int = randi_range(0, 19)
-		var ring: String = ring_options[randi_range(0, ring_options.size() - 1)]
-		var key: String = "%d_%s" % [wedge_idx, ring]
-		if key not in used:
-			used.append(key)
-			return {"wedge_index": wedge_idx, "ring_name": ring, "rarity": rarity, "active": true}
-
-	# Fallback — place anyway (board may be crowded)
-	var wedge_idx: int = randi_range(0, 19)
-	var ring: String = ring_options[0]
-	return {"wedge_index": wedge_idx, "ring_name": ring, "rarity": rarity, "active": true}
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.randomize()
+	return ShopSpotGenerator.generate(lit_count, shop_family_weights, rng)
 
 
 ## Handle a throw during the shop phase — fly-in pre-step, then the shop impact.
@@ -2029,11 +2007,12 @@ func _resolve_shop_impact(hit_position: Vector2) -> void:
 	var spot_idx: int = dartboard.check_shop_hit(hit_position)
 
 	if spot_idx >= 0:
-		# Hit a lit spot — deactivate it and generate 2 mixed picks
+		# Hit a lit spot — deactivate it and generate the family's picks (typed shop, Phase 03).
 		var spot: Dictionary = _shop_lit_spots[spot_idx]
 		dartboard.deactivate_shop_spot(spot_idx, hit_position)
 		var rarity: ScoringEnums.Rarity = spot["rarity"] as ScoringEnums.Rarity
-		_shop_pick_items = _generate_shop_picks(rarity)
+		var family: StringName = spot.get("family", &"scoring")
+		_shop_pick_items = _generate_shop_picks(family, rarity)
 		_leg_phase = "shop_pick"
 
 		# Build replacement warnings for modifier items
@@ -2074,38 +2053,87 @@ func _sync_brush_affinity() -> void:
 	ModifierRegistry.available_brush_colors = colors
 
 
-## Generate 2 mixed shop picks (accuracy upgrades or modifiers) at a given rarity.
-func _generate_shop_picks(rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
+## Map a shop family StringName to its ScoringEnums.Family enum (for the registry-filtered draw).
+func _shop_family_to_enum(family: StringName) -> ScoringEnums.Family:
+	match family:
+		&"scoring":
+			return ScoringEnums.Family.SCORING
+		&"streak":
+			return ScoringEnums.Family.STREAK
+		&"geometry":
+			return ScoringEnums.Family.GEOMETRY
+		&"brush":
+			return ScoringEnums.Family.BRUSH
+		_:
+			return ScoringEnums.Family.NONE
+
+
+## Hover-tooltip label for a lit shop spot (typed shop, Phase 03). Rarity families read
+## "<Rarity> <Family> Upgrade" ("Uncommon Accuracy Upgrade"); the rarity-less trade families
+## (geometry/brush) read "<Family> Trade" — no tier shown, matching their forced-COMMON
+## generate() so the tooltip never implies a power ladder that doesn't exist.
+func _shop_spot_label(spot: Dictionary) -> String:
+	var family: StringName = spot.get("family", &"scoring")
+	var family_label: String = String(family).capitalize()
+	if family == &"geometry" or family == &"brush":
+		return "%s Trade" % family_label
+	var rarity_name: String = ScoringEnums.RARITY_DATA[spot["rarity"]]["name"]
+	return "%s %s Upgrade" % [rarity_name, family_label]
+
+
+## Generate `shop_pick_count` picks from a single FAMILY at the hit spot's rarity (typed shop,
+## Phase 03 — replaces the old mixed 50/50 draw). Every pick matches the spot's family:
+##   - scoring / streak: family-pure modifiers at the spot rarity (registry-filtered, distinct).
+##     A streak at full capacity still appears — the replace-warning flow (§ _on_shop_pick_selected
+##     + _get_replacement_text) handles it; never gated here.
+##   - accuracy: swing-table trades at the spot's tier (the event swing machinery, 2 cards).
+##   - geometry: distinct rarity-less trades from the geo pool.
+##   - brush: independently rolled brushes (different color/ring rolls are the choice).
+func _generate_shop_picks(family: StringName, rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
+	# (No _sync_brush_affinity here any more — brush rolls are unbiased, Max 2026-06-08.)
+	match family:
+		&"accuracy":
+			return _generate_shop_accuracy_picks(rarity, shop_pick_count)
+		&"geometry":
+			return _generate_geometry_event_picks(shop_pick_count)
+		&"brush":
+			return _generate_brush_shop_picks(shop_pick_count)
+		_:  # scoring / streak — family-pure laddered modifiers at the spot rarity.
+			return _generate_challenge_reward_picks(_shop_family_to_enum(family), rarity, shop_pick_count)
+
+
+## `count` accuracy swing-table picks at a rarity tier, distinct by stat axis (reuses the per-pick
+## helper + the upgrade-card UI; just N cards instead of the event's fixed 3).
+func _generate_shop_accuracy_picks(rarity: ScoringEnums.Rarity, count: int) -> Array[Dictionary]:
 	var picks: Array[Dictionary] = []
+	var forbidden: Array[String] = []
+	for _i: int in range(count):
+		var pick: Dictionary = _generate_shop_accuracy_pick(rarity, forbidden)
+		forbidden.append(pick["data"].get("property", "") + "|" + str(rarity))
+		picks.append(pick)
+	return picks
 
-	_sync_brush_affinity()
-	var weight_overrides: Dictionary = {}
-	if dart_build.equipped_flight != null and dart_build.equipped_flight.shop_bias != null:
-		weight_overrides = dart_build.equipped_flight.shop_bias.get_weight_overrides()
-	# Gate brushes out of the pool when no color modifiers are owned
-	if ModifierRegistry.available_brush_colors.is_empty():
-		const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
-		weight_overrides[_Brush] = 0.0
 
-	var offered_mod_fingerprints: Array[String] = _get_owned_fingerprints()
-	var offered_accuracy_keys: Array[String] = []
-
-	for _i: int in range(shop_pick_count):
-		# 50/50 chance of accuracy upgrade vs modifier (unless All In is active)
-		if not all_in_active and randi_range(0, 1) == 0:
-			var pick: Dictionary = _generate_shop_accuracy_pick(rarity, offered_accuracy_keys)
-			offered_accuracy_keys.append(pick["data"].get("property", "") + "|" + str(rarity))
-			picks.append(pick)
-		else:
-			var mods: Array[ScoringModifier] = ModifierRegistry.generate_distinct_at_rarity(1, rarity, weight_overrides, offered_mod_fingerprints)
-			if mods.size() > 0:
-				offered_mod_fingerprints.append(mods[0].get_config_fingerprint())
-				picks.append({"type": "modifier", "data": mods[0]})
-			else:
-				var pick: Dictionary = _generate_shop_accuracy_pick(rarity, offered_accuracy_keys)
-				offered_accuracy_keys.append(pick["data"].get("property", "") + "|" + str(rarity))
-				picks.append(pick)
-
+## `count` DISTINCT-color brush picks, drawn UNBIASED from the full color pool (Max's ruling
+## 2026-06-08): owned streak colors must not steer the roll — affinity steering collapsed every
+## option to the one owned color (three identical "Brush: Black" cards = no choice), and the old
+## reroll-8-then-give-up dedup appended the duplicates anyway. A shuffled sweep over the four
+## colors guarantees distinct options; owned brush fingerprints are skipped (brushes are
+## consumables, so this rarely binds). Brush is rarity-less (COMMON). Returns fewer picks only
+## if the color pool is exhausted.
+func _generate_brush_shop_picks(count: int) -> Array[Dictionary]:
+	const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
+	var colors: Array = _Brush.ALL_COLORS.duplicate()
+	colors.shuffle()
+	var owned: Array[String] = _get_owned_fingerprints()
+	var picks: Array[Dictionary] = []
+	for color: ScoringEnums.SegmentColor in colors:
+		if picks.size() >= count:
+			break
+		var mod: ScoringModifier = _Brush.make(color)
+		if mod.get_config_fingerprint() in owned:
+			continue
+		picks.append({"type": "modifier", "data": mod})
 	return picks
 
 
