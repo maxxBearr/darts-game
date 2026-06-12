@@ -34,6 +34,7 @@ func _init() -> void:
 	_test_hit_detection_consistency()
 	_test_fatness()
 	_test_event_pool()
+	_test_stack_decay()
 	print("\nGeometry test: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -250,3 +251,37 @@ func _test_event_pool() -> void:
 func _board_point(db: Object, w: int, norm: float) -> Vector2:
 	var rad: float = deg_to_rad(db._wedge_center_deg(w))
 	return db.global_position + Vector2(sin(rad), -cos(rad)) * db.board_radius * norm
+
+
+# ── §1 per-stack decay (the brake on runaway stacking) ───────────────────────────
+
+func _test_stack_decay() -> void:
+	print("— Stack decay (geometric per-stack decay asymptotes; nets; gate epsilon)")
+	var decay: float = 0.65
+	# Single stack is undamped — exactly the base magnitude.
+	_check(absf(GeometrySolver.decayed_cumulative([0.30], decay) - 0.30) < EPS,
+		"one stack == base (%.4f)" % GeometrySolver.decayed_cumulative([0.30], decay))
+	# Cumulative is strictly increasing but bounded by the geometric-series asymptote
+	# base/(1−decay) = 0.30/0.35 ≈ 0.857. A spam stack of 20 must sit just under it, never above.
+	var asymptote: float = 0.30 / (1.0 - decay)
+	var sum2: float = GeometrySolver.decayed_cumulative([0.30, 0.30], decay)
+	var sum20: float = GeometrySolver.decayed_cumulative(_repeat(0.30, 20), decay)
+	_check(sum2 > 0.30 + EPS and sum2 < asymptote, "two stacks between base and asymptote (%.4f)" % sum2)
+	_check(sum20 < asymptote + EPS, "twenty stacks under the asymptote %.4f (got %.4f)" % [asymptote, sum20])
+	_check(absf(sum20 - 0.30 * (1.0 - pow(decay, 20.0)) / (1.0 - decay)) < EPS, "matches the closed-form geometric sum")
+	# Decayed dials of opposite Ring-Trade directions still net to base (each side decays then
+	# subtracts) — the manager builds the signed dial this way.
+	var wt: float = GeometrySolver.decayed_cumulative([0.015, 0.015], decay)
+	var wd: float = GeometrySolver.decayed_cumulative([0.015, 0.015], decay)
+	_check(absf(wt - wd) < EPS, "equal opposite stacks net to zero dial")
+	# Offer epsilon gate: the next copy's marginal fraction is decay^owned. With epsilon 0.05 the
+	# entry is offered through 6 owned (0.65^6 ≈ 0.075 ≥ 0.05) and gated at 7 (0.65^7 ≈ 0.049 < 0.05).
+	_check(pow(decay, 6.0) >= 0.05, "6th stack still offered (frac %.4f)" % pow(decay, 6.0))
+	_check(pow(decay, 7.0) < 0.05, "7th stack gated as inert (frac %.4f)" % pow(decay, 7.0))
+
+
+func _repeat(value: float, count: int) -> Array:
+	var a: Array = []
+	for _i: int in range(count):
+		a.append(value)
+	return a

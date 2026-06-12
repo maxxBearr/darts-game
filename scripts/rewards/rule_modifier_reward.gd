@@ -12,8 +12,17 @@ extends Resource
 ## One-line description of the effect.
 @export var description: String = ""
 
-## Whether multiple copies of this reward can be picked in one run.
+## Whether multiple copies of this reward can be picked in one run. For the §6 shop relic channel
+## this decides REPEAT offers: a stackable relic is re-offered after purchase, a unique one drops
+## out of the pool once owned (is_applicable returns false). Orthogonal to shop_eligible.
 @export var stackable: bool = false
+
+## §6: whether this relic can appear on the gold RELIC spot in the shop. true = an incremental
+## UTILITY relic the player chose to fish for (Lucky Eye, Triple Outs, Bigger Bull, Pool Widener);
+## false = a run-DEFINER that stays an earned boss prize (Glass Cannon, Tunnel Vision, Mirror Zone).
+## The cut is run-definer vs utility, NOT unique-vs-stackable — a unique relic is perfectly
+## shop-able (you buy it once and it leaves the pool via the owned-dedup is_applicable runs).
+@export var shop_eligible: bool = false
 
 ## Whether this is a trade (has a downside). Affects card styling.
 @export var is_trade: bool = false

@@ -7,3 +7,4 @@ script = ExtResource("1")
 reward_id = &"triple_outs"
 display_name = "Triple Outs"
 description = "Checkout on triples in addition to doubles."
+shop_eligible = true

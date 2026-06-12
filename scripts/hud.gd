@@ -38,6 +38,8 @@ signal challenge_lost_dismissed
 @onready var upgrade_button_1: Button = %UpgradeContainer/UpgradeButton1
 @onready var upgrade_button_2: Button = %UpgradeContainer/UpgradeButton2
 @onready var upgrade_button_3: Button = %UpgradeContainer/UpgradeButton3
+## 4th pick card (§5 Pool Widener) — only shown when a surface offers 4 (base 3 + a widener).
+@onready var upgrade_button_4: Button = %UpgradeContainer/UpgradeButton4
 @onready var dart_indicator: Control = %DartIndicator
 @onready var turn_score_label: Label = %TurnScoreLabel
 @onready var hover_tooltip: Label = %HoverTooltip
@@ -364,11 +366,13 @@ func _ready() -> void:
 	upgrade_button_1.pressed.connect(func() -> void: _select_upgrade(0))
 	upgrade_button_2.pressed.connect(func() -> void: _select_upgrade(1))
 	upgrade_button_3.pressed.connect(func() -> void: _select_upgrade(2))
+	upgrade_button_4.pressed.connect(func() -> void: _select_upgrade(3))
 
 	# Style upgrade/modifier pick buttons
 	_apply_upgrade_button_style(upgrade_button_1)
 	_apply_upgrade_button_style(upgrade_button_2)
 	_apply_upgrade_button_style(upgrade_button_3)
+	_apply_upgrade_button_style(upgrade_button_4)
 
 	# Build skip modifier button (right of upgrade cards, independent of HBox layout)
 	_skip_modifier_button = Button.new()
@@ -479,14 +483,16 @@ func set_remaining_bust(is_bust: bool) -> void:
 		remaining_label.modulate = Color(1.0, 1.0, 1.0)
 
 
-## Update the turn counter display.
-func update_turn(turn: int, max_turns: int) -> void:
+## Update the turn counter display. `dart_budget` is the challenge wager (0 for a normal
+## leg) — forwarded to the rail so a partial final row renders and the header reads WAGERED.
+func update_turn(turn: int, max_turns: int, dart_budget: int = 0) -> void:
 	if turn == max_turns:
 		turn_label.text = "Turn %d/%d — LAST TURN!" % [turn, max_turns]
 		turn_label.modulate = Color(1.0, 0.4, 0.3)
 	else:
 		turn_label.text = "Turn %d/%d" % [turn, max_turns]
 		turn_label.modulate = Color(1.0, 1.0, 1.0)
+	dart_indicator.set_dart_budget(dart_budget)
 	dart_indicator.set_turn(turn, max_turns)
 
 
@@ -1013,8 +1019,9 @@ func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upg
 	_preview_upgrades = upgrades
 	_skip_modifier_button.visible = false
 
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(3):
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3, upgrade_button_4]
+	var shown: int = mini(upgrades.size(), buttons.size())
+	for i: int in range(shown):
 		var upgrade: Dictionary = upgrades[i]
 		var button_text: String = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
 		if upgrade["tradeoff"]:
@@ -1032,6 +1039,8 @@ func show_leg_complete_with_upgrades(leg: int, target: int, turns_used: int, upg
 			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
 		buttons[i].mouse_entered.connect(_on_upgrade_hover.bind(i))
 		buttons[i].mouse_exited.connect(_on_upgrade_unhover)
+	for j: int in range(shown, buttons.size()):
+		buttons[j].visible = false
 
 	upgrade_container.visible = true
 	next_leg_button.visible = false
@@ -1109,8 +1118,12 @@ func hide_score() -> void:
 func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
 	_preview_upgrades = upgrades
 	score_label.text = "Choose another upgrade!"
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(3):
+	# §5: render one card per offered upgrade, up to the available buttons (4 incl. the Pool
+	# Widener card), then hide the rest — so a widened accuracy event (3+1) surfaces its 4th option
+	# instead of being silently dropped, and an un-widened 3-pick hides the 4th.
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3, upgrade_button_4]
+	var shown: int = mini(upgrades.size(), buttons.size())
+	for i: int in range(shown):
 		var upgrade: Dictionary = upgrades[i]
 		var button_text: String = "%s\n%s\n+%d" % [upgrade["rarity"], upgrade["name"], upgrade["value"]]
 		if upgrade["tradeoff"]:
@@ -1119,6 +1132,7 @@ func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
 		var color: Color = upgrade["color"]
 		buttons[i].self_modulate = Color(color.r, color.g, color.b, 1.0)
 		buttons[i].tooltip_text = upgrade["description"]
+		buttons[i].visible = true
 
 		# Connect hover preview signals (disconnect any previous connections) so the
 		# stat bars live-preview the trade while hovering — same wiring as the shop
@@ -1130,6 +1144,8 @@ func show_upgrade_choices(upgrades: Array[Dictionary]) -> void:
 			buttons[i].mouse_exited.disconnect(_on_upgrade_unhover)
 		buttons[i].mouse_entered.connect(_on_upgrade_hover.bind(i))
 		buttons[i].mouse_exited.connect(_on_upgrade_unhover)
+	for j: int in range(shown, buttons.size()):
+		buttons[j].visible = false
 	upgrade_container.visible = true
 	next_leg_button.visible = false
 
@@ -1933,8 +1949,8 @@ func show_modifier_choices_with_replacement(modifiers: Array, replacement_info: 
 	_modifier_mode = true
 	_preview_upgrades.clear()
 	score_label.text = "Choose a scoring modifier!"
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(3):
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3, upgrade_button_4]
+	for i: int in range(buttons.size()):
 		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
 			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
 		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
@@ -1966,8 +1982,8 @@ func show_reward_choices(rewards: Array[RuleModifierReward]) -> void:
 	_skip_modifier_button.visible = false
 	_preview_upgrades.clear()
 	score_label.text = "Choose a boss reward!"
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(3):
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3, upgrade_button_4]
+	for i: int in range(buttons.size()):
 		if buttons[i].mouse_entered.is_connected(_on_upgrade_hover):
 			buttons[i].mouse_entered.disconnect(_on_upgrade_hover)
 		if buttons[i].mouse_exited.is_connected(_on_upgrade_unhover):
@@ -2086,7 +2102,7 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 		else:
 			_preview_upgrades.append({})
 
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3, upgrade_button_4]
 	# Show one button per offered pick, up to the available buttons (3) so Pool Widener's
 	# extra shop pick (shop_pick_count > 2) surfaces instead of being silently dropped.
 	var shown: int = mini(items.size(), buttons.size())
@@ -2143,8 +2159,8 @@ func show_shop_pick_items(items: Array[Dictionary], darts_remaining: int, replac
 func show_streak_replace_chooser(new_modifier: ScoringModifier, conflicts: Array) -> void:
 	_streak_replace_mode = true
 	score_label.text = "Replace which streak with %s?" % new_modifier.modifier_name
-	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3]
-	for i: int in range(3):
+	var buttons: Array[Button] = [upgrade_button_1, upgrade_button_2, upgrade_button_3, upgrade_button_4]
+	for i: int in range(buttons.size()):
 		if i < conflicts.size():
 			var existing: ScoringModifier = conflicts[i] as ScoringModifier
 			buttons[i].text = "%s\n%s" % [existing.modifier_name, existing.description]

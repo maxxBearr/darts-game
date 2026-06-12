@@ -23,6 +23,7 @@ func _init() -> void:
 	_test_icons_wired()
 	_test_brush_rulings()
 	_test_brush_main_source()
+	_test_accuracy_suppressed()
 	print("\nTypedShop test: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -142,6 +143,29 @@ func _test_icons_wired() -> void:
 	_check(EventFamilyIcons.key_for_family(ScoringEnums.Family.NONE) == &"", "NONE → empty key (no icon)", -1)
 	# A challenge reward (SCORING/STREAK) resolves to a real texture via the map.
 	_check(fi.texture_for(EventFamilyIcons.key_for_family(ScoringEnums.Family.STREAK)) != null, "challenge STREAK reward resolves to a texture", -1)
+
+
+## §4 suppress-accuracy: the Tunnel Vision relic zeroes &"accuracy" in the shop family weights
+## (main._effective_shop_family_weights). With that weight at 0, NO accuracy spot ever rolls across
+## a seed grid (a distribution check, not just membership), and the other four families still fill
+## the shop. This is the exact dict the shop roll site feeds ShopSpotGenerator post-suppression.
+func _test_accuracy_suppressed() -> void:
+	print("— Suppress-accuracy: zeroed accuracy weight ⇒ no accuracy spot across seeds")
+	var suppressed: Dictionary = {&"scoring": 1.0, &"streak": 1.0, &"accuracy": 0.0, &"geometry": 1.0, &"brush": 1.0}
+	var seen: Dictionary = {}
+	var accuracy_spots: int = 0
+	for s: int in range(SEEDS):
+		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+		rng.seed = s * 17 + 7
+		var spots: Array[Dictionary] = ShopSpotGenerator.generate(10, suppressed, rng)
+		for spot: Dictionary in spots:
+			var fam: StringName = spot["family"]
+			seen[fam] = true
+			if fam == &"accuracy":
+				accuracy_spots += 1
+	_check(accuracy_spots == 0, "no accuracy spots when suppressed (got %d over %d seeds)" % [accuracy_spots, SEEDS], -1)
+	for fam: StringName in [&"scoring", &"streak", &"geometry", &"brush"]:
+		_check(seen.has(fam), "non-suppressed family %s still rolls" % fam, -1)
 
 
 ## Brush rulings (spec §5 + the 2026-06-08 follow-ups): brush is UNGATED (rolls with no owned

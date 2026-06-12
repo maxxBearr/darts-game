@@ -18,8 +18,9 @@ var act: int = 0                  ## which act this node sits in (0-based)
 var target_score: int = 0         ## what x01_game.target_score becomes on arrival
 ## A leg is defined by its turn budget, NOT a stored dart total. The fronted-darts
 ## *concept* — the leg's dart budget — is the derived quantity max_turns ×
-## x01_game.darts_per_turn, computed live so power items that raise darts_per_turn
-## (e.g. extra_dart_reward) correctly *add* darts instead of shrinking the budget.
+## x01_game.darts_per_turn, computed live so anything that changes darts_per_turn
+## (e.g. a boss's dart-count handicap) correctly *adjusts* the budget instead of
+## desyncing it. (The old extra_dart reward that raised this run-wide was cut, §2.)
 ## See specs/map/01-substrate-slice2-impl.md §3.
 var max_turns: int = 5            ## what x01_game.max_turns becomes on arrival
 

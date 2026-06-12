@@ -80,6 +80,21 @@ const RING_ORDER: Array[String] = ["inner_single", "triple", "outer_single", "do
 ## 18° by Parity Shift. Clamped last, then renormalized to 360°. Max's call to tune.
 @export var wedge_angle_floor: float = 0.45
 
+## Geometric per-stack decay for STACKED geometry items (§1). The same fingerprint can now be
+## acquired more than once; same-fingerprint stacks are aggregated here and the cumulative
+## magnitude decays so it asymptotes instead of compounding linearly (stack k contributes
+## base × decay^(k-1)). 0.65 ⇒ a Color Territory stack tops out near +86%. See GeometrySolver.
+## decayed_cumulative. The band/angle floors above remain the hard backstop. Max's call to tune.
+@export var geometry_stack_decay: float = 0.65
+
+## §1 offer-side soft cap. main's geometry pick gates off an entry once one more copy's marginal
+## effect falls below this FRACTION of a first copy's effect (decay^owned < epsilon) — i.e. the
+## next stack is near-inert, so re-offering it would ship a dead card. Scale-free so it gates the
+## three geometry magnitudes (dial / color growth / parity excess) uniformly despite their
+## different units. 0.05 ⇒ offered until a new stack is under ~5% as strong as the first (≈7
+## stacks at decay 0.65). The decay curve + this epsilon self-limit; no hard stack count needed.
+@export var geometry_stack_offer_epsilon: float = 0.05
+
 ## Segments voided by a boss this turn, keyed "<wedge_index>:<RingName>" (e.g.
 ## "3:Double"). A voided segment scores 0 no matter what modifiers would do to it.
 ## The Void boss sets this each turn; whole-void wedges (value zeroed) are included
@@ -219,20 +234,51 @@ func _init_default_board_state() -> void:
 ## per-wedge color scaling, then parity weights — weights are multiplicative so the order is
 ## irrelevant; floors are clamped last.
 func recompute_geometry() -> void:
-	# 1. Accumulate the active geometry rules off active_modifiers (run-scoped, so they persist
-	#    across legs — the family never lives in a leg-end reset path).
-	var dial: float = 0.0  # signed triple↔double width shift, summed across Ring Trade stacks.
-	var color_rules: Array[Dictionary] = []   # {color:int, growth:float}
-	var parity_rules: Array[Dictionary] = []  # {even:bool, factor:float}
+	# 1. Accumulate the active geometry rules off active_modifiers, AGGREGATING same-fingerprint
+	#    stacks under geometric per-stack decay (§1) so cumulative effect asymptotes instead of
+	#    compounding linearly. Group by the pool-facing fingerprint (Ring Trade direction / Color
+	#    Territory color / Parity Shift parity); each group folds to ONE decayed magnitude the
+	#    solver applies once. (run-scoped, so they persist across legs — the family never lives in
+	#    a leg-end reset path.)
+	var ring_mags: Dictionary = {}    # "WT"/"WD" -> Array of |triple_shift| per stack
+	var color_mags: Dictionary = {}   # color int -> Array of growth_factor per stack
+	var parity_mags: Dictionary = {}  # "E"/"O" -> Array of (weight_factor − 1) per stack
 	for m: Resource in active_modifiers:
 		if m is RingTradeModifier:
-			dial += (m as RingTradeModifier).triple_shift
+			var rt: RingTradeModifier = m as RingTradeModifier
+			var rkey: String = "WT" if rt.triple_shift >= 0.0 else "WD"
+			if not ring_mags.has(rkey):
+				ring_mags[rkey] = []
+			ring_mags[rkey].append(absf(rt.triple_shift))
 		elif m is ColorTerritoryModifier:
 			var ct: ColorTerritoryModifier = m as ColorTerritoryModifier
-			color_rules.append({"color": int(ct.target_color), "growth": ct.growth_factor})
+			var ckey: int = int(ct.target_color)
+			if not color_mags.has(ckey):
+				color_mags[ckey] = []
+			color_mags[ckey].append(ct.growth_factor)
 		elif m is ParityShiftModifier:
 			var ps: ParityShiftModifier = m as ParityShiftModifier
-			parity_rules.append({"even": ps.grow_even, "factor": ps.weight_factor})
+			var pkey: String = "E" if ps.grow_even else "O"
+			if not parity_mags.has(pkey):
+				parity_mags[pkey] = []
+			parity_mags[pkey].append(ps.weight_factor - 1.0)
+
+	# Fold each group to a single decayed magnitude. Ring Trade: a signed dial (Wide-Triple
+	# positive, Wide-Double negative) — opposite directions still net to base, since each side
+	# decays independently and then subtracts. Color: one rule per color at the decayed cumulative
+	# growth (so N copies asymptote, not (1+g)^N). Parity: decay the EXCESS over 1.0 (a factor
+	# asymptotes toward a ceiling, not toward 0), then re-add the 1.0.
+	var dial: float = 0.0  # signed triple↔double width shift, decayed-summed across Ring Trade stacks.
+	if ring_mags.has("WT"):
+		dial += GeometrySolver.decayed_cumulative(ring_mags["WT"], geometry_stack_decay)
+	if ring_mags.has("WD"):
+		dial -= GeometrySolver.decayed_cumulative(ring_mags["WD"], geometry_stack_decay)
+	var color_rules: Array[Dictionary] = []   # {color:int, growth:float}
+	for ckey: int in color_mags:
+		color_rules.append({"color": ckey, "growth": GeometrySolver.decayed_cumulative(color_mags[ckey], geometry_stack_decay)})
+	var parity_rules: Array[Dictionary] = []  # {even:bool, factor:float}
+	for pkey: String in parity_mags:
+		parity_rules.append({"even": pkey == "E", "factor": 1.0 + GeometrySolver.decayed_cumulative(parity_mags[pkey], geometry_stack_decay)})
 
 	# 2–3. Delegate the zero-sum reshape MATH to the pure GeometrySolver (headless-testable; no
 	#       autoload deps). It folds the dial, per-wedge color scaling, and parity weights, clamps
@@ -297,17 +343,37 @@ func _rebuild_fatness_cache() -> void:
 		_fatness_cache.append(entry)
 
 
-## Active geometry rules for the board studs (one stud per rule). Returns {name, summary,
-## modifier} entries in acquisition order; summary is a live one-line effect description.
+## Active geometry rules for the board studs. Returns {name, summary, modifier, count} entries in
+## first-acquisition order; summary is a live one-line effect description. §1: stacked copies of
+## the same fingerprint collapse to ONE stud carrying a ×N count and the live CUMULATIVE (decayed)
+## effect — not N separate studs (geometry spec §5).
 func get_active_geometry_rules() -> Array[Dictionary]:
 	var rules: Array[Dictionary] = []
+	var index_by_fp: Dictionary = {}   # fingerprint -> index into rules (first-seen order)
+	var counts: Dictionary = {}        # fingerprint -> stack count
 	for m: Resource in active_modifiers:
-		if m is RingTradeModifier or m is ColorTerritoryModifier or m is ParityShiftModifier:
-			rules.append({
-				"name": (m as ScoringModifier).modifier_name,
-				"summary": _geometry_rule_summary(m),
-				"modifier": m,
-			})
+		if not (m is RingTradeModifier or m is ColorTerritoryModifier or m is ParityShiftModifier):
+			continue
+		var fp: String = (m as ScoringModifier).get_config_fingerprint()
+		if index_by_fp.has(fp):
+			counts[fp] = int(counts[fp]) + 1
+			continue
+		index_by_fp[fp] = rules.size()
+		counts[fp] = 1
+		rules.append({
+			"name": (m as ScoringModifier).modifier_name,
+			"summary": "",          # filled below once the stack count is known
+			"modifier": m,
+			"fingerprint": fp,
+		})
+	# Second pass: live cumulative summary + a ×N suffix on the name once the counts are known.
+	for entry: Dictionary in rules:
+		var fp: String = entry["fingerprint"]
+		var n: int = int(counts[fp])
+		entry["count"] = n
+		entry["summary"] = _geometry_rule_summary(entry["modifier"], n)
+		if n > 1:
+			entry["name"] = "%s ×%d" % [entry["name"], n]
 	return rules
 
 
@@ -331,20 +397,34 @@ func get_active_board_rules() -> Array[Dictionary]:
 	return rules
 
 
-## A short live-effect summary string for a geometry rule's stud tooltip.
-func _geometry_rule_summary(m: Resource) -> String:
+## A short live-effect summary string for a geometry rule's stud tooltip. `stack_count` folds in
+## the §1 decay so a stacked stud reads its true CUMULATIVE effect (e.g. "Grow Red ×3 — red bands
+## +71%"), matching exactly what recompute_geometry hands the solver.
+func _geometry_rule_summary(m: Resource, stack_count: int = 1) -> String:
 	if m is RingTradeModifier:
-		var s: float = (m as RingTradeModifier).triple_shift
-		if s >= 0.0:
-			return "Triples +%.0f%% width, doubles pay" % (s / GEOM_TRIPLE_BASE_WIDTH * 100.0)
-		return "Doubles +%.0f%% width, triples pay" % (absf(s) / GEOM_DOUBLE_BASE_WIDTH * 100.0)
+		var base: float = absf((m as RingTradeModifier).triple_shift)
+		var cum: float = GeometrySolver.decayed_cumulative(_repeat_magnitude(base, stack_count), geometry_stack_decay)
+		if (m as RingTradeModifier).triple_shift >= 0.0:
+			return "Triples +%.0f%% width, doubles pay" % (cum / GEOM_TRIPLE_BASE_WIDTH * 100.0)
+		return "Doubles +%.0f%% width, triples pay" % (cum / GEOM_DOUBLE_BASE_WIDTH * 100.0)
 	if m is ColorTerritoryModifier:
 		var ct: ColorTerritoryModifier = m as ColorTerritoryModifier
-		return "%s bands +%.0f%%" % [ct.get_color_name(), ct.growth_factor * 100.0]
+		var cum_g: float = GeometrySolver.decayed_cumulative(_repeat_magnitude(ct.growth_factor, stack_count), geometry_stack_decay)
+		return "%s bands +%.0f%%" % [ct.get_color_name(), cum_g * 100.0]
 	if m is ParityShiftModifier:
 		var ps: ParityShiftModifier = m as ParityShiftModifier
-		return "%s wedges ×%.2f angular" % ["Even" if ps.grow_even else "Odd", ps.weight_factor]
+		var cum_f: float = 1.0 + GeometrySolver.decayed_cumulative(_repeat_magnitude(ps.weight_factor - 1.0, stack_count), geometry_stack_decay)
+		return "%s wedges ×%.2f angular" % ["Even" if ps.grow_even else "Odd", cum_f]
 	return ""
+
+
+## Build a list of `count` copies of `value` (≥1) — the per-stack magnitudes a uniform geometry
+## stack feeds GeometrySolver.decayed_cumulative for a cumulative-effect readout.
+func _repeat_magnitude(value: float, count: int) -> Array:
+	var a: Array = []
+	for _i: int in range(maxi(count, 1)):
+		a.append(value)
+	return a
 
 
 ## Run a raw score result through all active PER_DART modifiers.

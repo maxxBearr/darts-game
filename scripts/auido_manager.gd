@@ -20,6 +20,16 @@ const PITCH_TWEEN_DURATION: float = 0.4
 const PITCH_TWEEN_DURATION_LONG: float = 1.5
 const MUSIC_SILENT_DB: float = -40.0
 
+@export_group("Per-turn Tension Pitch")
+## Music pitch at the START of a leg (turn 1), before any turn-end tension drop. The leg-won
+## reset also returns the pitch here (via on_leg_won → 1.0); keep them aligned if you retune.
+@export var turn_pitch_start: float = 1.0
+## Music pitch reached by the leg's FINAL turn — the bottom of the tension descent. Lower =
+## more dread as darts run out. The old hand-tuned table bottomed near here (~0.70) after a
+## 5-turn leg; this value is now hit at the last turn for ANY turn count (dynamic legs +
+## challenge races included), instead of a fixed 4-entry delta table that no-op'd past turn 4.
+@export var turn_pitch_floor: float = 0.70
+
 var _music_tween: Tween = null
 var _pitch_tween: Tween = null
 
@@ -151,17 +161,20 @@ func transition_to_menu_music() -> void:
 	_music_tween.tween_callback(game_music.stop)
 
 
-func on_turn_ended(turn_number: int) -> void:
-	var delta: float
-	if turn_number ==1:
-		delta = -0.06
-	if turn_number ==2:
-		delta = -0.07
-	elif turn_number == 3:
-		delta = -0.08
-	elif turn_number ==4:
-		delta = -0.09
-	_tween_game_pitch(game_music.pitch_scale + delta)
+## Drop the music pitch a notch as a turn ends, scaling the descent to the leg's length so
+## tension peaks on the final turn regardless of how many turns there are. `turn_number` is
+## the turn that just finished (1-based); `max_turns` is the leg/race ceiling. The pitch is
+## computed as an ABSOLUTE target (not an accumulated delta) by lerping turn_pitch_start →
+## turn_pitch_floor across the turns: progress = turn_number / (max_turns − 1), so the floor
+## lands as the player enters their last turn. Replaces the old fixed delta table, which
+## stopped dropping past turn 4 and ignored dynamic turn counts (legs + challenge races).
+func on_turn_ended(turn_number: int, max_turns: int) -> void:
+	# (max_turns − 1) steps carry the descent: the last turn-end (entering the final turn)
+	# reaches the floor. Guard short legs (max_turns ≤ 1) so we never divide by zero.
+	var steps: float = float(maxi(max_turns - 1, 1))
+	var progress: float = clampf(float(turn_number) / steps, 0.0, 1.0)
+	var target_pitch: float = lerpf(turn_pitch_start, turn_pitch_floor, progress)
+	_tween_game_pitch(target_pitch)
 
 
 func on_shop_entered() -> void:

@@ -6,4 +6,6 @@
 script = ExtResource("1")
 reward_id = &"pool_widener"
 display_name = "Pool Widener"
-description = "Shops show +1 option per pool."
+description = "+1 option on every choice surface (shop, events, challenge rewards)."
+stackable = true
+shop_eligible = true

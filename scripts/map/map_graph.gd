@@ -660,9 +660,17 @@ func _place_one_branch(act: int, stretches: Array, lane: int, run_state: Diction
 ## concrete options are rolled at arrival (events slice), so only the family — the routed map
 ## icon — is fixed here. Roll the family off the COSMETIC sub-RNG so family changes never
 ## perturb the structural _rng stream (which would reshape the generated map).
-func _roll_event_node(_run_state: Dictionary) -> EventNode:
+func _roll_event_node(run_state: Dictionary) -> EventNode:
 	var e: EventNode = EventNode.new()
 	var families: Array[StringName] = [&"accuracy", &"brush", &"geometry"]
+	# §4: drop any run-suppressed family from the roll (Tunnel Vision strikes &"accuracy", so
+	# events collapse to brush+geometry — the two trade families that feed each other). Generic so
+	# a future relic can suppress another; never let the list empty out (keep geometry as the floor).
+	var suppressed: Array = run_state.get("suppressed_families", [])
+	for fam: StringName in suppressed:
+		families.erase(fam)
+	if families.is_empty():
+		families = [&"geometry"]
 	if _family_rng == null:
 		_family_rng = RandomNumberGenerator.new()
 		_family_rng.seed = _rng.seed ^ 0x9E3779B9  # read-only on _rng — doesn't consume its state.
@@ -1028,6 +1036,22 @@ func _act_floor(act: int) -> int:
 	if act == 0:
 		return _starting_target
 	return _act_ceiling(act - 1, _max_target, _starting_target, _target_increment) + _target_increment
+
+
+## The ordered act-ceiling tiers a level's consolidated run ramps through — e.g. a 1501/3-act run
+## yields [501, 1001, 1501]. Static so the home/records UI can list the tiers without building a
+## graph; mirrors _act_ceiling's interpolation + X01 snap exactly. Run-consolidation spec 2026-06-12.
+static func act_ceilings(level: LevelDefinition, starting_target: int = 101, target_increment: int = 100) -> Array[int]:
+	var out: Array[int] = []
+	var acts_n: int = maxi(level.boss_count if level != null else 1, 1)
+	var max_t: int = level.max_score_target if level != null else 501
+	for a: int in range(acts_n):
+		var raw: float = float(max_t) * float(a + 1) / float(acts_n)
+		var n: int = int(round((raw - float(starting_target)) / float(target_increment)))
+		if n < 0:
+			n = 0
+		out.append(starting_target + n * target_increment)
+	return out
 
 
 ## Act ceiling = the area's highest required score, snapped to X01 parity. For a

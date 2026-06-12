@@ -103,11 +103,13 @@ func _build_ui() -> void:
 	button_container.size = Vector2(button_width, total_button_height)
 	add_child(button_container)
 
-	_assembly_button = _create_menu_button("Return to Assembly", Color(0.3, 0.5, 1.0))
+	# Run-consolidation spec 2026-06-12: one continuous run, so "Play Again" rebuilds a fresh
+	# dart for a new run, and the old "Level Select" slot now opens the persistent Records screen.
+	_assembly_button = _create_menu_button("Play Again", Color(0.3, 0.5, 1.0))
 	_assembly_button.pressed.connect(func() -> void: return_to_assembly_pressed.emit())
 	button_container.add_child(_assembly_button)
 
-	_level_select_button = _create_menu_button("Level Select", Color(0.3, 0.7, 0.4))
+	_level_select_button = _create_menu_button("Records", Color(0.3, 0.7, 0.4))
 	_level_select_button.pressed.connect(func() -> void: return_to_level_select_pressed.emit())
 	button_container.add_child(_level_select_button)
 

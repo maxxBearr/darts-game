@@ -4,6 +4,7 @@ extends Control
 ## Provides entry points to Start Game, Play Tutorial, and Rules of Darts.
 
 signal start_game_pressed
+signal records_pressed
 signal play_tutorial_pressed
 signal stats_walkthrough_pressed
 signal rules_pressed
@@ -47,6 +48,7 @@ signal stats_reference_pressed
 
 var _title_label: Label
 var _start_button: Button
+var _records_button: Button
 var _tutorial_button: Button
 var _rules_button: Button
 var _stats_button: Button
@@ -82,11 +84,12 @@ func _build_ui() -> void:
 	_title_label.position = Vector2(0.0, title_y)
 	add_child(_title_label)
 
-	# Button container
+	# Button container. Four main buttons now (Play, Records, Tutorial, Rules) plus the smaller
+	# Stats Reference link — size the column for the four full-height buttons.
 	var button_container: VBoxContainer = VBoxContainer.new()
 	button_container.add_theme_constant_override("separation", int(button_spacing))
 	button_container.alignment = BoxContainer.ALIGNMENT_CENTER
-	var total_button_height: float = button_height * 3.0 + button_spacing * 2.0
+	var total_button_height: float = button_height * 4.0 + button_spacing * 3.0
 	button_container.position = Vector2(
 		(viewport_size.x - button_width) / 2.0,
 		buttons_center_y - total_button_height / 2.0
@@ -94,10 +97,16 @@ func _build_ui() -> void:
 	button_container.size = Vector2(button_width, total_button_height)
 	add_child(button_container)
 
-	# Start Game button
-	_start_button = _create_menu_button("Start Game", Color(0.2, 0.7, 0.3))
+	# Play button — launches the one continuous run straight into dart assembly (run-consolidation
+	# spec 2026-06-12: no more level select; 501→1001→1501 is the act ramp within a single run).
+	_start_button = _create_menu_button("Play", Color(0.2, 0.7, 0.3))
 	_start_button.pressed.connect(func() -> void: start_game_pressed.emit())
 	button_container.add_child(_start_button)
+
+	# Records button — opens the persistent benchmark screen (the repurposed level-select surface).
+	_records_button = _create_menu_button("Records", Color(0.3, 0.7, 0.4))
+	_records_button.pressed.connect(func() -> void: records_pressed.emit())
+	button_container.add_child(_records_button)
 
 	# Play Tutorial button — opens a sub-menu chooser
 	_tutorial_button = _create_menu_button("Play Tutorial", Color(0.3, 0.5, 1.0))

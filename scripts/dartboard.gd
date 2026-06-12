@@ -341,6 +341,10 @@ var _segment_picker_hover_ring: String = ""
 ## painted shader is a visual-polish follow-up.)
 @export var shop_color_brush: Color = Color(0.30, 0.68, 0.62, 0.8)
 
+## §6: fill color for the gold RELIC spot drawn on the bull (the premium relic channel). Reuses the
+## flat-fill spot treatment — relics aren't rarity-laddered — tinted gold so it reads as a treat.
+@export var shop_color_relic: Color = Color(1.0, 0.82, 0.20, 0.85)
+
 ## Pixel size of the family icon drawn centered on each lit spot (scaled down for thin rings).
 @export var shop_icon_size: float = 26.0
 
@@ -362,6 +366,11 @@ var _tutorial_highlight_active: bool = false
 # Shop lit-spot state
 var _shop_spots: Array[Dictionary] = []
 var _shop_active: bool = false
+
+## §6: when true, the gold RELIC spot is lit on the bull (a separate slot from the family lit
+## spots). Drawn as a flat gold fill over the whole bull with the relic glyph; the shop-throw
+## resolver claims it on a bull hit. Cleared when the relic is bought or the shop ends.
+var _relic_spot_active: bool = false
 
 ## Ring name to inner/outer normalized radii mapping for segment drawing.
 const RING_BOUNDS: Dictionary = {
@@ -1698,6 +1707,7 @@ const _SHOP_FAMILY_ICONS: Dictionary = {
 	&"accuracy": preload("res://sprites/Icons/accuracyIcon.png"),
 	&"geometry": preload("res://sprites/Icons/geoItems.png"),
 	&"brush": preload("res://sprites/Icons/brush.png"),
+	&"relic": preload("res://sprites/Icons/boss_reward.png"),  # §6 gold bull relic glyph.
 }
 
 
@@ -1756,10 +1766,19 @@ func set_shop_spots(spots: Array[Dictionary]) -> void:
 func clear_shop_spots() -> void:
 	_shop_spots.clear()
 	_shop_active = false
+	_relic_spot_active = false
 	_shop_dissolve_active = false
 	_shop_dissolve_spot = {}
 	_shop_overlay.queue_redraw()
 	_shop_dissolve_overlay.queue_redraw()
+	queue_redraw()
+
+
+## §6: light or extinguish the gold RELIC spot on the bull. main rolls the relic and toggles this
+## per shop; a bull hit during the shop claims it (main._resolve_shop_impact) and clears it.
+func set_relic_spot(active: bool) -> void:
+	_relic_spot_active = active
+	_shop_overlay.queue_redraw()
 	queue_redraw()
 
 
@@ -1837,6 +1856,21 @@ func _draw_shop_overlay() -> void:
 
 		# Family icon "melted" onto the spot (re-derived here so it tracks reflows, §4a).
 		_draw_shop_icon(_shop_overlay, spot, inner_norm, outer_norm)
+
+	# §6 gold relic spot — a flat gold fill over the WHOLE bull (claim target = single + double
+	# bull) with the relic glyph centered. Reads the DRAW bull radius so it tracks Bigger-Bull
+	# reflows like every other region-attached visual.
+	if _relic_spot_active:
+		var bull_norm: float = _single_bull_draw()
+		var bull_px: float = board_radius * bull_norm
+		var r_fill: Color = Color(shop_color_relic.r, shop_color_relic.g, shop_color_relic.b, shop_fill_alpha)
+		var r_border: Color = Color(shop_color_relic.r, shop_color_relic.g, shop_color_relic.b, shop_border_alpha)
+		_shop_overlay.draw_circle(Vector2.ZERO, bull_px, r_fill)
+		_shop_overlay.draw_polyline(_make_circle_points(bull_norm), r_border, shop_border_thickness)
+		var relic_tex: Texture2D = _SHOP_FAMILY_ICONS.get(&"relic", null)
+		if relic_tex != null:
+			var rsz: float = minf(shop_icon_size, maxf(bull_px * 1.6, 8.0))
+			_shop_overlay.draw_texture_rect(relic_tex, Rect2(Vector2(-rsz, -rsz) * 0.5, Vector2(rsz, rsz)), false)
 
 
 ## Draw the dissolving shop spot on its own overlay (separate shader with dissolve uniforms).

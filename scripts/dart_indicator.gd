@@ -63,6 +63,10 @@ const POINT_TEX: Texture2D = preload("res://sprites/point.png")
 ## Header text drawn above the fronted rows (the leg's granted darts). Permanent — drawn
 ## whenever the leg rail is (shop mode swaps to the simple stack, which omits it).
 @export var fronted_label_text: String = "FRONTED DARTS"
+## Header text used INSTEAD of fronted_label_text while a challenge wager is active (the
+## rail is showing a staked deposit, not granted darts). Swapped in automatically whenever
+## a dart budget is set (_dart_budget > 0) and reverts once the budget clears. §Phase 02.
+@export var wagered_label_text: String = "WAGERED DARTS"
 ## Font size of the fronted-darts header. Scales down with the rest of the rail when a
 ## big bank forces the height-fit shrink.
 @export var fronted_label_font_size: int = 12
@@ -106,6 +110,11 @@ var _current_turn: int = 1
 var _darts_remaining: int = 3
 ## turn_number -> true for turns lost to a bust.
 var _busted_turns: Dictionary = {}
+## Total darts the rail may render across all rows. 0 = legacy: every row is full, so the
+## budget is implicitly _max_turns × _max_darts. > 0 (challenge wagers) caps the total, so
+## the final row is partial when the wager isn't a clean multiple of darts-per-turn — e.g.
+## budget 7, dpt 2 draws rows [2][2][2][1] rather than a phantom 8th dart. See set_dart_budget.
+var _dart_budget: int = 0
 
 # --- Cache state ---
 var _banked_darts: int = 0
@@ -163,6 +172,35 @@ var _nat: Vector2 = Vector2(1.0, 1.0)
 func set_max_darts(count: int) -> void:
 	_max_darts = maxi(count, 1)
 	queue_redraw()
+
+
+## Set the total dart budget the rail may render (a challenge wager). 0 restores legacy
+## full-row behaviour (budget = _max_turns × _max_darts). A positive budget caps the total
+## so the final row renders partial, and also flips the rail header to wagered_label_text.
+func set_dart_budget(count: int) -> void:
+	_dart_budget = maxi(count, 0)
+	queue_redraw()
+
+
+## True when a per-cell index is within the active dart budget. Cells fill row-major
+## (turn 1's darts first), so cell (turn_number, dart_index) has linear index
+## (turn_number − 1) × _max_darts + dart_index. Legacy mode (_dart_budget == 0) draws every
+## cell; a wager budget drops cells past the staked total so the last row goes partial.
+func _cell_in_budget(turn_number: int, dart_index: int) -> bool:
+	if _dart_budget <= 0:
+		return true
+	var linear: int = (turn_number - 1) * _max_darts + dart_index
+	return linear < _dart_budget
+
+
+## How many darts the given turn (1-based) actually renders under the active budget — the
+## full _max_darts for every row except a partial final one. Used for the active outline and
+## the set-completion slash so they span only the cells that exist.
+func _darts_in_turn(turn_number: int) -> int:
+	if _dart_budget <= 0:
+		return _max_darts
+	var before: int = (turn_number - 1) * _max_darts
+	return clampi(_dart_budget - before, 0, _max_darts)
 
 
 ## How many darts are still in hand this turn (drives spent vs. active within the set).
@@ -261,6 +299,8 @@ func _bankable_front_cells() -> Array:
 	var used_in_current: int = _max_darts - _darts_remaining
 	for t: int in range(_max_turns, _current_turn - 1, -1):
 		for d: int in range(_max_darts - 1, -1, -1):
+			if not _cell_in_budget(t, d):
+				continue  # phantom cell past a wager budget — nothing to bank
 			if t == _current_turn and d < used_in_current:
 				continue  # already thrown this turn — stays as a spent dart
 			cells.append({"t": t, "d": d})
@@ -542,9 +582,10 @@ func _draw_rail() -> void:
 
 	var row_h: float = ih + sgap
 
-	# Permanent "FRONTED DARTS" header above the rail (the SAVED DARTS label's sibling) —
-	# names the leg's granted dart budget whenever the leg rail is visible.
-	draw_string(get_theme_default_font(), Vector2(0.0, tmarg + flsize), fronted_label_text,
+	# Header above the rail (the SAVED DARTS label's sibling) — names the leg's granted dart
+	# budget normally, or the staked wager during a challenge race (when _dart_budget is set).
+	var header_text: String = wagered_label_text if _dart_budget > 0 else fronted_label_text
+	draw_string(get_theme_default_font(), Vector2(0.0, tmarg + flsize), header_text,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(int(flsize), 8), fronted_label_color)
 
 	# Sets start below the header block.
@@ -575,6 +616,9 @@ func _draw_rail() -> void:
 		var active_rect: Rect2 = Rect2()
 		var has_active: bool = false
 		for d: int in range(_max_darts):
+			# Past the wager budget there is no dart here (partial final row) — skip it.
+			if not _cell_in_budget(turn_number, d):
+				continue
 			if erased.has(Vector2i(turn_number, d)):
 				continue
 			var x: float = d * (iw + dgap)
@@ -598,7 +642,8 @@ func _draw_rail() -> void:
 		# Set-completion slash (one-shot transition).
 		if _slash_progress.has(turn_number):
 			var p: float = _slash_progress[turn_number]
-			var set_w: float = _max_darts * (iw + dgap) - dgap
+			# Span only the darts that exist this row (partial final row under a wager).
+			var set_w: float = _darts_in_turn(turn_number) * (iw + dgap) - dgap
 			var sy: float = y + ih * 0.5
 			var start: Vector2 = Vector2(0.0, sy + ih * 0.4)
 			var cur_end: Vector2 = start.lerp(Vector2(set_w, sy - ih * 0.4), p)

@@ -94,6 +94,23 @@ static func recompute(dial: float, color_rules: Array, parity_rules: Array, wedg
 	return {"weights": weights, "bounds": bounds_out}
 
 
+## Geometric per-stack decay (§1 — the brake on runaway stacking). With n identical `base`
+## contributions the marginal effect of stack k is base × decay^(k-1), so the cumulative sum =
+## base × (1 − decay^n)/(1 − decay) and ASYMPTOTES (e.g. growth 0.30 at decay 0.65 tops out at
+## 0.30/(1−0.65) ≈ 0.857) — the existing band/angle floors are the hard backstop underneath.
+## Generalized to a list of (possibly unequal) per-stack magnitudes: sort descending so the
+## largest stack is undamped (decay^0) and extras taper. Pure + headless (the manager calls this
+## from its aggregation step; tests drive it directly). Returns the decayed cumulative magnitude.
+static func decayed_cumulative(magnitudes: Array, decay: float) -> float:
+	var sorted: Array = magnitudes.duplicate()
+	sorted.sort()
+	sorted.reverse()
+	var total: float = 0.0
+	for i: int in range(sorted.size()):
+		total += float(sorted[i]) * pow(decay, float(i))
+	return total
+
+
 ## Normalize to target_sum, clamp each element to floor_val, redistribute the deficit
 ## proportionally among above-floor elements so the sum stays target_sum. Identity (exact ratios)
 ## when no floor binds.

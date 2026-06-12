@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="TunnelVisionReward" format=3]
+
+[ext_resource type="Script" path="res://scripts/rewards/tunnel_vision_reward.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+reward_id = &"tunnel_vision"
+display_name = "Tunnel Vision"
+description = "Accuracy stops being offered. Every roll doubles down on board-shaping (brush + geometry)."
+is_trade = false

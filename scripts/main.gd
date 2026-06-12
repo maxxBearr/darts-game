@@ -69,7 +69,7 @@ var tutorial_callout: TutorialCallout
 var tutorial_controller: TutorialController
 var ghost_dart_layer: GhostDartLayer
 var game_over_screen: GameOverScreen
-var level_select: LevelSelectScreen
+var records_screen: RecordsScreen
 var boss_manager: BossManager
 var map_view: MapView
 var _challenge_entry_view: ChallengeEntryView
@@ -78,7 +78,13 @@ var _challenge_entry_view: ChallengeEntryView
 ## boss scheduling between encounters. Null outside a run. See specs/map/.
 var _map_graph: MapGraph = null
 
-## The level definition for the current run. Null during tutorial/legacy mode.
+## The single consolidated run definition (run-consolidation spec 2026-06-12). The old level
+## select is gone — Play always launches this one continuous run, whose three act ceilings
+## (501 / 1001 / 1501) are the ante ramp. Kept as a LevelDefinition so the existing map/boss/
+## rarity plumbing (which reads max_score_target / boss_count / boss_pool) is unchanged.
+const RUN_LEVEL: LevelDefinition = preload("res://resources/levels/level_1501.tres")
+
+## The level definition for the current run. Null during tutorial/menu; set to RUN_LEVEL on Play.
 var _current_level: LevelDefinition = null
 
 ## Whether the game is currently in tutorial sandbox mode.
@@ -346,6 +352,14 @@ var _shop_lit_spots: Array[Dictionary] = []
 ## Each entry: {type: "modifier"|"upgrade", data: ScoringModifier|Dictionary}
 var _shop_pick_items: Array[Dictionary] = []
 
+## §6 relic channel: the relic rolled onto the gold bull spot this shop (null = none rolled, or
+## the eligible pool is exhausted). Claimed when the player hits the bull during the shop.
+var _shop_relic_reward: RuleModifierReward = null
+
+## True while the player is claiming the bull relic — routes the reward_selected signal back to
+## the shop (via _on_reward_selected) instead of the boss-reward continuation.
+var _shop_relic_pending: bool = false
+
 @export_group("Shop")
 
 ## Extra lit spots beyond the dart count (breathing room for target choice).
@@ -376,8 +390,36 @@ var _default_shop_cadence: int
 ## When true, a free shop always appears after beating a boss (in addition to the reward pick).
 @export var shop_after_boss: bool = true
 
-## When true, shop only offers modifiers (no accuracy upgrades).
-var all_in_active: bool = false
+## §6: chance a shop also lights the gold RELIC spot on the bull — a SEPARATE slot from the
+## family lit spots, cap 1. When it doesn't roll, or every shop-eligible relic is already owned,
+## the bull stays dark (built-in exhaustion fallback). The relic costs one throw like any spot (no
+## premium price); its specialness is this scarcity plus run-definers staying boss-only.
+@export_range(0.0, 1.0, 0.05) var relic_spot_chance: float = 0.40
+
+## Minimum banked darts a bailout can fire on (§3). The full-strength bail (a whole extra turn)
+## is preferred whenever the bank can afford a turn's worth (darts_per_turn); below that — but at
+## or above this floor — the bank buys a SHORT rescue turn worth exactly the darts it pays (a 2/3
+## turn at the default), no free dart spawned. Below this floor no rescue is possible.
+@export var bailout_min_darts: int = 2
+
+## Families struck from the roll for the rest of the run (§4). Generic so any future relic can
+## suppress a family; today only the Tunnel Vision relic appends &"accuracy" (it removes accuracy
+## from the family roll entirely — events collapse to brush+geometry, the shop family weights drop
+## it). Both roll sites filter against this: _generate_shop_spots (shop) and MapGraph._roll_event_
+## node (events). Challenge rewards already never roll accuracy, so they're unaffected. Run-scoped.
+var suppressed_families: Array[StringName] = []
+
+## §6: whether the shop relic channel has been unlocked this run (by the Relic Subscription boss
+## reward). Until then _roll_shop_relic_spot leaves the gold bull spot dark, so a relic can never
+## appear before the player has beaten a boss — relics stay earned/premium. Runtime state (reset on
+## run start), not an export. See RelicSubscriptionReward.
+var _relic_shop_unlocked: bool = false
+
+## Global "+1 option on every choice surface" bonus (§5 — Pool Widener). A single run-scoped
+## integer added to every pick surface's option count: shop spots, events, challenge rewards, and
+## the per-leg upgrade pick. Stackable if Pool Widener is re-bought (§6) for a +2 ceiling. The
+## card UI renders up to its available buttons; a count past that is capped (see hud).
+var option_bonus: int = 0
 
 ## Duration of the board slide transition into/out of shop in seconds.
 @export var shop_transition_duration: float = 0.5
@@ -1005,6 +1047,11 @@ func _show_leg_upgrades(response: Dictionary) -> void:
 	# event family (brush) is only placed where its prereq holds — BEFORE the map is next
 	# shown. A challenge race is not a boss, so it never triggers this.
 	if _boss_leg_just_cleared and _map_graph != null:
+		# Benchmark (run-consolidation spec 2026-06-12): a NON-terminal act boss just fell, so its
+		# x01 tier (the boss leg target = act ceiling, 501 / 1001) is cleared. Record the clear with
+		# the cumulative darts taken so far this run (the terminal 1501 tier records in _show_run_won,
+		# which returns before this block).
+		PlayerProgress.record_tier_clear(int(response["target_score"]), _run_total_darts)
 		_map_graph.generate_next_act(_build_map_run_state())
 
 	# Accumulate this leg's unused darts into the persistent bank, trickling them
@@ -1086,7 +1133,8 @@ func _enter_event(node: MapNode) -> void:
 	_disable_hover()
 	# No affinity downgrade here (Max's ruling 2026-06-07): brush events are ungated — with no
 	# owned colors the picks simply roll from the full color pool, same as shop brush spots.
-	var option_count: int = node.event.option_count if node.event != null else 3
+	# §5: every pick surface widens by the run-scoped option_bonus (Pool Widener) — events included.
+	var option_count: int = (node.event.option_count if node.event != null else 3) + option_bonus
 	if family == &"brush":
 		_enter_brush_event(section, option_count)
 	elif family == &"geometry":
@@ -1118,20 +1166,44 @@ func _enter_geometry_event(option_count: int = 3) -> void:
 
 
 ## Draw `count` distinct of the eight rarity-less GEOMETRY pool entries (Ring Trade ×2, Color
-## Territory ×4, Parity Shift ×2). Distinctness is by config fingerprint (direction/color/parity),
-## and owned entries are skipped so a repeat isn't offered. No rarity field is set.
+## Territory ×4, Parity Shift ×2). Distinctness is by config fingerprint (direction/color/parity).
+## §1: geometry STACKS now — the across-runs owned-skip is GONE, so the same entry can be
+## re-offered and re-acquired to commit harder in one direction. WITHIN-draw distinctness still
+## holds (no entry twice in one pick). The soft cap is the per-stack decay curve plus an epsilon
+## gate: once one more copy's marginal effect drops below geometry_stack_offer_epsilon (relative to
+## a first copy: decay^owned) it's an inert card, so stop offering it — don't ship a dead offer.
 func _generate_geometry_event_picks(count: int) -> Array[Dictionary]:
 	var pool: Array[ScoringModifier] = ModifierRegistry.geometry_pool()
 	pool.shuffle()
-	var owned: Array[String] = _get_owned_fingerprints()
+	var counts: Dictionary = _owned_geometry_stack_counts()
+	var decay: float = scoring_modifier_manager.geometry_stack_decay
+	var epsilon: float = scoring_modifier_manager.geometry_stack_offer_epsilon
+	var shown_fps: Array[String] = []
 	var picks: Array[Dictionary] = []
 	for mod: ScoringModifier in pool:
 		if picks.size() >= count:
 			break
-		if mod.get_config_fingerprint() in owned:
+		var fp: String = mod.get_config_fingerprint()
+		if fp in shown_fps:
+			continue   # within-draw distinctness
+		# The next copy's marginal effect, as a fraction of a first copy's (geometric decay).
+		# Below epsilon it's near-inert — gate the dead offer off (the rolled-generator lesson).
+		if pow(decay, float(int(counts.get(fp, 0)))) < epsilon:
 			continue
+		shown_fps.append(fp)
 		picks.append({"type": "modifier", "data": mod})
 	return picks
+
+
+## Stack counts of owned geometry items keyed by config fingerprint (§1 — geometry stacks, so a
+## fingerprint can be owned more than once). Feeds the offer epsilon gate above.
+func _owned_geometry_stack_counts() -> Dictionary:
+	var counts: Dictionary = {}
+	for m: Resource in scoring_modifier_manager.active_modifiers:
+		if m is RingTradeModifier or m is ColorTerritoryModifier or m is ParityShiftModifier:
+			var fp: String = (m as ScoringModifier).get_config_fingerprint()
+			counts[fp] = int(counts.get(fp, 0)) + 1
+	return counts
 
 
 ## The accuracy event surface: 3 distinct stat-axis swing trades on the upgrade-card UI. The
@@ -1192,7 +1264,8 @@ func _enter_brush_event(section: int, option_count: int = 3) -> void:
 ## trades off the swing table (§3) via EventRewards; brush is handled at its own surface in
 ## _enter_brush_event, so this only builds accuracy.
 func _generate_event_picks(family: StringName, section: int) -> Array[Dictionary]:
-	return EventRewards.generate_accuracy_picks(UPGRADE_TYPES, section, _event_rng)
+	# §5: widen by option_bonus (Pool Widener); generate_accuracy_picks caps at the 6-axis pool.
+	return EventRewards.generate_accuracy_picks(UPGRADE_TYPES, section, _event_rng, 3 + option_bonus)
 
 
 ## The section-ramp rarity as a ScoringEnums.Rarity (for the brush modifier-pool draw).
@@ -1268,7 +1341,7 @@ func _on_next_turn() -> void:
 	hud.update_remaining(x01_game.remaining_score, x01_game.glass_cannon_active)
 	scoring_modifier_manager.reset_for_turn()
 	_clear_darts()
-	AuidoManager.on_turn_ended(x01_game.current_turn)
+	AuidoManager.on_turn_ended(x01_game.current_turn, x01_game.max_turns)
 	x01_game.end_turn()
 	x01_game.start_turn()
 	if boss_manager.is_boss_active():
@@ -1280,7 +1353,7 @@ func _on_next_turn() -> void:
 	if _challenge_handicap != null:
 		_challenge_handicap.on_turn_start(_build_game_state())
 		_sync_board_and_solver()
-	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
+	hud.update_turn(x01_game.current_turn, x01_game.max_turns, x01_game.dart_budget)
 	hud.update_streak_section(
 		scoring_modifier_manager.get_active_streak_modifiers(),
 		scoring_modifier_manager.effective_wedge_values
@@ -1539,7 +1612,8 @@ func _show_challenge_reward(family: ScoringEnums.Family, rarity: ScoringEnums.Ra
 	# events slice keeps the BRUSH/GEOMETRY *trades* on the free event surface (03 §1.2). The old
 	# empty-brush fallback is therefore dead — a challenge can never roll BRUSH. A STREAK draw is
 	# family-pure too: _generate_challenge_reward_picks offers one of each streak class (two picks).
-	var picks: Array[Dictionary] = _generate_challenge_reward_picks(family, rarity)
+	# §5: widen the earned reward surface by option_bonus too (default base is shop_pick_count).
+	var picks: Array[Dictionary] = _generate_challenge_reward_picks(family, rarity, shop_pick_count + option_bonus)
 	if picks.is_empty():
 		_finish_challenge_reward()
 		return
@@ -1640,9 +1714,13 @@ func _fail_challenge() -> void:
 ## Glass Cannon busts never bail — they end the run immediately. With 1-2 banked,
 ## no bailout is possible and the stranded darts are lost with the run.
 ##
-## Bailout-turn leftovers refund naturally: raising max_turns grows the leg's dart
-## budget by 3, so get_saved_darts() (max_turns*darts_per_turn - darts_used_in_leg)
-## returns the unused bailout darts back to the bank on the eventual leg win.
+## Bailout-turn leftovers refund naturally for BOTH strengths:
+##   • Full bail (raising max_turns) grows the legacy budget by darts_per_turn, so
+##     get_saved_darts() (max_turns*darts_per_turn - darts_used_in_leg) returns the unused
+##     bailout darts back to the bank on the eventual leg win.
+##   • Partial bail (the §3 floor) switches the leg onto the flat dart_budget seam and adds
+##     EXACTLY the darts paid, so get_saved_darts() (dart_budget - darts_used_in_leg) likewise
+##     returns any unused rescue dart — cost == darts added, the bank conserves exactly.
 func _try_bailout(response: Dictionary, score_tween: Tween) -> bool:
 	# A challenge race is a fixed wager — its budget can't be topped up. Never bail (the
 	# loss must forfeit the deposit and continue the run, handled by _fail_challenge). §9/§11.
@@ -1651,18 +1729,33 @@ func _try_bailout(response: Dictionary, score_tween: Tween) -> bool:
 	# Glass Cannon busts end the run immediately — never bail.
 	if response["is_bust"] and x01_game.glass_cannon_active:
 		return false
-	if _banked_darts < x01_game.darts_per_turn:
+	# The floor (§3): below bailout_min_darts the bank can't even buy a short rescue turn.
+	if _banked_darts < bailout_min_darts:
 		return false
 
-	# Cost is one turn's worth of darts (darts_per_turn, not a hardcoded 3) so the
-	# refund stays exact when a relic changes the turn size: raising max_turns grows
-	# the budget by darts_per_turn, matching what we spend here. The bank/ceiling
-	# mutation happens now (the caller's branch depends on it), but the rescue banner
-	# and rail fly-in wait until the score trigger animations finish so they don't
-	# pop over the still-counting score.
-	var cost: int = x01_game.darts_per_turn
-	_banked_darts -= cost
-	x01_game.max_turns += 1
+	# The bank/ceiling mutation happens now (the caller's branch depends on it), but the rescue
+	# banner and rail fly-in wait until the score trigger animations finish so they don't pop over
+	# the still-counting score.
+	var cost: int
+	if _banked_darts >= x01_game.darts_per_turn:
+		# Full-strength bail — PREFERRED whenever affordable. Cost is one turn's worth of darts
+		# (darts_per_turn, not a hardcoded 3) so the refund stays exact when a relic changes the
+		# turn size: raising max_turns grows the budget by darts_per_turn, matching what we spend.
+		cost = x01_game.darts_per_turn
+		_banked_darts -= cost
+		x01_game.max_turns += 1
+	else:
+		# Partial bail (§3): bank is in [bailout_min_darts, darts_per_turn) — buy a SHORT rescue
+		# turn worth exactly the darts paid, no free dart. Switch the leg onto the flat dart_budget
+		# path seeded from its current legacy total so nothing already thrown is refunded
+		# retroactively, then add exactly `cost` darts → budget_left caps the rescue turn at `cost`
+		# (e.g. 2/3) and the leg ends after those darts. cost == darts added ⇒ exact conservation.
+		# max_turns is still bumped for the HUD turn counter only: once dart_budget is non-zero
+		# _effective_budget() reads it, so this can't desync the per-leg turn math.
+		cost = _banked_darts
+		_banked_darts -= cost
+		x01_game.dart_budget = x01_game.max_turns * x01_game.darts_per_turn + cost
+		x01_game.max_turns += 1
 	if score_tween != null and score_tween.is_valid():
 		score_tween.tween_callback(hud.show_bailout.bind(cost, _banked_darts, x01_game.max_turns))
 	else:
@@ -1676,6 +1769,9 @@ func _show_game_over(current_leg: int) -> void:
 		boss_manager.end_boss_leg(_build_game_state(), false)
 		_sync_board_and_solver()
 		hud.hide_boss_status()
+	# Benchmark (run-consolidation spec 2026-06-12): a loss ends the WHOLE continuous run, so
+	# record the furthest point this run reached (where it died) before the overlay shows.
+	_record_furthest_point()
 	AuidoManager.on_leg_lost()
 	_hide_gameplay_hud()
 	game_over_screen.show_results(current_leg - 1, _run_total_darts)
@@ -1685,9 +1781,27 @@ func _show_game_over(current_leg: int) -> void:
 func _show_run_won() -> void:
 	_run_over = true
 	_hide_gameplay_hud()
+	# Benchmark: clearing the terminal boss clears the top x01 tier (1501) and is the furthest a
+	# run can reach. Record both before the victory overlay (the non-terminal tiers were recorded
+	# at their own boss clears in _show_leg_upgrades).
+	PlayerProgress.record_tier_clear(_current_level.max_score_target, _run_total_darts)
+	_record_furthest_point()
 	var is_new_best: bool = not PlayerProgress.is_level_cleared(_current_level.resource_path) or _run_total_darts < PlayerProgress.get_fewest_darts(_current_level.resource_path)
 	PlayerProgress.record_level_clear(_current_level, _run_total_darts)
 	game_over_screen.show_victory(_current_level.display_name, _run_total_darts, is_new_best)
+
+
+## Record the furthest map point this run reached (its current node's act + depth) with the
+## cumulative darts taken to get there — the best-run benchmark. Reads the live map node, so it
+## is correct whether the run ended in a loss (died at the current leg/boss) or a win (the
+## terminal boss). No-op if there is no map (debug paths). Run-consolidation spec 2026-06-12.
+func _record_furthest_point() -> void:
+	if _map_graph == null:
+		return
+	var node: MapNode = _map_graph.get_node_by_id(_map_graph.current_id)
+	if node == null:
+		return
+	PlayerProgress.record_run_point(node.act, node.depth, _run_total_darts)
 
 
 ## Update the persistent boss status display and background tint on the HUD.
@@ -1719,6 +1833,9 @@ func _build_run_state() -> Dictionary:
 		"scoring_modifier_manager": scoring_modifier_manager,
 		"main": self,
 		"active_rewards": _active_rewards,
+		# Bosses in the current level — RelicSubscriptionReward's 501 dead-pick guard reads this
+		# (a single-boss level's boss is terminal, so an unlock-the-shop reward can never pay off).
+		"boss_count": _current_level.boss_count if _current_level != null else 1,
 	}
 
 
@@ -1731,6 +1848,7 @@ func _build_map_run_state() -> Dictionary:
 	return {
 		"available_brush_colors": ModifierRegistry.available_brush_colors.duplicate(),
 		"highest_cleared": _highest_cleared,
+		"suppressed_families": suppressed_families.duplicate(),
 	}
 
 
@@ -1744,6 +1862,14 @@ func _on_reward_selected(index: int) -> void:
 	hud.add_legendary(reward)
 	_current_rewards.clear()
 	_boss_leg_just_cleared = false
+
+	# §6: a bull relic claimed mid-shop resumes the SHOP, not the boss flow. Shop-eligible relics
+	# are utilities (never the flip-granting Mirror Zone), so there's no wedge-flip picker to honor.
+	if _shop_relic_pending:
+		_shop_relic_pending = false
+		_shop_relic_reward = null
+		_continue_shop_after_pick()
+		return
 
 	# Some relics (Mirror Zone) require the player to pick wedges to flip before
 	# continuing. Drop into the relic-flip picker; it resumes via _continue_after_reward.
@@ -1844,6 +1970,11 @@ func _reset_run_state() -> void:
 	scoring_modifier_manager.checkout_parity = -1
 	shop_cadence = _default_shop_cadence
 	shop_pick_count = 2
+	suppressed_families.clear()
+	_relic_shop_unlocked = false
+	option_bonus = 0
+	_shop_relic_reward = null
+	_shop_relic_pending = false
 	ModifierRegistry.current_rarity_shift = 0.0
 	boss_manager.configure_for_level(null)
 	_map_graph = null
@@ -1879,10 +2010,10 @@ func _on_game_over_to_assembly() -> void:
 	_show_assembly()
 
 
-## Player presses "Level Select" on the game over screen.
+## Player presses "Records" on the game over screen.
 func _on_game_over_to_level_select() -> void:
 	_reset_run_state()
-	_show_level_select()
+	_show_records()
 
 
 ## Player presses "Main Menu" on the game over screen.
@@ -1956,6 +2087,8 @@ func _setup_shop_board(response: Dictionary, from_pos: Vector2, to_pos: Vector2)
 	# Generate and place lit spots
 	_shop_lit_spots = _generate_shop_spots(_shop_darts_remaining)
 	dartboard.set_shop_spots(_shop_lit_spots)
+	# §6: roll the optional gold relic spot on the bull (a separate slot from the lit spots).
+	_roll_shop_relic_spot()
 
 	var tween: Tween = create_tween()
 	tween.tween_property(dartboard, "position", to_pos, shop_transition_duration * 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
@@ -1963,6 +2096,26 @@ func _setup_shop_board(response: Dictionary, from_pos: Vector2, to_pos: Vector2)
 		hud.show_shop_header(_shop_darts_remaining)
 		_start_new_throw()
 	)
+
+
+## §6: roll whether this shop lights the gold relic spot on the bull. The whole channel is gated by
+## the Relic Subscription boss reward (_relic_shop_unlocked) — until unlocked the bull stays dark, so
+## a relic can never appear before a boss is beaten. Once unlocked: at relic_spot_chance, draw a
+## single shop-eligible relic from the pool (run-definers excluded; unique relics drop out once
+## owned); when the chance misses or the eligible pool is exhausted, the bull stays dark. The
+## gate + chance + draw live in the pure, headless-testable RewardRegistry.roll_gated_shop_relic;
+## main only wires the result to the dartboard.
+func _roll_shop_relic_spot() -> void:
+	_shop_relic_reward = null
+	dartboard.set_relic_spot(false)
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.randomize()
+	var relic: RuleModifierReward = RewardRegistry.roll_gated_shop_relic(
+		_relic_shop_unlocked, relic_spot_chance, _build_run_state(), rng)
+	if relic == null:
+		return   # locked, chance missed, or eligible pool exhausted — bull stays dark.
+	_shop_relic_reward = relic
+	dartboard.set_relic_spot(true)
 
 
 ## Generate the typed shop's lit spots (Phase 03). Delegates the rolling to the pure, headless-
@@ -1977,7 +2130,18 @@ func _generate_shop_spots(shop_darts: int) -> Array[Dictionary]:
 	var lit_count: int = shop_darts + shop_spot_slack
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.randomize()
-	return ShopSpotGenerator.generate(lit_count, shop_family_weights, rng)
+	return ShopSpotGenerator.generate(lit_count, _effective_shop_family_weights(), rng)
+
+
+## The shop family weights with any run-suppressed family (§4) zeroed out so no spot of that
+## family can roll. A copy — never mutate the exported dict. Today only Tunnel Vision suppresses
+## (&"accuracy"); the filter is generic so a future relic can strike another family.
+func _effective_shop_family_weights() -> Dictionary:
+	var weights: Dictionary = shop_family_weights.duplicate()
+	for fam: StringName in suppressed_families:
+		if weights.has(fam):
+			weights[fam] = 0.0
+	return weights
 
 
 ## Handle a throw during the shop phase — fly-in pre-step, then the shop impact.
@@ -2002,6 +2166,13 @@ func _resolve_shop_impact(hit_position: Vector2) -> void:
 	dartboard.flash_segment(hit_position)
 
 	_shop_darts_remaining -= 1
+
+	# §6 relic channel: a bull hit claims the gold relic spot. Dedicated path — the bull isn't
+	# wedge:ring keyed, so it reads the bull ring directly (not the lit-spot lookup). Checked before
+	# the lit-spot lookup; lit spots never sit on the bull, so there's no overlap.
+	if _shop_relic_reward != null and _is_bull_hit(hit_position):
+		_open_shop_relic_pick()
+		return
 
 	# Check if a lit spot was hit
 	var spot_idx: int = dartboard.check_shop_hit(hit_position)
@@ -2033,6 +2204,30 @@ func _resolve_shop_impact(hit_position: Vector2) -> void:
 			_enable_hover()
 			_awaiting_next_dart = true
 			_start_next_dart_timer()
+
+
+## §6: whether a shop throw landed anywhere on the bull (single OR double — the claim target is
+## the whole bull). Reads the bull ring off calculate_score, mirroring how the score path reads
+## bull_radii rather than the wedge:ring lit-spot lookup.
+func _is_bull_hit(hit_position: Vector2) -> bool:
+	var result: Dictionary = dartboard.calculate_score(hit_position)
+	if bool(result.get("is_bull", false)):
+		return true
+	var ring: String = result.get("ring_name", "")
+	return ring == "Double Bull" or ring == "Single Bull"
+
+
+## §6: open the relic claim when the bull is hit. The relic is presented on the boss-reward card UI
+## (one card, cap 1); selection routes back through _on_reward_selected, which sees _shop_relic_
+## pending and resumes the shop instead of the boss flow. The dart was already spent on the throw.
+func _open_shop_relic_pick() -> void:
+	dartboard.set_relic_spot(false)   # consumed — clear the gold spot
+	_current_rewards.clear()
+	_current_rewards.append(_shop_relic_reward)
+	_shop_relic_pending = true
+	_leg_phase = "shop_relic_pick"
+	hud.show_reward_choices(_current_rewards)
+	hud.score_label.text = "You hit the bull — claim a relic!"
 
 
 func _get_owned_fingerprints() -> Array[String]:
@@ -2091,15 +2286,17 @@ func _shop_spot_label(spot: Dictionary) -> String:
 ##   - brush: independently rolled brushes (different color/ring rolls are the choice).
 func _generate_shop_picks(family: StringName, rarity: ScoringEnums.Rarity) -> Array[Dictionary]:
 	# (No _sync_brush_affinity here any more — brush rolls are unbiased, Max 2026-06-08.)
+	# §5: every shop pick surface widens by option_bonus (Pool Widener).
+	var pick_count: int = shop_pick_count + option_bonus
 	match family:
 		&"accuracy":
-			return _generate_shop_accuracy_picks(rarity, shop_pick_count)
+			return _generate_shop_accuracy_picks(rarity, pick_count)
 		&"geometry":
-			return _generate_geometry_event_picks(shop_pick_count)
+			return _generate_geometry_event_picks(pick_count)
 		&"brush":
-			return _generate_brush_shop_picks(shop_pick_count)
+			return _generate_brush_shop_picks(pick_count)
 		_:  # scoring / streak — family-pure laddered modifiers at the spot rarity.
-			return _generate_challenge_reward_picks(_shop_family_to_enum(family), rarity, shop_pick_count)
+			return _generate_challenge_reward_picks(_shop_family_to_enum(family), rarity, pick_count)
 
 
 ## `count` accuracy swing-table picks at a rarity tier, distinct by stat axis (reuses the per-pick
@@ -2271,6 +2468,9 @@ func _end_shop(response: Dictionary) -> void:
 	# (_shop_darts_remaining) is exactly bank-minus-spent.
 	_banked_darts = _shop_darts_remaining
 	_shop_lit_spots.clear()
+	# §6: drop any unclaimed relic spot so it can't bleed into a later non-shop bull hit.
+	_shop_relic_reward = null
+	_shop_relic_pending = false
 	_leg_phase = ""
 	AuidoManager.on_shop_exited()
 	_clear_darts()
@@ -2322,24 +2522,22 @@ func _setup_tutorial_system() -> void:
 	start_screen = StartScreen.new()
 	start_screen.name = "StartScreen"
 	start_screen.start_game_pressed.connect(_on_start_game)
+	start_screen.records_pressed.connect(_on_show_records)
 	start_screen.play_tutorial_pressed.connect(_on_play_tutorial.bind("start_screen"))
 	start_screen.stats_walkthrough_pressed.connect(_on_play_tutorial.bind("start_screen", TutorialController.TutorialMode.STATS_ONLY))
 	start_screen.rules_pressed.connect(_on_show_rules)
 	start_screen.visible = false
 	hud.add_child(start_screen)
 
-	# Level select screen — primary entry point, replaces start screen
-	level_select = LevelSelectScreen.new()
-	level_select.name = "LevelSelectScreen"
-	level_select.levels = [
-		preload("res://resources/levels/level_501.tres"),
-		preload("res://resources/levels/level_1001.tres"),
-		preload("res://resources/levels/level_1501.tres"),
-	]
-	level_select.level_selected.connect(_on_level_selected)
-	level_select.back_pressed.connect(_on_level_select_back)
-	level_select.visible = false
-	hud.add_child(level_select)
+	# Records screen — the repurposed level-select surface (run-consolidation spec 2026-06-12).
+	# No longer launches levels; it displays the persistent benchmarks. Its tier list is the
+	# consolidated run's act ceilings (501 / 1001 / 1501), computed statically from RUN_LEVEL.
+	records_screen = RecordsScreen.new()
+	records_screen.name = "RecordsScreen"
+	records_screen.tiers = MapGraph.act_ceilings(RUN_LEVEL, x01_game.starting_target, x01_game.target_increment)
+	records_screen.back_pressed.connect(_on_records_back)
+	records_screen.visible = false
+	hud.add_child(records_screen)
 
 	# Run map overlay — shown between encounters, lets the player pick the next node.
 	map_view = MapView.new()
@@ -2406,19 +2604,20 @@ func _setup_tutorial_system() -> void:
 ## Show the start screen, hiding other overlays.
 func _show_start_screen() -> void:
 	assembly_screen.visible = false
-	level_select.visible = false
+	records_screen.visible = false
 	start_screen.visible = true
 	welcome_modal.visible = false
 	rules_slideshow.visible = false
 	_hide_gameplay_hud()
 
 
-## Show the level select screen between start screen and assembly.
-func _show_level_select() -> void:
+## Show the records screen (the repurposed level-select surface). Reachable from the home
+## menu and from the game-over screen. Pure display — it never launches a run.
+func _show_records() -> void:
 	start_screen.visible = false
 	assembly_screen.visible = false
-	level_select.refresh()
-	level_select.visible = true
+	records_screen.refresh()
+	records_screen.visible = true
 	_hide_gameplay_hud()
 
 
@@ -2458,28 +2657,29 @@ func _show_gameplay_hud() -> void:
 	hud.dart_indicator.visible = true
 
 
-## Called when "Start Game" is pressed on the start screen.
+## Called when "Play" is pressed on the start screen. Launches the one continuous run by
+## selecting the consolidated RUN_LEVEL and dropping straight into dart assembly — there is no
+## level-select step any more (run-consolidation spec 2026-06-12).
 func _on_start_game() -> void:
-	_show_level_select()
-
-
-## Called when a level card is pressed on the level select screen.
-func _on_level_selected(level_def: LevelDefinition) -> void:
-	_current_level = level_def
-	level_select.visible = false
+	_current_level = RUN_LEVEL
 	_show_assembly()
 
 
-## Called when the back button is pressed on the level select screen.
-func _on_level_select_back() -> void:
-	level_select.visible = false
+## Called when "Records" is pressed on the start screen.
+func _on_show_records() -> void:
+	_show_records()
+
+
+## Called when the Back button is pressed on the records screen.
+func _on_records_back() -> void:
+	records_screen.visible = false
 	_show_start_screen()
 
 
 ## Called when "Play Tutorial" is pressed from start screen or assembly.
 func _on_play_tutorial(source: String, mode: TutorialController.TutorialMode = TutorialController.TutorialMode.FULL) -> void:
 	start_screen.visible = false
-	level_select.visible = false
+	records_screen.visible = false
 	assembly_screen.visible = false
 	welcome_modal.visible = false
 	_in_tutorial = true
@@ -2561,7 +2761,7 @@ func _hide_exit_tutorial_button() -> void:
 ## Show the dart assembly screen before starting a run.
 func _show_assembly() -> void:
 	start_screen.visible = false
-	level_select.visible = false
+	records_screen.visible = false
 	_show_gameplay_hud()
 	assembly_screen.show_assembly(_raw_stats)
 
@@ -2956,7 +3156,7 @@ func _apply_upgrade(upgrade: Dictionary) -> void:
 ## Update all HUD elements to reflect current game state.
 func _update_all_hud() -> void:
 	hud.update_leg(x01_game.current_leg, x01_game.target_score, boss_manager.is_boss_active())
-	hud.update_turn(x01_game.current_turn, x01_game.max_turns)
+	hud.update_turn(x01_game.current_turn, x01_game.max_turns, x01_game.dart_budget)
 	hud.update_remaining(x01_game.remaining_score, x01_game.glass_cannon_active)
 	hud.update_darts(x01_game.darts_per_turn - x01_game.darts_this_turn, x01_game.current_turn == x01_game.max_turns, x01_game.darts_per_turn)
 	hud.update_bank(_banked_darts)

@@ -360,6 +360,11 @@ custom_minimum_size = Vector2(170, 100)
 layout_mode = 2
 size_flags_horizontal = 4
 
+[node name="UpgradeButton4" type="Button" parent="HUD/UpgradeContainer" unique_id=1350545552]
+custom_minimum_size = Vector2(170, 100)
+layout_mode = 2
+size_flags_horizontal = 4
+
 [node name="StatsContainer" type="VBoxContainer" parent="HUD" unique_id=1303497284]
 unique_name_in_owner = true
 anchors_preset = 1
@@ -474,6 +479,9 @@ barrel_scale_multiplier = 0.55
 shaft_scale_multiplier = 0.6
 flight_scale_multiplier = 0.55
 point_preview_h_offset = -20.0
+barrel_slot_position = Vector2(100, 150)
+shaft_slot_position = Vector2(490, 150)
+flight_slot_position = Vector2(880, 150)
 stats_position = Vector2(40, 350)
 zone_preview_board_radius = 90.0
 zone_preview_label_offset = 12.59

@@ -8,3 +8,4 @@ reward_id = &"bigger_bull"
 display_name = "Bigger Bull"
 description = "Both bullseyes grow into the inner single."
 is_trade = false
+shop_eligible = true

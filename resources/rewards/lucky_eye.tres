@@ -7,3 +7,4 @@ script = ExtResource("1")
 reward_id = &"lucky_eye"
 display_name = "Lucky Eye"
 description = "+2% rare modifier roll chance."
+shop_eligible = true
