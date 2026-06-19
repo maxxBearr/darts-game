@@ -421,11 +421,12 @@ func _assert_shop_spacing(level: LevelDefinition, g: MapGraph, seed_value: int) 
 			frontier = nxt
 
 
-## Drought breaker (spec §8 follow-up, Max 2026-06-08): no stay-on-lane sequence (each lane's run
-## nodes concatenated across stretch seams — droughts span them, crossovers are off-path detours)
-## nor any mini-branch may hold more than max_consecutive_legs plain LEGs in a row. Reconstructs the
-## sequences from the graph (lane-run nodes = depth shared with a sibling, not a branch/crossover;
-## branch chains = is_branch nodes per outer lane) and sweeps each for the longest leg run.
+## Drought breaker (spec §8 follow-up, Max 2026-06-08; mandatory-path fix 2026-06-15): no MANDATORY
+## traversal may hold more than max_consecutive_legs plain LEGs in a row. The swept lane sequence now
+## includes the act-entry funnel and pre-boss chokepoint legs (every traversal is forced through
+## them); crossovers stay excluded (optional detours). Branch chains are swept separately. Sweeps
+## each sequence for the longest leg run, PLUS a targeted check for the original bug: a legal run of
+## `cap` lane legs landing on the always-present pre-boss leg = cap+1 legs into the boss.
 func _assert_no_leg_droughts(level: LevelDefinition, g: MapGraph, seed_value: int) -> void:
 	var cap: int = _cfg_for(level).max_consecutive_legs
 	if cap <= 0:
@@ -434,7 +435,8 @@ func _assert_no_leg_droughts(level: LevelDefinition, g: MapGraph, seed_value: in
 	for id: int in g.nodes:
 		var d: int = g.get_node_by_id(id).depth
 		depth_count[d] = depth_count.get(d, 0) + 1
-	for seq: Array in _lane_and_branch_sequences(g, depth_count):
+	var seqs: Array = _lane_and_branch_sequences(g, depth_count)
+	for seq: Array in seqs:
 		var streak: int = 0
 		for id: int in seq:
 			if g.get_node_by_id(id).type == MapNode.Type.LEG:
@@ -442,14 +444,44 @@ func _assert_no_leg_droughts(level: LevelDefinition, g: MapGraph, seed_value: in
 				_check(streak <= cap, "lane/branch plain-leg run ≤ max_consecutive_legs %d (got %d)" % [cap, streak], seed_value)
 			else:
 				streak = 0
+	# Targeted regression for the traced bug (run-of-cap straight into the act boss): the mandatory
+	# lane sequences end at the pre-boss chokepoint leg, so a trailing run of > cap LEGs is exactly
+	# the "3 lane legs + pre-boss = 4 into the boss" case the old breaker missed (it excluded the
+	# sole pre-boss leg). Count each sequence's trailing contiguous legs and assert ≤ cap.
+	for seq: Array in seqs:
+		var tail: int = 0
+		for i: int in range(seq.size() - 1, -1, -1):
+			if g.get_node_by_id(seq[i]).type == MapNode.Type.LEG:
+				tail += 1
+			else:
+				break
+		_check(tail <= cap, "drought into chokepoint: %d trailing legs > cap %d (run-of-cap + pre-boss bug)" % [tail, cap], seed_value)
 
 
-## Reconstruct, per act, each lane's straight run (lane-run nodes in depth order, skipping the sole
-## entry/pre-boss/crossover nodes) and each mini-branch chain. Mirrors what _break_leg_droughts
-## sweeps. Returns an Array of Array[int] (depth-ordered node-id sequences).
+## Reconstruct, per act, each lane's MANDATORY straight run and each mini-branch chain. Mirrors what
+## _break_leg_droughts sweeps (mandatory-path fix 2026-06-15): the lane sequence now BOOKENDS the
+## lane-run nodes with the two mandatory chokepoint legs — the act-entry funnel (head) and the
+## pre-boss chokepoint (tail) — because every traversal is forced through them, so they count toward
+## the cap. Crossover legs stay excluded (sole at depth, optional detours — the depth_count>1 filter
+## drops them and we never re-add them). Branch chains carry NO chokepoints (a branch bypasses them).
+## Returns an Array of Array[int] (depth-ordered node-id sequences).
 func _lane_and_branch_sequences(g: MapGraph, depth_count: Dictionary) -> Array:
 	var out: Array = []
 	for a: int in range(g.acts):
+		# Locate this act's mandatory chokepoints: the entry funnel = the act's lowest-depth node
+		# (sole, created first); the pre-boss chokepoint = the sole LEG feeding the boss.
+		var entry_id: int = -1
+		var entry_depth: int = 1 << 30
+		var pre_boss_id: int = -1
+		for id: int in g.nodes:
+			var n: MapNode = g.get_node_by_id(id)
+			if n.act != a:
+				continue
+			if n.type == MapNode.Type.BOSS and n.prev_ids.size() > 0:
+				pre_boss_id = n.prev_ids[0]
+			if n.depth < entry_depth:
+				entry_depth = n.depth
+				entry_id = id
 		for lane: int in [0, 1]:
 			var run: Array[int] = []
 			for id: int in g.nodes:
@@ -457,8 +489,15 @@ func _lane_and_branch_sequences(g: MapGraph, depth_count: Dictionary) -> Array:
 				if n.act == a and n.lane == lane and not n.is_branch and int(depth_count.get(n.depth, 0)) > 1:
 					run.append(id)
 			_sort_ids_by_depth(g, run)
-			if not run.is_empty():
-				out.append(run)
+			# Bookend with the mandatory chokepoints: [entry] + lane run + [pre_boss].
+			var seq: Array[int] = []
+			if entry_id != -1:
+				seq.append(entry_id)
+			seq.append_array(run)
+			if pre_boss_id != -1:
+				seq.append(pre_boss_id)
+			if not seq.is_empty():
+				out.append(seq)
 		for blane: int in [-1, 2]:
 			var br: Array[int] = []
 			for id: int in g.nodes:

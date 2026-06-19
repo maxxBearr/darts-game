@@ -247,9 +247,11 @@ func _build_act(act: int, run_state: Dictionary) -> void:
 	# (crossover/branch content is off-budget spice, §4), so this still walks run0/run1.
 	_slot_specials(act, stretches, run_state)
 
-	# Step 6.5 — drought breaker (Max's ruling 2026-06-08): runs LAST so it sees the final
-	# leg layout; any >max_consecutive_legs run of plain legs gets one node converted.
-	_break_leg_droughts(stretches, run_state)
+	# Step 6.5 — drought breaker (Max's ruling 2026-06-08; mandatory-path fix 2026-06-15): runs
+	# LAST so it sees the final leg layout; any >max_consecutive_legs run of plain legs on the
+	# MANDATORY traversal gets one node converted. The entry funnel and pre-boss chokepoint are on
+	# every traversal, so they're folded into each lane's swept sequence (head + tail).
+	_break_leg_droughts(stretches, entry.id, pre_boss.id, run_state)
 
 	# Step 6.6 — branch divergence guard (Max's ruling 2026-06-08): a mini-branch whose type
 	# COMPOSITION matches the lane it bypasses is a fake choice; force one node to differ. Runs
@@ -349,26 +351,45 @@ func _slot_specials(act: int, stretches: Array, run_state: Dictionary) -> void:
 				return
 
 
-## Drought breaker (Max's ruling 2026-06-08): no traversal sees more than
-## max_consecutive_legs plain LEGs in a row. Deliberately a HARD cap, not a per-leg chance —
-## a chance can whiff and ship the same dry stretch, and an invariant can be suite-asserted
-## while a tendency can't. Sweeps each lane's stay-on-lane sequence (runs concatenated ACROSS
-## stretch seams — droughts span them; crossovers are optional detours, not on the straight
-## path) plus every mini-branch detour (an all-leg branch reads just as dry). When a leg run
-## exceeds the cap, ONE node from the window converts — rolled position (no stamped rhythm),
-## EVENT by default, CHALLENGE at drought_break_challenge_chance where the act-0 depth gate
-## allows. Conversions are off-budget spice, same standing as typed crossovers.
-func _break_leg_droughts(stretches: Array, run_state: Dictionary) -> void:
+## Drought breaker (Max's ruling 2026-06-08; mandatory-path fix 2026-06-15): no traversal sees
+## more than max_consecutive_legs plain LEGs in a row. Deliberately a HARD cap, not a per-leg
+## chance — a chance can whiff and ship the same dry stretch, and an invariant can be
+## suite-asserted while a tendency can't.
+##
+## The cap must measure the longest leg run on the MANDATORY path — the legs every traversal is
+## forced through. Two chokepoint legs are mandatory and SOLE at their depth: the act-entry funnel
+## (`entry_id`) and the pre-boss chokepoint (`pre_boss_id`). Both feed/are-fed-by BOTH lanes, so
+## they bookend each lane's swept sequence (head = entry, tail = pre-boss). Folding them in is the
+## fix for the original bug: a legal 3-run landing on the always-present pre-boss leg = 4 legs into
+## the boss, every time the final run hit the cap (and entry + a 3-run did the same at act starts).
+## The boss is not a LEG, so it correctly resets the count at act boundaries.
+##
+## Crossover legs stay EXCLUDED — they're optional detours (spec §8), not on the straight path, so
+## they don't inflate the mandatory count. Mini-branch detours are still swept on their own (an
+## all-leg branch reads just as dry), but WITHOUT the chokepoints (a branch doesn't pass through
+## entry/pre-boss).
+##
+## When a leg run exceeds the cap, ONE node from the window converts — but NEVER the structural
+## chokepoints (entry/pre-boss are reconvergence funnels; they must stay LEGs). A convertible
+## lane-run leg always exists in any over-cap window: a cap=3 window is at most
+## [entry, run, run, pre_boss], and every stretch run is ≥2 nodes, so ≥2 convertible run legs
+## remain. The pick is rolled-position (no stamped rhythm), EVENT by default, CHALLENGE at
+## drought_break_challenge_chance where the act-0 depth gate allows. Conversions are off-budget
+## spice, same standing as typed crossovers.
+func _break_leg_droughts(stretches: Array, entry_id: int, pre_boss_id: int, run_state: Dictionary) -> void:
 	if _cfg.max_consecutive_legs <= 0:
 		return
 	var sequences: Array = []
+	# Lane sequences carry the mandatory chokepoints at head and tail; branch sequences don't
+	# (branches bypass the chokepoints). A protected set keeps conversions off the chokepoints.
 	for lane_key: String in ["run0", "run1"]:
-		var lane_ids: Array[int] = []
+		var lane_ids: Array[int] = [entry_id]
 		for seg: Dictionary in stretches:
 			lane_ids.append_array(seg[lane_key])
+		lane_ids.append(pre_boss_id)
 		sequences.append(lane_ids)
-	for entry: Dictionary in _act_branch_runs:
-		sequences.append(entry["branch"])
+	for branch_entry: Dictionary in _act_branch_runs:
+		sequences.append(branch_entry["branch"])
 
 	for seq: Array in sequences:
 		var streak: Array[int] = []   # the current run of consecutive plain-LEG node ids
@@ -379,14 +400,36 @@ func _break_leg_droughts(stretches: Array, run_state: Dictionary) -> void:
 			streak.append(id)
 			if streak.size() <= _cfg.max_consecutive_legs:
 				continue
-			# Over the cap — convert one rolled node from the window. Converting ANY of the
-			# cap+1 nodes leaves both sides ≤ cap; the legs AFTER the convert stay a live
-			# streak so longer droughts earn multiple breaks.
-			var pick_i: int = _rng.randi_range(0, streak.size() - 1)
+			# Over the cap — convert one rolled node from the window, but only a non-chokepoint
+			# lane-run leg (entry/pre-boss stay funnels). Converting any convertible node leaves
+			# both sides ≤ cap; the legs AFTER the convert stay a live streak so longer droughts
+			# earn multiple breaks.
+			var convertible: Array[int] = []   # indices into `streak` that aren't chokepoints
+			for k: int in range(streak.size()):
+				if streak[k] != entry_id and streak[k] != pre_boss_id:
+					convertible.append(k)
+			if convertible.is_empty():
+				# Unreachable given the ≥2 run floor (proof in the docstring); flag rather than
+				# convert a chokepoint silently, and reset to avoid re-warning on every later leg.
+				push_warning("drought breaker: over-cap window of only chokepoint legs — left intact (unexpected; check stretch ≥2 floor)")
+				streak.clear()
+				continue
+			var pick_i: int = convertible[_rng.randi_range(0, convertible.size() - 1)]
 			var pick: MapNode = nodes[streak[pick_i]]
 			var t: MapNode.Type = MapNode.Type.EVENT
 			if _challenge_depth_ok(pick) and _rng.randf() < _cfg.drought_break_challenge_chance:
-				t = MapNode.Type.CHALLENGE
+				# A challenge on a BRANCH node is a DETOUR challenge — capped at one per act (no
+				# wager stacking; `_validate` enforces it). `_type_crossovers`/`_ensure_branches_diverge`
+				# honor that single slot via `_detour_challenge_used`, so the breaker must too:
+				# only mint a branch challenge when the slot is free, and claim it. Lane-run
+				# challenges sit on shared-depth nodes (a sibling provides the skip), are NOT
+				# detours, and stay uncapped. When the slot is taken, fall through to EVENT — the
+				# drought is still broken, just with the free-trade filler.
+				if not pick.is_branch:
+					t = MapNode.Type.CHALLENGE
+				elif not _detour_challenge_used:
+					t = MapNode.Type.CHALLENGE
+					_detour_challenge_used = true
 			_assign_special_payload(pick, t, run_state)
 			pick.is_offbudget = true   # off-budget spice — must not count toward the per-path caps
 			var rest: Array[int] = []

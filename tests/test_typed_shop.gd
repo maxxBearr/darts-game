@@ -207,6 +207,27 @@ func _test_brush_rulings() -> void:
 		for k: int in range(3):
 			pcs[int(brush.make(colors[k]).target_color)] = true
 		_check(pcs.size() == 3, "a 3-pick brush sweep yields 3 distinct colors", -1)
+	# REGRESSION (bug 2026-06-15): the brush pool is FIXED at the four colors and owned-independent.
+	# The old offer-gen skipped any color whose fingerprint was already owned, shrinking the offer
+	# 4→3→2→1 as colors were taken; only Black would be left after red/green/white. The fix removed
+	# the owned-skip entirely. `_generate_brush_shop_picks` is autoload-bound (not loadable under
+	# --script), so we replicate its exact pure sweep here: even with 3 colors "owned", a full-count
+	# offer still presents the full 4 distinct colors (owned state never enters the loop now).
+	var owned_fps: Dictionary = {}
+	for c: int in [ScoringEnums.SegmentColor.RED, ScoringEnums.SegmentColor.GREEN, ScoringEnums.SegmentColor.WHITE]:
+		owned_fps[brush.make(c).get_config_fingerprint()] = true
+	_check(owned_fps.size() == 3, "regression setup: 3 brush colors owned", -1)
+	var sweep_colors: Array = brush.ALL_COLORS.duplicate()
+	sweep_colors.shuffle()
+	var offered: Dictionary = {}
+	var requested: int = 4
+	for color: int in sweep_colors:
+		if offered.size() >= requested:
+			break
+		# NOTE: no `if fingerprint in owned_fps: continue` — that skip was the bug. The fix offers
+		# every color regardless of ownership.
+		offered[int(brush.make(color).target_color)] = true
+	_check(offered.size() == 4, "3 colors owned → offer still presents full 4-color pool (got %d)" % offered.size(), -1)
 
 
 ## Source-scrape of main.gd (autoload-bound, not loadable under --script) to lock the brush rulings
@@ -218,7 +239,10 @@ func _test_brush_main_source() -> void:
 	var bp: String = _slice(src, "func _generate_brush_shop_picks(", "func _generate_shop_accuracy_pick(")
 	_check("ALL_COLORS" in bp and ".make(" in bp, "brush shop picks sweep ALL_COLORS via make()", -1)
 	_check(not ("_sync_brush_affinity" in bp), "brush shop picks are unbiased (no affinity sync)", -1)
-	_check("_get_owned_fingerprints" in bp, "brush shop picks skip owned fingerprints (distinct)", -1)
+	# The brush pool is FIXED at the four colors and owned-independent (consumables are infinitely
+	# repeatable): owning a color must NOT remove it from offers. So the pick path must NOT consult
+	# owned fingerprints — that filter shrank the offer 4→3→2→1 as colors were taken (bug, 2026-06-15).
+	_check(not ("_get_owned_fingerprints" in bp), "brush shop picks ignore owned state (fixed 4-color pool)", -1)
 	var ev: String = _slice(src, "func _enter_brush_event(", "func _generate_event_picks(")
 	_check("_generate_brush_shop_picks(" in ev, "brush EVENT uses the same direct roll as the shop", -1)
 	var lbl: String = _slice(src, "func _shop_spot_label(", "func _generate_shop_picks(")

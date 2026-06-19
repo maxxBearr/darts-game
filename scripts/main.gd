@@ -2315,21 +2315,23 @@ func _generate_shop_accuracy_picks(rarity: ScoringEnums.Rarity, count: int) -> A
 ## 2026-06-08): owned streak colors must not steer the roll — affinity steering collapsed every
 ## option to the one owned color (three identical "Brush: Black" cards = no choice), and the old
 ## reroll-8-then-give-up dedup appended the duplicates anyway. A shuffled sweep over the four
-## colors guarantees distinct options; owned brush fingerprints are skipped (brushes are
-## consumables, so this rarely binds). Brush is rarity-less (COMMON). Returns fewer picks only
-## if the color pool is exhausted.
+## colors guarantees distinct options WITHIN a single offer.
+## The brush pool is FIXED and owned-independent: always exactly the four colors
+## (red/green/black/white). Color is the choice; brushes are infinitely repeatable consumables, so
+## owning a color NEVER removes it from future offers (mirrors the 2026-06-08 geometry owned-skip
+## removal — see specs/2026-06-08-reward-cleanup-geometry-stacking.md §1). Brush is rarity-less
+## (COMMON). Returns fewer picks only if `count` exceeds the four-color pool.
 func _generate_brush_shop_picks(count: int) -> Array[Dictionary]:
 	const _Brush = preload("res://scripts/modifiers/brush_modifier.gd")
 	var colors: Array = _Brush.ALL_COLORS.duplicate()
 	colors.shuffle()
-	var owned: Array[String] = _get_owned_fingerprints()
 	var picks: Array[Dictionary] = []
 	for color: ScoringEnums.SegmentColor in colors:
 		if picks.size() >= count:
 			break
+		# No owned-fingerprint skip: the pool is fixed at the four colors regardless of what the
+		# player already owns. Distinctness comes from sweeping each color at most once per offer.
 		var mod: ScoringModifier = _Brush.make(color)
-		if mod.get_config_fingerprint() in owned:
-			continue
 		picks.append({"type": "modifier", "data": mod})
 	return picks
 

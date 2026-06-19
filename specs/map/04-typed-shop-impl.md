@@ -197,6 +197,26 @@ converted — EVENT by default, CHALLENGE at `drought_break_challenge_chance` (e
 where the act-0 depth gate allows. Off-budget spice. Suite-assertable invariant: walk every
 lane sequence + branch run, assert no leg-run > cap.
 
+**Mandatory-chokepoint fix (2026-06-15):** the original breaker measured the cap on the wrong
+sequence. It swept only the lane runs (run0/run1 across stretch seams) + mini-branches, and
+EXCLUDED the legs that are sole at their depth — the act-entry funnel and the pre-boss
+chokepoint. But those two are MANDATORY: every traversal is forced through them. So a legal
+run of exactly `cap` (=3) landing on the always-present pre-boss leg = 4 legs into the boss,
+by construction, every time the final run hit the cap (entry + a 3-run did the same at act
+starts). The cap now measures the longest leg run on the MANDATORY path: each lane's swept
+sequence is `[entry] + run0(stretch0…N) + [pre_boss]` (and the same for run1) — the two
+chokepoints bookend BOTH lanes because both lanes feed/are-fed-by them. The boss is not a LEG,
+so it still resets the count at act boundaries. **Crossover legs stay EXCLUDED** — they're
+optional detours (§8 intent), not on the straight path, so they don't inflate the mandatory
+count. Conversions still target a regular lane-run leg, NEVER the chokepoints (entry/pre-boss
+must stay reconvergence funnels); a convertible run leg always exists in any over-cap window
+(a `[entry, run, run, pre_boss]` window still has ≥2 convertible run legs, since every stretch
+run is ≥2). The rule of thumb: **mandatory chokepoint legs count toward the cap; optional
+crossovers don't.** Test updated to match — `_lane_and_branch_sequences` now bookends each lane
+with the entry/pre-boss legs (was skipping all sole nodes, which mirrored the bug and let the
+invariant pass while the walked path violated it), with a targeted assertion on the
+run-of-cap-into-pre-boss case.
+
 **Branch divergence guard (2026-06-08, third density follow-up):** rare maps shipped a
 mini-branch whose contents exactly matched the lane segment it bypasses (identical up to one
 extra pre-boss leg) — a fake choice, since staying vs detouring gives the same rewards.
